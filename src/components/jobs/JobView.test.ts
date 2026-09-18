@@ -2,8 +2,9 @@ import { flushSync, mount, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { reactive } from "../../lib/__tests__/props.svelte";
-import type { JobsMode, PipelineView } from "../../lib/types";
-import { PARENT_JOBS, RUNNING_JOB, T0, pipeline } from "./__fixtures__/pipeline";
+import type { BridgeView, JobsMode, PipelineView } from "../../lib/types";
+import { PARENT_JOBS, RUNNING_JOB, T0, bridge, pipeline } from "./__fixtures__/pipeline";
+import BridgeJobs from "./BridgeJobs.svelte";
 import JobList from "./JobList.svelte";
 import PipelineJobs from "./PipelineJobs.svelte";
 import UpdatedAgo from "./UpdatedAgo.svelte";
@@ -195,6 +196,72 @@ describe("PipelineJobs", () => {
     flushSync();
     expect(host.querySelectorAll("[data-bridge]")).toHaveLength(3);
     expect(host.textContent).toContain("build:web");
+  });
+});
+
+describe("BridgeJobs, the two links on the header", () => {
+  function render(view: BridgeView, onOpen: (url: string) => void = () => {}) {
+    component = mount(BridgeJobs, {
+      target: host,
+      props: { bridge: view, pipelineId: 5000, expansion: createExpansionStore(), onOpen, now: T0 },
+    });
+    flushSync();
+  }
+
+  const link = (slot: string) => host.querySelector<HTMLAnchorElement>(`[data-slot="${slot}"]`);
+
+  it("opens the trigger job itself, not the child pipeline", () => {
+    const onOpen = vi.fn();
+    render(bridge({ name: "trigger:website", web_url: "https://gitlab.example/p/-/jobs/77" }), onOpen);
+    const job = link("bridge-job-link")!;
+    // The accessible name has to say what the link opens: "job" beside "child"
+    // means nothing read on its own.
+    expect(job.getAttribute("aria-label")).toBe("Open trigger job trigger:website in GitLab");
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    job.dispatchEvent(event);
+    expect(onOpen.mock.calls).toEqual([["https://gitlab.example/p/-/jobs/77"]]);
+    // Never navigates: a GitLab page inside the popover is a trap.
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("renders no trigger-job link when the bridge has no web_url", () => {
+    render(bridge({ name: "trigger:website", web_url: null }));
+    expect(link("bridge-job-link")).toBeNull();
+    // The name is still there, as the plain text it already was.
+    expect(host.textContent).toContain("trigger:website");
+  });
+
+  it("keeps the trigger job and the child pipeline on separate links", () => {
+    const onOpen = vi.fn();
+    render(
+      bridge({
+        name: "trigger:website",
+        web_url: "https://gitlab.example/p/-/jobs/77",
+        child_url: "https://gitlab.example/p/-/pipelines/900",
+      }),
+      onOpen,
+    );
+    link("bridge-child-link")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    link("bridge-job-link")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    // ⛔ By value and in order: the two URLs are interchangeable to the type
+    // checker, so only the arguments themselves prove they were not swapped.
+    expect(onOpen.mock.calls).toEqual([
+      ["https://gitlab.example/p/-/pipelines/900"],
+      ["https://gitlab.example/p/-/jobs/77"],
+    ]);
+  });
+
+  it("clicking a link neither opens nor closes the row", () => {
+    const expansion = createExpansionStore();
+    component = mount(BridgeJobs, {
+      target: host,
+      props: { bridge: bridge({ name: "trigger:website" }), pipelineId: 5000, expansion, onOpen: () => {}, now: T0 },
+    });
+    flushSync();
+    expect(bridgeOpen("trigger:website")).toBe("false");
+    link("bridge-job-link")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    flushSync();
+    expect(bridgeOpen("trigger:website")).toBe("false");
   });
 });
 

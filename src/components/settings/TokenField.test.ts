@@ -83,10 +83,10 @@ const KEYRING = { keyring: { service: "glab:gitlab.com", user: "" } };
 
 describe("TokenField, the path it writes to", () => {
   it("quotes an account name that has a dot in it", () => {
-    // ⛔ The shipped example's account is called `gitlab.com`. An unquoted
-    // template string sent the core into `accounts` → `gitlab` → `com`, so it
-    // wrote a nested table nobody asked for and the token source of the only
-    // account most people have could not be changed from this window.
+    // ⛔ An account named after its host, `gitlab.com`, has a dot in it. An
+    // unquoted template string sent the core into `accounts` → `gitlab` →
+    // `com`, so it wrote a nested table nobody asked for and the token source
+    // of an account named that way could not be changed from this window.
     const h = render("gitlab.com", { own: true });
     h.pick("env");
     h.type("BRIDGEWATCH_TOKEN", "BRIDGEWATCH_TOKEN_GITLAB");

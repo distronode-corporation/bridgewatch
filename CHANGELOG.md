@@ -13,6 +13,29 @@ body line with a bracket.
 
 ## [Unreleased]
 
+### Added
+
+- The job view links a bridge to the trigger job itself, beside the existing link to the
+  child pipeline it created. They are different pages in GitLab and either can be the one
+  that explains a verdict. A bridge with no URL shows no link.
+
+### Fixed
+
+- The `bridgewatch` CLI now follows the logging rule the app and the README already
+  described: `[log].level` applies to bridgewatch's own crates and leaves everything else
+  at `warn`, and an empty `RUST_LOG` counts as unset instead of silencing the run. A
+  non-empty `RUST_LOG` still wins whole.
+- Configuration docs corrected where they contradicted the code, in the README, the
+  example config and the hints the Settings window shows: `[icon].theme` describes the
+  `<glyph>.png` and `<glyph>@1x.png` files that are actually read, and `deploy_markers`
+  says that the order they are listed in decides which success is reported, not which
+  job ran first.
+
+### Removed
+
+- The "First run" banner on the Settings accounts tab. Nothing has seeded an example
+  config since the setup wizard replaced that, so the banner could never appear.
+
 ### Security
 
 - quick-xml 0.38.4 -> 0.42.0 (through plist 1.10.1) for RUSTSEC-2026-0194 and

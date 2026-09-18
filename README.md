@@ -398,7 +398,7 @@ and call depth are capped. A script that errors or returns an unknown name yield
 
 | Key | Meaning |
 | --- | --- |
-| `level` | `error`, `warn`, `info`, `debug`, `trace` or `off` [`info`]. `RUST_LOG` wins when it is set. |
+| `level` | `error`, `warn`, `info`, `debug`, `trace` or `off` [`info`], applied to bridgewatch's own crates with everything else left at `warn`. A non-empty `RUST_LOG` wins instead, whole and unscoped; an empty one counts as unset. Both the app and `bridgewatch` follow this. |
 | `keep_requests` | Recent requests kept for the Debug section; 0 disables it [50]. |
 
 An unknown key, and a value of the right type that names nothing (a misspelt source,

@@ -337,7 +337,7 @@ fn an_edit_preserves_comments_and_key_order() {
     }
     for inline in [
         "# any number of accounts; self-managed instances welcome",
-        "# names or \"re:\" regex; first success = deployed",
+        "# names or \"re:\" regex; the first listed with a success = deployed",
         "# gate | warning | blocking | ignore",
         "# minijinja over the verdict view model",
     ] {
@@ -1205,6 +1205,48 @@ fn a_new_watch_without_a_mode_does_not_pin_one() {
         .expect("the new watch's show table");
     assert!(!show_line.contains("jobs"), "{show_line}");
     assert_eq!(parse(&edited).unwrap().config.watches[2].show.jobs, None);
+}
+
+/// The log-filter rule both shells share: a non-empty `RUST_LOG` wins whole, a
+/// blank one counts as unset, and `[log].level` reaches only the crates it is
+/// given. The CLI and the app pass different crate names and must otherwise
+/// behave identically, which is why the rule lives here rather than twice.
+#[test]
+fn the_log_directive_scopes_the_file_level_and_ignores_a_blank_rust_log() {
+    let app = &["bridgewatch_app", "bridgewatch_core"];
+    let cli = &["bridgewatch", "bridgewatch_core"];
+
+    assert_eq!(
+        config::log_directive(Some("trace"), Some("off"), app),
+        "trace"
+    );
+    assert_eq!(
+        config::log_directive(Some(" \t "), Some("info"), app),
+        config::log_directive(None, Some("info"), app)
+    );
+    assert_eq!(
+        config::log_directive(None, Some("debug"), app),
+        "warn,bridgewatch_app=debug,bridgewatch_core=debug"
+    );
+    assert_eq!(
+        config::log_directive(None, Some("DEBUG"), cli),
+        "warn,bridgewatch=debug,bridgewatch_core=debug"
+    );
+    // Quieter than `warn` is quieter everywhere; nothing, or a level the file
+    // should not have carried, is `warn`.
+    for level in ["error", "off"] {
+        assert_eq!(config::log_directive(None, Some(level), app), level);
+    }
+    assert_eq!(config::log_directive(None, None, app), "warn");
+    assert_eq!(config::log_directive(None, Some("loud"), app), "warn");
+    // Every level the file may name is either scoped or a bare level word.
+    for level in config::LOG_LEVELS {
+        let directive = config::log_directive(None, Some(level), app);
+        assert!(
+            config::LOG_LEVELS.contains(&directive.as_str()) || directive.starts_with("warn,"),
+            "{level}: {directive}"
+        );
+    }
 }
 
 /// The shipped example states the global mode, so the key is discoverable.

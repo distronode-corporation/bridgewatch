@@ -8,8 +8,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 default-run = "bridgewatch"
-# Not published to crates.io: the binary is distributed through the app
-# bundles, and `bridgewatch` is not a name this project has reserved there.
+# Not published to crates.io: `bridgewatch` is not a name this project has
+# reserved there. The app bundles do not carry this binary either (there is no
+# externalBin), so the way to get it is the README's
+# `cargo install --locked --path crates/bridgewatch-cli`.
 # Only bridgewatch-core is publishable.
 publish = false
 

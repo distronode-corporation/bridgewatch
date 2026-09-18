@@ -9,13 +9,10 @@
 
   interface Props {
     config: unknown;
-    /** True when this run created the file; shows the first-run banner. */
-    seeded: boolean;
-    configPath: string;
     onedit: (edits: Edit[]) => void | Promise<void>;
   }
 
-  let { config, seeded, configPath, onedit }: Props = $props();
+  let { config, onedit }: Props = $props();
 
   const names = $derived(Object.keys((getAt(config, "accounts") ?? {}) as Record<string, unknown>));
   const fields = entriesFor("accounts").filter((e) => e.control !== "token");
@@ -28,9 +25,9 @@
     // default the core fills in.
     //
     // ⛔ The name is QUOTED, by the same helper the fields use. An account
-    // called `gitlab.com` — which is what the shipped example calls its one
-    // account — went into the core as `accounts` → `gitlab` → `com` and wrote
-    // a nested table that is not an account at all.
+    // called `gitlab.com` (naming an account after its host is the obvious
+    // thing to do) went into the core as `accounts` → `gitlab` → `com` and
+    // wrote a nested table that is not an account at all.
     onedit([
       {
         op: "set",
@@ -46,15 +43,6 @@
     newName = "";
   }
 </script>
-
-{#if seeded}
-  <div class="banner bg-tone-blue-bg border-border mb-3.5 rounded-xl border px-3 py-2 text-xs">
-    <strong>First run.</strong> bridgewatch wrote the shipped example to
-    <code class="font-mono">{configPath}</code>. Its default token source is
-    <code class="font-mono">glab</code>'s keyring entry, so if you already use <code class="font-mono">glab</code> it is
-    already watching; otherwise pick a token source below.
-  </div>
-{/if}
 
 {#each names as name (name)}
   <section class="account border-border mb-3.5 border-b pb-2.5">

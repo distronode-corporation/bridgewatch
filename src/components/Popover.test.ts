@@ -392,7 +392,7 @@ describe("Popover, degraded cases", () => {
           severity: "error",
           path: "",
           message:
-            "No configuration yet. Finish the setup wizard, or choose \"I'll edit config.toml\" to start from the commented example.",
+            "No configuration yet. Finish the setup wizard, or choose \"I'll edit config.toml\" to write one yourself in Settings.",
           line: null,
           col: null,
         },

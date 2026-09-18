@@ -219,7 +219,7 @@
           "default": {}
         },
         "theme": {
-          "description": "`builtin`, or a directory of `<state>.png` overrides.",
+          "description": "`builtin`, or a directory of PNG overrides named for the glyph a state\nresolves to: `<glyph>.png`, or `<glyph>@1x.png`. A glyph the directory\ndoes not carry falls back to the builtin, so a theme may replace one\nicon without shipping all of them.",
           "type": "string",
           "default": "builtin"
         }
@@ -599,7 +599,7 @@
           "type": "string"
         },
         "deploy_markers": {
-          "description": "Job names (or `re:` patterns) whose success means \"this deployed\".\nThe first one to succeed wins.",
+          "description": "Job names (or `re:` patterns) whose success means \"this deployed\".\nWith more than one, CONFIG ORDER decides: the earliest entry here with\na successful job is the deploy that gets reported, whichever ran first.",
           "type": "array",
           "default": [],
           "items": {

@@ -172,6 +172,11 @@ export interface Validation {
 /** Shell-level status, distinct from the core's `Snapshot`. */
 export interface Status {
   configPath: string;
+  /**
+   * True when this run wrote the shipped example. Nothing sets it any more
+   * (the setup wizard replaced seeding) and nothing here reads it: kept only
+   * because the shell still sends it, and the wire shape is the shell's.
+   */
   seeded: boolean;
   configOk: boolean;
   diagnostics: DiagnosticView[];

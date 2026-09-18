@@ -194,7 +194,7 @@ export const REGISTRY: RegistryEntry[] = [
     tab: "watches",
     control: "list",
     label: "Deploy markers",
-    hint: 'Job names or "re:" patterns. The first one to succeed means deployed.',
+    hint: 'Job names or "re:" patterns. The first one listed that has a success means deployed.',
   },
   {
     path: "watches.*.sibling_failure",

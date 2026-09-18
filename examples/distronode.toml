@@ -23,7 +23,7 @@ role     = "primary"                   # primary drives the icon; secondary is r
 show     = { max_rows = 5, settled = 1 }   # unsettled pipelines listed, plus N most recent settled; jobs = "failures" | "all" overrides [ui].jobs
 poll     = { live_secs = 5, idle_secs = 60 }   # live tick: 1 list + 2 per live or changed pipeline + 1 per live dived child
 dive     = { bridges = "*", exclude = [], depth = 1 }   # which trigger jobs to walk into (glob), how deep
-deploy_markers = ["deploy:origins", "deploy:marketing"] # names or "re:" regex; first success = deployed
+deploy_markers = ["deploy:origins", "deploy:marketing"] # names or "re:" regex; the first listed with a success = deployed
 sibling_failure = "downgrade"          # downgrade | fail | ignore
 post_deploy_failure = "downgrade"      # downgrade | fail | ignore
 [watches.jobs]                         # per-job class overrides, literal or "re:" keys, first match wins

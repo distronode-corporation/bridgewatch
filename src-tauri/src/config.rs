@@ -162,6 +162,11 @@ pub struct Resolved {
     /// The file that will be read.
     pub path: PathBuf,
     /// True when this run wrote the shipped example because nothing was there.
+    /// Nothing sets it any more: seeding was replaced by the setup wizard, which
+    /// writes only what the user answered. It still travels to the frontend in
+    /// `Status`, where nothing reads it either (the Settings banner that did was
+    /// removed as unreachable), so it is dead on both sides and kept only
+    /// because taking it off the wire is a Rust and TypeScript change together.
     pub seeded: bool,
     /// True when there is no file at the DEFAULT path yet: a first launch. The
     /// shell opens the setup wizard instead of writing anything.
@@ -181,10 +186,11 @@ pub const FIRST_RUN_MESSAGE: &str = "No configuration yet. Finish the setup wiza
 /// Resolve the config path. Nothing is written here.
 ///
 /// A missing file at the DEFAULT path is a first launch: `first_run` is set and
-/// the shell opens the setup wizard, which writes the file when it is finished
-/// (or, if the user would rather edit by hand, [`seed_example`] writes the
-/// shipped example). The parent directory is created so the file watcher,
-/// which watches it, is armed before the file exists.
+/// the shell opens the setup wizard, which writes the file when it is finished.
+/// Skipping the wizard writes nothing at all; Settings opens on an empty text
+/// tab, and the first Save there creates the file. The parent directory is
+/// created so the file watcher, which watches it, is armed before the file
+/// exists.
 ///
 /// ⛔ A `--config` or `$BRIDGEWATCH_CONFIG` naming a file that does not exist
 /// is far more likely a typo than a request for a new file, and seeding there

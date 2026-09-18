@@ -309,12 +309,7 @@
 
   <div class="pane min-h-0 flex-1 overflow-y-auto pr-1.5">
     {#if tab === "accounts"}
-      <AccountsTab
-        {config}
-        seeded={status?.seeded ?? false}
-        configPath={status?.configPath ?? ""}
-        onedit={edit}
-      />
+      <AccountsTab {config} onedit={edit} />
     {:else if tab === "watches"}
       <WatchesTab {config} {jobOrder} onedit={edit} onremove={remove} onmove={move} onadd={add} />
     {:else if tab === "text"}

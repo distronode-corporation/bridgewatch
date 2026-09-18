@@ -410,13 +410,37 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
     }
 }
 
-/// Initialise tracing. `RUST_LOG` wins; otherwise the config's `log.level`.
+/// The crates `[log].level` is scoped to: this binary and the engine under it.
+///
+/// ⚠ `CARGO_CRATE_NAME` rather than the literal: the package is
+/// `bridgewatch-cli`, but the target is `[[bin]] name = "bridgewatch"`, so the
+/// crate rustc compiles (and the target `tracing` stamps on every event from
+/// this file) is `bridgewatch`.
+const OWN_CRATES: &[&str] = &[env!("CARGO_CRATE_NAME"), "bridgewatch_core"];
+
+/// Initialise tracing. A non-empty `RUST_LOG` wins; otherwise the config's
+/// `log.level`, applied to bridgewatch's own crates with everything else left
+/// at `warn`.
+///
+/// ⛔ This is the README's documented rule and it used to be the app's alone:
+/// the level went to EVERY crate, and a set-but-empty `RUST_LOG` (a leftover
+/// `export RUST_LOG=` in a shell profile) beat the config and silenced the
+/// program. `config::log_directive` is now the single answer for both; the
+/// other caller is `logging::directive` in `src-tauri/src/logging.rs`.
 fn init_tracing(level: &str) {
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| level.to_string());
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+        .with_env_filter(tracing_subscriber::EnvFilter::new(tracing_filter(
+            std::env::var("RUST_LOG").ok().as_deref(),
+            level,
+        )))
         .with_writer(std::io::stderr)
         .try_init();
+}
+
+/// The filter directive [`init_tracing`] installs, separated out so it can be
+/// tested without touching the process-wide subscriber.
+fn tracing_filter(rust_log: Option<&str>, level: &str) -> String {
+    config::log_directive(rust_log, Some(level), OWN_CRATES)
 }
 
 /// `path:line:col` when the offset is known, else just the path.
@@ -763,7 +787,7 @@ fn scrub_fixtures(dirs: &[PathBuf], check: bool) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::exit;
+    use super::{OWN_CRATES, exit, tracing_filter};
 
     /// The `--help` table is prose, so nothing ties it to the constants but
     /// this: every constant has exactly one row, and every row is a constant.
@@ -792,5 +816,55 @@ mod tests {
         ];
         defined.sort_unstable();
         assert_eq!(documented, defined);
+    }
+
+    /// An exported-but-blank `RUST_LOG` is a leftover in a shell profile, not a
+    /// request to silence the program. It used to win here and produce an
+    /// EnvFilter with no directives at all, which logged nothing whatever the
+    /// config asked for.
+    #[test]
+    fn an_empty_rust_log_is_ignored() {
+        for blank in ["", "   "] {
+            assert_eq!(
+                tracing_filter(Some(blank), "debug"),
+                tracing_filter(None, "debug"),
+                "{blank:?} should count as unset"
+            );
+        }
+        assert_eq!(tracing_filter(Some(""), "warn"), "warn");
+    }
+
+    /// A non-empty `RUST_LOG` is the escape hatch: it wins whole, unmodified,
+    /// and unscoped.
+    #[test]
+    fn a_non_empty_rust_log_wins() {
+        assert_eq!(tracing_filter(Some("trace"), "error"), "trace");
+        assert_eq!(
+            tracing_filter(Some("hyper=debug,bridgewatch_core=trace"), "info"),
+            "hyper=debug,bridgewatch_core=trace"
+        );
+    }
+
+    /// `[log].level` says how loud BRIDGEWATCH should be, not the HTTP stack.
+    #[test]
+    fn the_file_level_scopes_to_bridgewatch_crates() {
+        let filter = tracing_filter(None, "debug");
+        assert!(filter.starts_with("warn,"), "{filter}");
+        for name in OWN_CRATES {
+            assert!(filter.contains(&format!("{name}=debug")), "{filter}");
+        }
+        assert_eq!(filter.matches("=debug").count(), OWN_CRATES.len());
+        // Quieter than `warn` means quieter everywhere, so there is nothing to
+        // scope; nonsense falls back to `warn` rather than failing a command.
+        assert_eq!(tracing_filter(None, "off"), "off");
+        assert_eq!(tracing_filter(None, "loud"), "warn");
+    }
+
+    /// The binary's crate name is its TARGET name, and the filter is useless if
+    /// it names something `tracing` never stamps on an event.
+    #[test]
+    fn the_scoped_crate_names_are_the_ones_tracing_sees() {
+        assert_eq!(OWN_CRATES[0], module_path!().split("::").next().unwrap());
+        assert_eq!(OWN_CRATES[1], "bridgewatch_core");
     }
 }

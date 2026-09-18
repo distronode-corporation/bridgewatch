@@ -1,7 +1,9 @@
 <script lang="ts">
   /**
    * One bridge (trigger job) as a collapsible row: the verdict on the header,
-   * the child pipeline's jobs by stage inside.
+   * the child pipeline's jobs by stage inside, and on the header two links out:
+   * the trigger job itself and the child pipeline it created. They are
+   * different pages and either can be the one that explains a verdict.
    *
    * Open/closed lives in the `expansion` store, keyed by pipeline id + bridge
    * name, so a snapshot refresh that replaces `bridge` with a new object does
@@ -69,11 +71,27 @@
         </span>
       {/if}
     </Collapsible.Trigger>
+    <!-- ⛔ Both links are SIBLINGS of the trigger, never inside it: the bridge
+         name sits in a button, and an anchor nested in a button is neither
+         valid nor reachable by keyboard. A bridge with no `web_url` gets no
+         link rather than a dead one; its name is already plain text above. -->
+    {#if bridge.web_url}
+      <a
+        href={bridge.web_url}
+        class="text-muted-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm text-[11px] outline-none hover:underline focus-visible:ring-2"
+        title="the trigger job"
+        aria-label={`Open trigger job ${bridge.name} in GitLab`}
+        data-slot="bridge-job-link"
+        onclick={(event) => openUrl(event, bridge.web_url)}>job</a
+      >
+    {/if}
     {#if bridge.child_url}
       <a
         href={bridge.child_url}
         class="text-muted-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm text-[11px] outline-none hover:underline focus-visible:ring-2"
         title="the child pipeline"
+        aria-label={`Open the child pipeline of ${bridge.name} in GitLab`}
+        data-slot="bridge-child-link"
         onclick={(event) => openUrl(event, bridge.child_url)}>child</a
       >
     {:else if bridge.verdict === "dead"}

@@ -18,9 +18,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry, reload};
 
-/// The levels `[log].level` accepts; anything else falls back to `warn` (and
-/// the core's validation warns about it).
-const LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace", "off"];
+/// The crates `[log].level` is scoped to: this shell and the engine under it.
+const OWN_CRATES: &[&str] = &["bridgewatch_app", "bridgewatch_core"];
 
 /// Set only when `RUST_LOG` did NOT decide, so a reload cannot override it.
 static HANDLE: OnceLock<reload::Handle<EnvFilter, Registry>> = OnceLock::new();
@@ -28,18 +27,11 @@ static HANDLE: OnceLock<reload::Handle<EnvFilter, Registry>> = OnceLock::new();
 static CURRENT: Mutex<String> = Mutex::new(String::new());
 
 /// The filter directive for a `RUST_LOG` value and a `[log].level`.
+///
+/// The rule itself is `config::log_directive` in the core, so that the CLI's
+/// `init_tracing` cannot drift from it; only the crate names differ.
 pub fn directive(rust_log: Option<&str>, level: Option<&str>) -> String {
-    if let Some(env) = rust_log.map(str::trim).filter(|v| !v.is_empty()) {
-        return env.to_string();
-    }
-    let level = level
-        .map(|l| l.trim().to_ascii_lowercase())
-        .filter(|l| LEVELS.contains(&l.as_str()))
-        .unwrap_or_else(|| "warn".to_string());
-    match level.as_str() {
-        "warn" | "error" | "off" => level,
-        _ => format!("warn,bridgewatch_app={level},bridgewatch_core={level}"),
-    }
+    bridgewatch_core::config::log_directive(rust_log, level, OWN_CRATES)
 }
 
 /// Install the subscriber. Called once, before the configuration is read, so

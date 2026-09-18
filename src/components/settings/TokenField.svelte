@@ -18,10 +18,11 @@
 
   const meta = registryEntry("accounts.*.token");
   // ⛔ `accounts.${account}.token` was a template string, and an account called
-  // `gitlab.com` — which is what the shipped example calls its account — has a
-  // dot in it. The core's `split_path` then walked INTO the name and wrote
-  // `[accounts.gitlab.com.token]`, a nested table nobody asked for, so the
-  // token source of that account could not be changed from this window at all.
+  // `gitlab.com` (the obvious name, since an account is usually named after
+  // its host) has a dot in it. The core's `split_path` then walked INTO the
+  // name and wrote `[accounts.gitlab.com.token]`, a nested table nobody asked
+  // for, so the token source of that account could not be changed from this
+  // window at all.
   const path = $derived(concretePath("accounts.*.token", account));
 
   type Kind = "keyring" | "env" | "command" | "own";

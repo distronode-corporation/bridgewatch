@@ -307,7 +307,8 @@ pub struct Watch {
     #[serde(default)]
     pub dive: DiveConfig,
     /// Job names (or `re:` patterns) whose success means "this deployed".
-    /// The first one to succeed wins.
+    /// With more than one, CONFIG ORDER decides: the earliest entry here with
+    /// a successful job is the deploy that gets reported, whichever ran first.
     #[serde(default)]
     pub deploy_markers: Vec<String>,
     /// What a failed sibling bridge does to a watch that otherwise deployed.
@@ -723,7 +724,10 @@ pub struct IconConfig {
     /// `template` forces a macOS template image; `color` forces the coloured set.
     #[serde(default = "default_icon_mode")]
     pub mode: String,
-    /// `builtin`, or a directory of `<state>.png` overrides.
+    /// `builtin`, or a directory of PNG overrides named for the glyph a state
+    /// resolves to: `<glyph>.png`, or `<glyph>@1x.png`. A glyph the directory
+    /// does not carry falls back to the builtin, so a theme may replace one
+    /// icon without shipping all of them.
     #[serde(default = "default_icon_theme")]
     pub theme: String,
     /// Per-state glyph names, for themes that offer alternatives.

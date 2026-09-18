@@ -563,12 +563,13 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
             ));
         }
     }
-    if !["error", "warn", "info", "debug", "trace", "off"].contains(&config.log.level.as_str()) {
+    if !LOG_LEVELS.contains(&config.log.level.as_str()) {
         out.push(Diagnostic::warning(
             "log.level",
             format!(
-                "{:?} is not a log level (error, warn, info, debug, trace, off)",
-                config.log.level
+                "{:?} is not a log level ({})",
+                config.log.level,
+                LOG_LEVELS.join(", ")
             ),
         ));
     }
@@ -816,6 +817,43 @@ pub const KNOWN_PIPELINE_SOURCES: &[&str] = &[
     "pipeline_execution_policy_schedule",
     "unknown",
 ];
+
+/// The values `[log].level` accepts. Anything else is a warning from
+/// [`validate`], and [`log_directive`] falls back to `warn`.
+pub const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace", "off"];
+
+/// The `tracing` filter directive for a `RUST_LOG` value and a `[log].level`.
+///
+/// A non-empty `RUST_LOG` wins, whole and unmodified. An empty or all-whitespace
+/// one counts as unset, because an exported-but-blank variable is a leftover in a
+/// shell profile rather than a request to silence the program. With neither, the
+/// level is `warn`.
+///
+/// ⚠ `[log].level` scopes to `crates`, bridgewatch's own: asking for `debug`
+/// should show what bridgewatch is doing, not every frame the window system and
+/// the HTTP stack log at that level. A level QUIETER than `warn` (`error`, `off`)
+/// applies to everything, since "less, please" means less of all of it.
+///
+/// Lives here because the CLI and the app both need the same answer and neither
+/// can see the other: `bridgewatch-cli`'s `init_tracing` and the shell's
+/// `logging::directive` are the two callers, and they differ only in which crate
+/// names they pass.
+pub fn log_directive(rust_log: Option<&str>, level: Option<&str>, crates: &[&str]) -> String {
+    if let Some(env) = rust_log.map(str::trim).filter(|v| !v.is_empty()) {
+        return env.to_string();
+    }
+    let level = level
+        .map(|l| l.trim().to_ascii_lowercase())
+        .filter(|l| LOG_LEVELS.contains(&l.as_str()))
+        .unwrap_or_else(|| "warn".to_string());
+    match level.as_str() {
+        "warn" | "error" | "off" => level,
+        _ => std::iter::once("warn".to_string())
+            .chain(crates.iter().map(|name| format!("{name}={level}")))
+            .collect::<Vec<_>>()
+            .join(","),
+    }
+}
 
 /// Does a `re:` pattern pin either end of the name?
 ///

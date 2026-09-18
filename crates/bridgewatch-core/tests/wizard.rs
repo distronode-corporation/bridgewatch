@@ -801,7 +801,7 @@ fn re_running_on_an_existing_config_edits_rather_than_clobbers() {
     assert!(
         built
             .toml
-            .contains("# names or \"re:\" regex; first success = deployed")
+            .contains("# names or \"re:\" regex; the first listed with a success = deployed")
     );
 
     let c = load(&built.toml);
