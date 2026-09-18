@@ -20,17 +20,15 @@ name: Release
 # distribution floor, and moving it is a user-visible change. ci.yml's `installers`
 # and its `rust` job run on that same image so the floor is exercised before tag time.
 #
-# macOS builds are UNSIGNED and UN-NOTARISED in 0.1. Gatekeeper refuses the first
-# launch. ⚠️ The Control-click -> "Open" bypass this comment described until
-# 2026-09-17 was REMOVED in macOS 15: the path is now System Settings -> Privacy &
-# Security -> "Open Anyway" after one refused launch, or `xattr -d
-# com.apple.quarantine`. README.md carries the user-facing wording.
-#
-# ⚠️ Ad-hoc signing (`APPLE_SIGNING_IDENTITY: "-"`, which the Tauri CLI reads and
-# turns into `codesign -s -`) would seal the .app bundle and is the only signing
-# improvement available without an Apple Developer account. It is deliberately NOT
-# enabled: it changes the Gatekeeper dialog the README documents and it has never
-# been run here. Enable it in a change that also rehearses a real tag, not before.
+# macOS builds are SIGNED with the "Developer ID Application: Distronode Corporation
+# (R935BA6767)" identity and NOTARISED, both by the Tauri CLI inside tauri-action:
+# it imports APPLE_CERTIFICATE into a temporary keychain, signs with the hardened
+# runtime, submits the .app to Apple's notary service with the App Store Connect
+# API key (APPLE_API_*) and staples the ticket before the .dmg is made. The key is a
+# dedicated Developer-role key used for nothing else, not the iOS app's key.
+# `Verify the macOS signature` below checks the result inside the .dmg, because a
+# build that silently fell back to unsigned would otherwise ship. Rehearsed locally
+# on 2026-09-18 before the first tag.
 on:
   push:
     tags: ['v*.*.*']
@@ -213,9 +211,30 @@ jobs:
       - name: Cargo.lock is up to date
         run: cargo fetch --locked
 
+      # The notary key is a file for the Tauri CLI (APPLE_API_KEY_PATH), so it is
+      # written to the runner's temp dir, which is wiped with the job.
+      - name: Write the notarization key
+        if: runner.os == 'macOS'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$APPLE_API_KEY_P8" ]; then echo "::error::APPLE_API_KEY_P8 is not set"; exit 1; fi
+          key="$RUNNER_TEMP/notary.p8"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$key"
+          chmod 600 "$key"
+          echo "APPLE_API_KEY_PATH=$key" >> "$GITHUB_ENV"
+
       - name: Build the bundles
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
+          # Signing and notarization, macOS legs only (the Linux leg never sees them).
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
           # ⛔ tauri-action defaults this to "true", and "true" means the .dmg bundler
           # does NOT pass create-dmg's `--skip-jenkins`, so it runs the Finder window
           # AppleScript on a headless runner. That osascript is the classic
@@ -257,6 +276,24 @@ jobs:
             exit 1
           fi
           ls -l staging
+
+      # ⛔ A tauri build with no usable identity does not fail, it ships unsigned. So
+      # the .app INSIDE the staged .dmg is checked for the Developer ID signature, a
+      # valid seal, a stapled notarization ticket and a Gatekeeper pass.
+      - name: Verify the macOS signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mnt="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" staging/*.dmg >/dev/null
+          trap 'hdiutil detach "$mnt" >/dev/null || true' EXIT
+          app="$(find "$mnt" -maxdepth 1 -name '*.app' | head -1)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=2 "$app" 2>&1 | grep -q 'Authority=Developer ID Application: Distronode Corporation (R935BA6767)' \
+            || { echo "::error::not signed with the Distronode Developer ID"; exit 1; }
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
 
       # The core shells out to `secret-tool` on Linux (tauri.conf.json declares the
       # dependency). A .deb without it installs cleanly and then cannot read a keyring

@@ -77,7 +77,7 @@ without that would be a status dot per workflow, which other monitors already pr
 
 | Platform | Status |
 | --- | --- |
-| macOS 10.15 or newer, Apple Silicon and Intel | Supported. Release builds are unsigned in 0.1, see below. |
+| macOS 10.15 or newer, Apple Silicon and Intel | Supported. Release builds are signed and notarised, see below. |
 | Linux x86_64, glibc 2.35 or newer (Ubuntu 22.04 or newer, and equivalents) | Supported. |
 | Windows | Not targeted in 0.1. |
 
@@ -110,21 +110,18 @@ gh attestation verify bridgewatch_0.1.0_amd64.deb --repo distronode-corporation/
 The release assets contain the GUI only. The `bridgewatch` CLI is built from source,
 see [CLI](#cli).
 
-### macOS: the build is unsigned
+### macOS: signed and notarised
 
-0.1 has no Apple Developer signing identity behind it, so the app is neither signed nor
-notarised and Gatekeeper refuses the first launch. Verify the attestation first, since you
-are choosing to run an unsigned binary. Then either:
+The `.app` inside each `.dmg` is signed with the Developer ID **Distronode Corporation
+(R935BA6767)** and notarised by Apple, with the ticket stapled, so it opens like any other
+downloaded app. To check a copy yourself:
 
-- open the app once, dismiss the refusal, and go to **System Settings → Privacy &
-  Security**, where an **Open Anyway** button appears for bridgewatch; or
-- remove the quarantine attribute:
-  ```
-  xattr -d com.apple.quarantine /Applications/bridgewatch.app
-  ```
+```
+codesign --verify --deep --strict /Applications/bridgewatch.app
+spctl --assess --type execute --verbose /Applications/bridgewatch.app
+```
 
-On macOS before 15 (Sequoia), right-click the app in Finder and choose **Open** also
-works. macOS 15 removed that shortcut.
+The second command should end with `source=Notarized Developer ID`.
 
 ### Linux: .deb
 
@@ -593,7 +590,6 @@ Bundles land in `target/release/bundle/` at the repository root. For development
   effect in 0.1. The popover row carries the same link.
 - **No poll on wake from sleep.** The first data after resume can be up to one interval
   stale; opening the popover polls at once.
-- **macOS builds are unsigned and un-notarised.** See [Install](#install).
 - **Windows is not targeted.** Nothing is tested there, the keyring code least of all.
 - **No merge-request pairing.** `merge_request_event` works as a source like any other,
   but a merged-result pipeline is not paired with its branch pipeline.

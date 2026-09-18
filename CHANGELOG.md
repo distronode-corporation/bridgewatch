@@ -115,13 +115,13 @@ per-workflow status dot other monitors already show.
   up to 300 s) instead of stopping; a crashed poll loop is restarted and reported; a tray
   image that fails to draw falls back to a visible glyph and is re-asserted periodically.
 - **`examples/distronode.toml`**, a complete worked configuration with three watches.
-- **Release assets**: `.dmg` for Apple Silicon and Intel, `.deb` (depends on
+- **Release assets**: `.dmg` for Apple Silicon and Intel (signed with the Distronode
+  Corporation Developer ID and notarised by Apple), `.deb` (depends on
   `libsecret-tools`) and `.AppImage` for x86_64 Linux, built on Ubuntu 22.04, each with a
   GitHub build provenance attestation.
 
 ### Known limitations
 
-- macOS builds are unsigned and un-notarised; see the README for the first launch.
 - Glob and regex refs, and watches with more than one source, are filtered client-side
   over the newest page of pipelines (30 to 100), because GitLab filters `ref` by exact
   name only.
