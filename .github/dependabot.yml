@@ -40,3 +40,9 @@ updates:
     groups:
       npm-minor:
         update-types: [minor, patch]
+    ignore:
+      # TypeScript 7 cannot be installed beside svelte-check 4.x, whose peer range stops
+      # at TypeScript 5, so the bump fails `npm ci` (PR #2, 2026-09-18). Lift this when
+      # svelte-check accepts 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
