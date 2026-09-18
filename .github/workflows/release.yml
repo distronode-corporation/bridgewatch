@@ -59,6 +59,8 @@ jobs:
           fetch-depth: 0
           # Credentials kept here only: the `git fetch` below needs them in a private
           # (staging) repository. This job runs no dependency code.
+          # zizmor: ignore[artipacked] -- deliberate, for the reason above; nothing in
+          # this job uploads an artifact, so the persisted credential cannot leak into one.
 
       # ⛔ A TAG IS NOT A BRANCH, AND CI DOES NOT RUN ON ONE. ci.yml triggers on
       # pushes to `main` and on pull requests, so a tag placed on a commit that never
@@ -124,6 +126,12 @@ jobs:
     # anything anywhere except this workflow run's own artifact store.
     permissions:
       contents: read
+    # ⛔ The Apple signing and notary secrets are ENVIRONMENT secrets of `release`, not
+    # repository secrets, and the environment admits only `v*` tags. So no workflow on a
+    # branch, and no pull request, can read the Developer ID identity; only this job,
+    # on a release tag, can. Without this line every APPLE_* below expands to "" and the
+    # signature check fails the macOS legs.
+    environment: release
     strategy:
       # Surface all three failures in one run rather than one per re-run. Nothing
       # public exists until `publish`, so a partially failed matrix costs only time.

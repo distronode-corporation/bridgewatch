@@ -6,6 +6,8 @@ name: CI
 # platforms, `frontend` the Svelte half including the Tailwind build, and `msrv` and
 # `repo` guard the claims the other jobs structurally cannot see: the declared Rust
 # floor, the version written down in three files, and the generated tray icons.
+# `cargo-deny`, `dependency-review` (pull requests only) and `zizmor` are the supply
+# chain: advisories and licences for the dependency tree, and the workflows themselves.
 #
 # `installers` is off unless asked for: a manual run with `build_installers` ticked
 # builds the four unsigned bundles a release would ship and keeps them for 3 days,
@@ -22,7 +24,8 @@ on:
         default: false
 
 # Least privilege at the top level so a job added later starts read-only instead of
-# inheriting the repository's default token scope. Nothing in CI needs to write.
+# inheriting the repository's default token scope. The only write in CI is `zizmor`'s
+# `security-events`, granted on that job alone to upload its SARIF.
 permissions:
   contents: read
 
@@ -251,6 +254,74 @@ jobs:
       # `tauri build` at tag time. This is also Tauri's `beforeBuildCommand`.
       - name: vite build (Tailwind)
         run: npm run build
+
+  # RustSec advisories, the licence allow-list, banned crates and allowed sources, all
+  # read from deny.toml. RustSec often has an advisory days before GitHub's database,
+  # so this is not a duplicate of Dependabot. The binary is the upstream release,
+  # checked against a pinned SHA-256 rather than a third-party install action, so the
+  # org's action allow-list stays short.
+  cargo-deny:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CARGO_DENY_VERSION: 0.20.2
+      CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install cargo-deny
+        run: |
+          set -euo pipefail
+          name="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
+          curl -fsSL -o "$RUNNER_TEMP/deny.tgz" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${name}.tar.gz"
+          echo "${CARGO_DENY_SHA256}  $RUNNER_TEMP/deny.tgz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/deny.tgz" -C "$RUNNER_TEMP"
+          install -m 0755 "$RUNNER_TEMP/${name}/cargo-deny" "$HOME/.cargo/bin/cargo-deny"
+          cargo deny --version
+
+      - name: cargo deny check
+        run: cargo deny --locked check
+
+  # Pull requests only: fails a PR that ADDS a dependency (any ecosystem, including
+  # an action) with a known moderate-or-worse vulnerability, or under a licence this
+  # Apache-2.0 project cannot ship. Mostly a guard on Dependabot's own PRs.
+  # cargo-deny holds the complete licence allow-list for the Rust tree; GitHub's
+  # licence detection for crates is patchy, so this is a deny-list backstop that also
+  # covers npm.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          deny-licenses: GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later, AGPL-3.0-only, AGPL-3.0-or-later, LGPL-2.1-only, LGPL-2.1-or-later, LGPL-3.0-only, LGPL-3.0-or-later, SSPL-1.0, BUSL-1.1
+
+  # Static analysis of these workflows themselves: template injection, over-broad
+  # token permissions, credential persistence, cache poisoning on the release path.
+  # Complements CodeQL's Actions queries. Findings go to code scanning (category
+  # `zizmor`) rather than failing the job, because SARIF mode suppresses zizmor's
+  # exit codes; the `main` ruleset's code-scanning rule is what blocks a PR on them.
+  # Suppressions are inline `# zizmor: ignore[...]` comments with a reason.
+  zizmor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Upload the SARIF to code scanning.
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: 1.30.1
 
   # Manual only. The same bundles release.yml builds, from any ref, UNSIGNED, as
   # workflow artifacts with 3-day retention: for installing a candidate from a private

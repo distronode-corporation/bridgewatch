@@ -88,7 +88,7 @@ pub fn startup_line(resolved: &crate::config::Resolved) -> String {
             "bridgewatch {} using {path}{seeded}: {} watch(es), {} account(s)",
             env!("CARGO_PKG_VERSION"),
             l.config.watches.len(),
-            l.config.accounts.len()
+            l.config.account_count()
         ),
         None => format!(
             "bridgewatch {} using {path}{seeded}: the file does not load, nothing is watched",

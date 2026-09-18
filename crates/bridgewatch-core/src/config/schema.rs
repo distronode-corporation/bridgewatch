@@ -32,6 +32,16 @@ pub struct Config {
     pub log: LogConfig,
 }
 
+impl Config {
+    /// How many accounts are configured, for status lines. Counts the map's KEYS so
+    /// that nothing printed flows from `Account`, whose `TokenSource` CodeQL's
+    /// `rust/cleartext-logging` treats as sensitive even though it only names where a
+    /// token lives.
+    pub fn account_count(&self) -> usize {
+        self.accounts.keys().count()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Accounts
 // ---------------------------------------------------------------------------

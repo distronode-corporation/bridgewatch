@@ -12,11 +12,17 @@ version: 2
 # ⚠️ `cargo` opens PRs against Cargo.lock, which CI enforces with `--locked`. That is
 # the intended interaction: a lockfile bump that does not build fails in the PR
 # rather than in someone's checkout.
+#
+# `cooldown` holds a version update back until the release is a week old, so a
+# compromised publish that is yanked within days never reaches a PR here. It does
+# not delay SECURITY updates, which Dependabot opens as soon as an advisory lands.
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       # One PR for the routine bumps. A major version usually needs a workflow edit,
       # so it is deliberately left on its own.
@@ -27,6 +33,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     # The Tauri stack alone is several hundred crates; without grouping this is a
     # dozen PRs a week and they all rebuild the same tree.
     groups:
@@ -37,6 +45,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       npm-minor:
         update-types: [minor, patch]

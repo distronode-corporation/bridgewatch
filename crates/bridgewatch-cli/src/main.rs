@@ -492,7 +492,7 @@ fn config_command(args: &ConfigArgs, action: ConfigAction) -> Outcome {
             println!(
                 "{}: ok ({} account(s), {} watch(es), {} warning(s))",
                 loaded.path.display(),
-                loaded.config.accounts.len(),
+                loaded.config.account_count(),
                 loaded.config.watches.len(),
                 loaded.warnings.len()
             );

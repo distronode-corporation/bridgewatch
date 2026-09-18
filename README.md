@@ -1,5 +1,7 @@
 # bridgewatch
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/distronode-corporation/bridgewatch/badge)](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch)
+
 A tray monitor for GitLab CI that understands parent/child pipelines, tells a scheduled
 pipeline apart from a push, and reports whether the thing you care about actually
 deployed.
@@ -608,6 +610,18 @@ token.
 See [SECURITY.md](SECURITY.md). Report vulnerabilities privately through
 [GitHub's private vulnerability reporting](https://github.com/distronode-corporation/bridgewatch/security/advisories/new),
 not in a public issue.
+
+What guards the code and the release path, all on every push to `main`:
+
+- CodeQL (Rust, TypeScript, Actions) and [zizmor](https://docs.zizmor.sh) over the
+  workflows, both reporting to code scanning.
+- `cargo deny` against [deny.toml](deny.toml): RustSec advisories, a permissive-only
+  licence allow-list, crates.io as the only source. Tolerated advisories are listed
+  there with their reason.
+- Dependency review on every pull request, Dependabot for Cargo, npm and the pinned
+  action SHAs, and a weekly [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch).
+- The macOS signing identity lives in a `release` environment that only a `v*` tag can
+  reach, and release tags cannot be moved or deleted.
 
 ## License
 
