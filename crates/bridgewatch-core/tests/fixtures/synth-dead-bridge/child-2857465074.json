@@ -1,0 +1,140 @@
+[
+  {
+    "allow_failure": true,
+    "created_at": "2026-09-17T09:23:31.234Z",
+    "finished_at": null,
+    "id": 16558670005,
+    "name": "ios:smoke",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.158Z",
+      "id": 2857465074,
+      "iid": 13073,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "success",
+      "updated_at": "2026-09-17T10:02:37.515Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465074"
+    },
+    "stage": "build",
+    "started_at": null,
+    "status": "manual",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670005"
+  },
+  {
+    "allow_failure": true,
+    "created_at": "2026-09-17T09:23:31.234Z",
+    "finished_at": null,
+    "id": 16558670004,
+    "name": "test:ios:ui",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.158Z",
+      "id": 2857465074,
+      "iid": 13073,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "success",
+      "updated_at": "2026-09-17T10:02:37.515Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465074"
+    },
+    "stage": "build",
+    "started_at": null,
+    "status": "manual",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670004"
+  },
+  {
+    "allow_failure": true,
+    "created_at": "2026-09-17T09:23:31.234Z",
+    "finished_at": null,
+    "id": 16558670003,
+    "name": "test:ios:app",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.158Z",
+      "id": 2857465074,
+      "iid": 13073,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "success",
+      "updated_at": "2026-09-17T10:02:37.515Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465074"
+    },
+    "stage": "build",
+    "started_at": null,
+    "status": "manual",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670003"
+  },
+  {
+    "allow_failure": true,
+    "created_at": "2026-09-17T09:23:31.234Z",
+    "finished_at": null,
+    "id": 16558670002,
+    "name": "build:ios:sim",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.158Z",
+      "id": 2857465074,
+      "iid": 13073,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "success",
+      "updated_at": "2026-09-17T10:02:37.515Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465074"
+    },
+    "stage": "build",
+    "started_at": null,
+    "status": "manual",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670002"
+  },
+  {
+    "allow_failure": true,
+    "created_at": "2026-09-17T09:23:31.234Z",
+    "finished_at": "2026-09-17T10:02:35.876Z",
+    "id": 16558670001,
+    "name": "smoke:macos",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.158Z",
+      "id": 2857465074,
+      "iid": 13073,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "success",
+      "updated_at": "2026-09-17T10:02:37.515Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465074"
+    },
+    "stage": "verify",
+    "started_at": "2026-09-17T10:02:12.920Z",
+    "status": "success",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670001"
+  },
+  {
+    "allow_failure": false,
+    "created_at": "2026-09-17T09:23:31.234Z",
+    "finished_at": "2026-09-17T09:27:22.912Z",
+    "id": 16558670000,
+    "name": "verify:ios",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.158Z",
+      "id": 2857465074,
+      "iid": 13073,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "success",
+      "updated_at": "2026-09-17T10:02:37.515Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465074"
+    },
+    "stage": "verify",
+    "started_at": "2026-09-17T09:23:32.095Z",
+    "status": "success",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670000"
+  }
+]

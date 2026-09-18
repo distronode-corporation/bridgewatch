@@ -1,0 +1,115 @@
+name: 🐞 Bug report
+description: Report a reproducible bug in bridgewatch (not a setup question or a feature request).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before you start, please [search existing issues](https://github.com/distronode-corporation/bridgewatch/issues?q=is%3Aissue) —** it may already be reported or fixed.
+
+        ⛔ **Do not report a security vulnerability here.** Report it privately through [Report a vulnerability](https://github.com/distronode-corporation/bridgewatch/security/advisories/new) instead; see [SECURITY.md](https://github.com/distronode-corporation/bridgewatch/blob/main/SECURITY.md).
+
+        ⚠️ **Nothing you paste here is private.** A bridgewatch config holds a project id, a GitLab host and a token *source*, and pipeline output holds job, branch and pipeline names. Redact anything you would not publish.
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I've searched existing issues and this isn't a duplicate.
+          required: true
+        - label: This is a reproducible bug, not a configuration question or a feature request.
+          required: true
+        - label: I've removed any token, private hostname or other secret from everything I'm pasting.
+          required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What's the bug?
+      description: What happened, and what did you expect instead?
+      placeholder: |
+        The tray showed a filled check (deployed) while the pipeline on GitLab was red.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps, so a maintainer can reproduce it.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: bridgewatch version
+      description: "`bridgewatch --version`, or the version in the asset filename you installed."
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where does it go wrong?
+      options:
+        - Tray icon (wrong state, or no icon)
+        - Popover (contents, layout, or it will not open)
+        - Settings window
+        - Notifications
+        - The `bridgewatch` CLI
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - macOS .dmg (Apple Silicon)
+        - macOS .dmg (Intel)
+        - Linux .deb
+        - Linux .AppImage
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+      placeholder: macOS 15.6, or Ubuntu 24.04 with GNOME 46
+    validations:
+      required: true
+  - type: input
+    id: gitlab
+    attributes:
+      label: Which GitLab?
+      description: gitlab.com, or a self-managed instance and its version.
+      placeholder: gitlab.com
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Your configuration
+      description: "`bridgewatch config dump` prints it with every default filled in, which is usually more useful than the file. Read it before pasting."
+      render: toml
+  - type: markdown
+    attributes:
+      value: |
+        ### If the VERDICT is wrong
+
+        A wrong icon or a wrong "deployed" is decided entirely by one pipeline's JSON,
+        so a recording of that pipeline is worth more than any description of it:
+
+        ```
+        bridgewatch fixture record <pipeline-id> --out ./bug-<pipeline-id>
+        ```
+
+        That walks the parent pipeline and its children and writes a directory. **Every
+        response is put through an allow-list on the way in**, which drops committer
+        names, email addresses, commit messages and runner descriptions — but it keeps
+        job names, branch names and pipeline ids, so read it before attaching it. Zip
+        the directory onto this issue if you can share it.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "`RUST_LOG=debug bridgewatch check` (CLI) or the popover's debug pane. Optional, but it usually decides the issue."
+      render: text

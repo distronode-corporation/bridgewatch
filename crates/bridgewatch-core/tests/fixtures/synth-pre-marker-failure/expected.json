@@ -1,0 +1,124 @@
+{
+  "source": "SYNTHESISED from the real recording 4cfaced9-deployed (pipeline 2856963900): in the website child, build:ecr_mirror_marketing (started 06:46:51.788Z) changed from success to failed and deploy:marketing changed to skipped, with the trigger job and both pipeline rows changed to failed to match. deploy:origins is untouched and still succeeded at 06:57:06.231Z. No other field altered.",
+  "note": "The marketing image never reached ECR, deploy:marketing was skipped, and deploy:origins succeeded eleven minutes later because nothing in its needs: chain touched the mirror. GitLab is red and the marketing site did not ship. This used to read as a clean `deployed`: sibling_failures excludes the marker's own bridge, and post_deploy_failures sorts a failure that started BEFORE the marker on the wrong side of the line.",
+  "cases": [
+    {
+      "name": "downgrade (default)",
+      "icon_state": "deployed_with_failure",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed_with_failure",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "deployed_with_failure",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "build:ecr_mirror_marketing"
+              ],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "failed"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "post_deploy_failure = fail",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.post_deploy_failure",
+          "value": { "string": "fail" }
+        }
+      ],
+      "icon_state": "failed",
+      "watches": {
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "failed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "build:ecr_mirror_marketing"
+              ],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "failed"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "post_deploy_failure = ignore",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.post_deploy_failure",
+          "value": { "string": "ignore" }
+        }
+      ],
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "build:ecr_mirror_marketing"
+              ],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "failed"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

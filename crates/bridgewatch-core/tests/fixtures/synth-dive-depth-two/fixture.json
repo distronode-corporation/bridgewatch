@@ -1,0 +1,5 @@
+{
+  "primary": 2900000001,
+  "project": 82468124,
+  "source": "SYNTHESISED, not recorded. No pipeline on this project has a grandchild: every trigger:* job in .gitlab-ci.yml creates a child that triggers nothing further, so dive.depth > 1 had nothing real to record. Ids, sha and timestamps are invented; the shape is the documented one \u2014 parent -> trigger:website -> trigger:deploy -> a child carrying deploy:origins. The grandchild is in ANOTHER project (91000001), which is what a multi-project trigger does and what the dive has to route on."
+}

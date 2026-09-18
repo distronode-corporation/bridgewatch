@@ -1,0 +1,73 @@
+{
+  "source": "SYNTHESISED, not recorded. No pipeline on this project has a grandchild: every trigger:* job in .gitlab-ci.yml creates a child that triggers nothing further, so dive.depth > 1 had nothing real to record. Ids, sha and timestamps are invented; the shape is the documented one \u2014 parent -> trigger:website -> trigger:deploy -> a child carrying deploy:origins. The grandchild is in ANOTHER project (91000001), which is what a multi-project trigger does and what the dive has to route on.",
+  "note": "The pair of cases is the point: the marker lives in the GRANDCHILD, so depth 1 cannot see it and honestly says `absent`, and depth 2 finds it. `dive.depth` was parsed, documented and read by nothing, so both cases used to give the first answer. The grandchild also lives in another project, so the walk has to take its `project_id` from the downstream pipeline rather than from the watch.",
+  "cases": [
+    {
+      "name": "depth 1 cannot see the grandchild",
+      "icon_state": "succeeded_no_deploy",
+      "watches": {
+        "main-push": {
+          "icon_state": "succeeded_no_deploy",
+          "rows": [
+            {
+              "id": 2900000001,
+              "state": "succeeded_no_deploy",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [],
+              "warnings": [],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "depth 2 walks into it",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.dive.depth",
+          "value": {
+            "integer": 2
+          }
+        }
+      ],
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2900000001,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [],
+              "warnings": [],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+{
+  "source": "SYNTHESISED from the real recording 04eff5c5-docs-only (pipeline 2859138213): one job, `verify:web_coverage_full 1/4`, added to the parent's job list with status `failed`, and the pipeline rows changed to failed to match. The name is the one the shipped example maps to `gate`; the shards really do run on the weekly schedule. No other field altered.",
+  "note": "`gate` says a job is expected to sit UNRUN. The shipped example applies it to `re:^verify:web_coverage_full`, which is manual on main and automatic on the weekly schedule — so an override that also swallowed a job that RAN AND FAILED listed a red coverage shard under `gates`, where it could never red the icon. This project has no bridges on a docs-only push, so the tray sat on the outline check with exit 0.",
+  "cases": [
+    {
+      "name": "the override does not reach a job that ran and failed",
+      "icon_state": "failed",
+      "watches": {
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "id": 2859138213,
+              "state": "failed",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [
+                "verify:web_coverage_full 1/4"
+              ],
+              "warnings": [
+                "dependency-scanning:python-resolution"
+              ],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {}
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "and neither does removing the override",
+      "overrides": [
+        {
+          "op": "unset",
+          "path": "watches.0.jobs.re:^verify:web_coverage_full"
+        }
+      ],
+      "icon_state": "failed",
+      "watches": {
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "id": 2859138213,
+              "state": "failed",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [
+                "verify:web_coverage_full 1/4"
+              ],
+              "warnings": [
+                "dependency-scanning:python-resolution"
+              ],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "ignore still hides it, because ignore means ignore",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.jobs.re:^verify:web_coverage_full",
+          "value": { "string": "ignore" }
+        }
+      ],
+      "icon_state": "succeeded_no_deploy",
+      "watches": {
+        "main-push": {
+          "icon_state": "succeeded_no_deploy",
+          "rows": [
+            {
+              "id": 2859138213,
+              "state": "succeeded_no_deploy",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [],
+              "warnings": [
+                "dependency-scanning:python-resolution"
+              ],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {}
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

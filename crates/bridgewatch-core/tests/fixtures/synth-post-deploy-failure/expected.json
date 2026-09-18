@@ -1,0 +1,134 @@
+{
+  "source": "SYNTHESISED from the real recording 4cfaced9-deployed (pipeline 2856963900): deploy:cdn_seo's status changed from success to failed. Its real started_at (06:57:49.052Z) is 43 seconds after deploy:origins succeeded (06:57:06.231Z), so it is genuinely post-deploy. Nothing else changed.",
+  "note": "It is out, and the CDN purge that follows it broke. `post_deploy_failure` decides whether that is a downgrade, a failure, or nobody's business.",
+  "cases": [
+    {
+      "name": "downgrade (default)",
+      "icon_state": "deployed_with_failure",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed_with_failure",
+          "rows": [
+            {
+              "id": 2856963900,
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "deploy:cdn_seo"
+              ],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [
+                "deploy:cdn_seo"
+              ],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "failed"
+              },
+              "state": "deployed_with_failure"
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "post_deploy_failure = fail",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.post_deploy_failure",
+          "value": {
+            "string": "fail"
+          }
+        }
+      ],
+      "icon_state": "failed",
+      "watches": {
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "deploy:cdn_seo"
+              ],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [
+                "deploy:cdn_seo"
+              ],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "failed"
+              },
+              "state": "failed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "post_deploy_failure = ignore",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.post_deploy_failure",
+          "value": {
+            "string": "ignore"
+          }
+        }
+      ],
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "deploy:cdn_seo"
+              ],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [
+                "deploy:cdn_seo"
+              ],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "failed"
+              },
+              "state": "deployed"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

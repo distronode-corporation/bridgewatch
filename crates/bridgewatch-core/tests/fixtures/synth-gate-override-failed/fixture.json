@@ -1,0 +1,5 @@
+{
+  "primary": 2859138213,
+  "project": 82468124,
+  "source": "SYNTHESISED from the real recording 04eff5c5-docs-only (pipeline 2859138213): one job, `verify:web_coverage_full 1/4`, added to the parent's job list with status `failed`, and the pipeline rows changed to failed to match. The name is the one the shipped example maps to `gate`; the shards really do run on the weekly schedule. No other field altered."
+}

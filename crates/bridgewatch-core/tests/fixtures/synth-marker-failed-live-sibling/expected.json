@@ -1,0 +1,46 @@
+{
+  "source": "SYNTHESISED from the real recording 4cfaced9-deployed (pipeline 2856963900): in the website child, deploy:origins changed from success to failed, deploy:marketing to skipped, and deploy:cdn_seo to running, with the trigger job and both pipeline rows changed to running to match. No other field altered.",
+  "note": "The deploy failed and an unrelated job in the same child is still running. The bridge honestly reads `running`, so the failure has to come from the deploy outcome or it waits for the longest sibling job: the icon said `running`, `failures` was empty, and the blocking_failure notification was delayed by a CDN purge. README rule 5 says a failed marker outranks everything.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "failed",
+      "watches": {
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "failed",
+              "deploy": "failed",
+              "deploy_marker": null,
+              "failures": [
+                "deploy:origins"
+              ],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "running"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    }
+  ]
+}

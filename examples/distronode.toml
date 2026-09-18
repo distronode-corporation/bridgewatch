@@ -1,0 +1,77 @@
+# bridgewatch, as Distronode runs it against gitlab.com project 82468124.
+#
+# This file is the source of truth: the GUI exposes exactly these keys and
+# writes them back through toml_edit, so these comments survive an edit from the
+# settings pane. `bridgewatch config schema` prints the JSON Schema.
+
+[accounts.gitlab]                      # any number of accounts; self-managed instances welcome
+base_url = "https://gitlab.com"
+api_path = "/api/v4"                   # overridable for proxies
+token    = { keyring = { service = "glab:gitlab.com:token", user = "" } }
+# token  = { env = "BRIDGEWATCH_TOKEN_GITLAB" }  |  { command = ["pass", "gitlab/pat"] }  |  { own = true }
+header   = "PRIVATE-TOKEN"             # or "Authorization: Bearer"
+timeout_secs = 15
+rate_limit_backoff = { max_secs = 300 }
+
+[[watches]]
+id       = "main-push"
+account  = "gitlab"
+project  = 82468124                    # numeric id or "group/path"
+ref      = "main"                      # exact, glob ("pf/*") or regex ("re:^release/.*$")
+sources  = ["push"]                    # any GitLab pipeline source; [] = all
+role     = "primary"                   # primary drives the icon; secondary is rows only
+show     = { max_rows = 5, settled = 1 }   # unsettled pipelines listed, plus N most recent settled; jobs = "failures" | "all" overrides [ui].jobs
+poll     = { live_secs = 5, idle_secs = 60 }   # live tick: 1 list + 2 per live or changed pipeline + 1 per live dived child
+dive     = { bridges = "*", exclude = [], depth = 1 }   # which trigger jobs to walk into (glob), how deep
+deploy_markers = ["deploy:origins", "deploy:marketing"] # names or "re:" regex; first success = deployed
+sibling_failure = "downgrade"          # downgrade | fail | ignore
+post_deploy_failure = "downgrade"      # downgrade | fail | ignore
+[watches.jobs]                         # per-job class overrides, literal or "re:" keys, first match wins
+"re:^verify:web_coverage_full" = "gate"     # gate | warning | blocking | ignore
+"kics-iac-sast"                = "ignore"
+[watches.notify]
+deployed = true
+blocking_failure = true
+finished = true
+started = false
+gate_opened = false
+title = "{{watch.id}} {{sha7}}: {{state}}"   # minijinja over the verdict view model
+# `default`'s second argument is load-bearing: without it an empty failures list
+# is a defined empty string, not undefined, and a green pipeline notifies blank.
+body  = "{{failures | join(', ') | default('all green', true)}}"
+click = "first_failure_or_pipeline"    # first_failure_or_pipeline | pipeline | marker_job | none (desktop notifications cannot open it in 0.1)
+
+[[watches]]
+id = "hourly"
+account = "gitlab"
+project = 82468124
+ref = "main"
+sources = ["schedule"]
+role = "secondary"
+dive = { bridges = "*", depth = 1, only_when = "failed" }
+
+[[watches]]
+id = "preflights"
+account = "gitlab"
+project = 82468124
+ref = "pf/*"
+role = "secondary"
+dive = { bridges = "" }
+
+[icon]
+mode   = "auto"                        # auto | template | color
+theme  = "builtin"                     # or a directory of <name>.png overrides; a missing file falls back to builtin
+states = { failed = "octagon", deployed = "check" }
+
+[verdict]
+# script = "~/.config/bridgewatch/verdict.rhai"   # optional: replaces the icon-state rules for every watch
+
+[ui]
+popover = { width = 440, max_height = 720, hide_on_blur = true }
+theme_css = ""
+launch_at_login = false
+jobs = "all"                           # all: every job, grouped by stage | failures: only failures, warnings and gates
+
+[log]
+level = "info"
+keep_requests = 50

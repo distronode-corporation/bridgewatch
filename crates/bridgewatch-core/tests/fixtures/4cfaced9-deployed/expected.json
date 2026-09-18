@@ -1,0 +1,126 @@
+{
+  "source": "REAL: gitlab.com project 82468124 pipeline 2856963900, sha 4cfaced9, ref main, source push. Recorded 2026-09-17.",
+  "note": "A clean full-lane push. Also the manual-coverage-shards case: verify:web_coverage_full 1..4/4 are `manual` in the website child and read as gates, not as missing work, with or without the re: override.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "coverage shards without the gate override",
+      "overrides": [
+        {
+          "op": "unset",
+          "path": "watches.0.jobs.re:^verify:web_coverage_full"
+        }
+      ],
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "marketing marker preferred over origins",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.deploy_markers",
+          "value": {
+            "array": [
+              {
+                "string": "deploy:marketing"
+              },
+              {
+                "string": "deploy:origins"
+              }
+            ]
+          }
+        }
+      ],
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:marketing",
+              "failures": [],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

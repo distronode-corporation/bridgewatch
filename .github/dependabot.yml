@@ -1,0 +1,42 @@
+version: 2
+
+# Three ecosystems because bridgewatch has three lockfiles that age independently,
+# and one of them is easy to forget: the action SHAs. Every `uses:` in this
+# directory is pinned to a commit with a `# vX.Y.Z` comment (the convention the
+# sibling repo distronode-corporation/district-scheduler uses), which is right for
+# supply-chain safety and wrong for noticing a security fix — a pinned SHA never
+# moves on its own and nothing warns you. `github-actions` here is what turns each
+# of those pins into a pull request, and dependabot rewrites both the SHA and the
+# version comment.
+#
+# ⚠️ `cargo` opens PRs against Cargo.lock, which CI enforces with `--locked`. That is
+# the intended interaction: a lockfile bump that does not build fails in the PR
+# rather than in someone's checkout.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # One PR for the routine bumps. A major version usually needs a workflow edit,
+      # so it is deliberately left on its own.
+      actions-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # The Tauri stack alone is several hundred crates; without grouping this is a
+    # dozen PRs a week and they all rebuild the same tree.
+    groups:
+      cargo-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor:
+        update-types: [minor, patch]

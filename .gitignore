@@ -1,0 +1,37 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+
+# Node / Tauri
+node_modules/
+dist/
+dist-ssr/
+.vite/
+src-tauri/target/
+src-tauri/gen/
+
+# Byte-compiled generate.py
+__pycache__/
+
+# macOS
+.DS_Store
+
+# Local configuration and secrets — never commit a real token
+/config.toml
+/bridgewatch.toml
+.env
+.env.*
+!.env.example
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Fixture scratch space
+/scratch/
+
+# Written at the repo root by .github/workflows/release.yml when it pulls a
+# version's section out of CHANGELOG.md, and by anyone running that awk by hand.
+/release-notes.md

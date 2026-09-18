@@ -1,0 +1,5 @@
+{
+  "primary": 2856963900,
+  "project": 82468124,
+  "source": "SYNTHESISED from the real recording 4cfaced9-deployed (pipeline 2856963900): deploy:cdn_seo's status changed from success to failed. Its real started_at (06:57:49.052Z) is 43s after deploy:origins succeeded (06:57:06.231Z), so it is genuinely post-deploy. Nothing else changed."
+}

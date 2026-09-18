@@ -1,0 +1,134 @@
+{
+  "source": "SYNTHESISED from the real recording 4cfaced9-deployed (pipeline 2856963900): one job, `notify:release`, added to the PARENT's job list with status `failed` and started_at 06:58:30Z \u2014 a minute and a half after deploy:origins succeeded at 06:57:06.231Z \u2014 and the parent pipeline rows changed to failed to match. The child is the recording's, untouched.",
+  "note": "The post-deploy failure is in the PARENT this time, not in a child. README rule 6 says `post_deploy_failure` decides what that means \u2014 but rule 1 fires on any parent blocking failure, and it fires first, so the policy could never reach a job in the parent and `ignore` was the same as `fail`.",
+  "cases": [
+    {
+      "name": "downgrade (default)",
+      "icon_state": "deployed_with_failure",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed_with_failure",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "deployed_with_failure",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "notify:release"
+              ],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [
+                "notify:release"
+              ],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "post_deploy_failure = fail",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.post_deploy_failure",
+          "value": {
+            "string": "fail"
+          }
+        }
+      ],
+      "icon_state": "failed",
+      "watches": {
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "failed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "notify:release"
+              ],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [
+                "notify:release"
+              ],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "post_deploy_failure = ignore",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.post_deploy_failure",
+          "value": {
+            "string": "ignore"
+          }
+        }
+      ],
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "notify:release"
+              ],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [
+                "notify:release"
+              ],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

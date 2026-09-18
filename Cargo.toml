@@ -1,0 +1,38 @@
+[workspace]
+resolver = "3"
+members = ["crates/bridgewatch-core", "crates/bridgewatch-cli", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# ⛔ NOT 1.85, WHICH IS WHAT EDITION 2024 ALONE WOULD IMPLY. Two independent
+# things put the floor at 1.88, and neither is visible in this file:
+#   1. `if let … && let …` chains, stable in edition 2024 only since 1.88. They
+#      live in bridgewatch-core (`config/mod.rs`, `config/edit.rs`, `poll/mod.rs`);
+#      enumerate them with `grep -rn --include='*.rs' -- '&& let' crates src-tauri/src`,
+#      which finds the rustfmt-wrapped ones a single-line pattern misses.
+#   2. Resolved dependencies declare it outright, so the floor holds even if every
+#      let-chain above were rewritten: keyring 4.2.0 says 1.88.0 and globset 0.4.20
+#      says 1.88 (with two keyring backends). Re-derive rather than trust this:
+#      `cargo metadata --format-version 1 --offline | python3 -c "…max rust_version…"`.
+# ⚠️ Deliberately no line numbers: the files above are edited far more often than
+# this one, and a citation that has rotted reads exactly like a citation that has not.
+# The `msrv` job in .github/workflows/ci.yml is what keeps this honest; until it
+# existed CI pinned `stable` and nothing ever compiled at the declared floor.
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/distronode-corporation/bridgewatch"
+authors = ["Distronode Corporation"]
+
+[workspace.dependencies]
+bridgewatch-core = { path = "crates/bridgewatch-core", version = "0.1.0" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+tracing = "0.1.44"
+tokio = "1.53"
+regex = "1.13"
+
+[profile.release]
+lto = "thin"
+strip = true

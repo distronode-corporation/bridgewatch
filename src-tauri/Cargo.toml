@@ -1,0 +1,57 @@
+[package]
+name = "bridgewatch-app"
+description = "The bridgewatch tray application: a Tauri 2 shell around bridgewatch-core."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+default-run = "bridgewatch-app"
+# Not published to crates.io: it is an application, and it cannot build
+# outside this workspace (tauri-build reads ../dist and tauri.conf.json).
+publish = false
+
+[[bin]]
+name = "bridgewatch-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+bridgewatch-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# `tray-icon` and `image-png` are the two features this shell genuinely needs:
+# the tray, and `Image::from_bytes` on the PNG assets in icons/tray.
+#
+# `macos-private-api` is here for ONE reason: a transparent window. The popover
+# is undecorated with rounded corners, and without transparency macOS draws a
+# square opaque rectangle behind them. Tauri gates transparency on this feature
+# because it uses a private AppKit call, and the documented consequence is that
+# the app cannot be submitted to the Mac App Store. bridgewatch ships as an
+# unsigned .dmg, so that costs nothing here — but it is a real constraint and
+# dropping `transparent` from tauri.conf.json is what reverses it.
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+# `tray-icon` is what makes Position::TrayBottomCenter resolve to anything; the
+# plugin records the tray's rectangle from the events it is handed.
+tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
+
+notify = "8"
+# Already in the tree through tauri; used to compare a link's origin with an
+# account's `base_url` before anything is opened.
+url = "2"
+# Only for `move_watch`. See the comment on that command: the operation belongs
+# in the core's ConfigEditor and this is the one place the shell touches TOML.
+toml_edit = "0.25.15"
+
+[dev-dependencies]
+schemars = "1.2.2"

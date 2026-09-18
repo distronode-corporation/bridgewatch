@@ -1,0 +1,77 @@
+{
+  "source": "SYNTHESISED from the real recording 4cfaced9-deployed (pipeline 2856963900): the website child's job list trimmed to the six jobs the marketing-only lane runs. No commit touching only distronode-marketing/ exists on main since 2026-09-01, so there was no real pipeline of this shape to record. No field altered.",
+  "note": "The short lane. deploy:origins never runs, so the verdict has to come from deploy:marketing; with only deploy:origins configured there is no marker at all and the honest answer is `succeeded_no_deploy`.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:marketing",
+              "failures": [],
+              "warnings": [],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "only deploy:origins configured as a marker",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.deploy_markers",
+          "value": {
+            "array": [
+              {
+                "string": "deploy:origins"
+              }
+            ]
+          }
+        }
+      ],
+      "icon_state": "succeeded_no_deploy",
+      "watches": {
+        "main-push": {
+          "icon_state": "succeeded_no_deploy",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "succeeded_no_deploy",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [],
+              "warnings": [],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

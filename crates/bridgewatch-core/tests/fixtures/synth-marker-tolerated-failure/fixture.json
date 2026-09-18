@@ -1,0 +1,5 @@
+{
+  "primary": 2856963900,
+  "project": 82468124,
+  "source": "SYNTHESISED from the real recording 4cfaced9-deployed (pipeline 2856963900): in the website child, deploy:origins changed from success to failed with allow_failure set to true, and deploy:marketing given the status `approval_pending`, which no build of bridgewatch recognises. Every other field, including both pipeline rows and the trigger job's `success`, is the recording's."
+}

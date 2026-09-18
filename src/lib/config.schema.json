@@ -1,0 +1,699 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "description": "The whole configuration file.",
+  "type": "object",
+  "properties": {
+    "accounts": {
+      "description": "GitLab instances to talk to, keyed by the name watches refer to.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Account"
+      },
+      "default": {}
+    },
+    "icon": {
+      "description": "Tray icon appearance.",
+      "$ref": "#/$defs/IconConfig",
+      "default": {
+        "mode": "auto",
+        "states": {},
+        "theme": "builtin"
+      }
+    },
+    "log": {
+      "description": "Logging and request-ring settings.",
+      "$ref": "#/$defs/LogConfig",
+      "default": {
+        "keep_requests": 50,
+        "level": "info"
+      }
+    },
+    "ui": {
+      "description": "Window and presentation settings, consumed by the GUI shell.",
+      "$ref": "#/$defs/UiConfig",
+      "default": {
+        "jobs": "all",
+        "launch_at_login": false,
+        "popover": {
+          "hide_on_blur": true,
+          "max_height": 720,
+          "width": 440
+        },
+        "theme_css": ""
+      }
+    },
+    "verdict": {
+      "description": "Optional replacement for the built-in icon-state rules.",
+      "$ref": "#/$defs/VerdictConfig",
+      "default": {
+        "script": null,
+        "script_source": null
+      }
+    },
+    "watches": {
+      "description": "What to watch. Order is the display order.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Watch"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Account": {
+      "description": "One GitLab instance and the credential used against it.",
+      "type": "object",
+      "properties": {
+        "api_path": {
+          "description": "API prefix. Overridable for proxies that mount the API elsewhere.",
+          "type": "string",
+          "default": "/api/v4"
+        },
+        "base_url": {
+          "description": "Instance root, without a trailing slash, e.g. `https://gitlab.com`.",
+          "type": "string",
+          "default": "https://gitlab.com"
+        },
+        "header": {
+          "description": "Which header carries the token.",
+          "$ref": "#/$defs/AuthHeader",
+          "default": "PRIVATE-TOKEN"
+        },
+        "rate_limit_backoff": {
+          "description": "How far the poll interval is allowed to back off after rate limiting.",
+          "$ref": "#/$defs/RateLimitBackoff",
+          "default": {
+            "max_secs": 300
+          }
+        },
+        "timeout_secs": {
+          "description": "Per-request timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 15,
+          "minimum": 0
+        },
+        "token": {
+          "description": "Where the token comes from. Never the token itself.",
+          "$ref": "#/$defs/TokenSource",
+          "default": {
+            "own": true
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthHeader": {
+      "description": "The header spelling used to authenticate.",
+      "oneOf": [
+        {
+          "description": "`PRIVATE-TOKEN: <token>`, the GitLab personal/project access token form.",
+          "type": "string",
+          "const": "PRIVATE-TOKEN"
+        },
+        {
+          "description": "`Authorization: Bearer <token>`, for OAuth and CI job tokens.",
+          "type": "string",
+          "const": "Authorization: Bearer"
+        }
+      ]
+    },
+    "ClickTarget": {
+      "description": "Where a notification click lands.",
+      "oneOf": [
+        {
+          "description": "The first failing job, falling back to the pipeline when green.",
+          "type": "string",
+          "const": "first_failure_or_pipeline"
+        },
+        {
+          "description": "Always the pipeline.",
+          "type": "string",
+          "const": "pipeline"
+        },
+        {
+          "description": "The deploy marker job, falling back to the pipeline.",
+          "type": "string",
+          "const": "marker_job"
+        },
+        {
+          "description": "Not clickable.",
+          "type": "string",
+          "const": "none"
+        }
+      ]
+    },
+    "DiveConfig": {
+      "description": "Which trigger jobs to walk into.",
+      "type": "object",
+      "properties": {
+        "bridges": {
+          "description": "Glob over trigger-job names. `\"*\"` dives into all of them; `\"\"` into\nnone, which turns the watch into a cheap one-request-per-tick row.",
+          "type": "string",
+          "default": "*"
+        },
+        "depth": {
+          "description": "How many levels of child pipeline to walk. `1` is the parent's own\nchildren.",
+          "type": "integer",
+          "format": "uint8",
+          "default": 1,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "exclude": {
+          "description": "Trigger-job name globs to skip even when `bridges` matches them.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "only_when": {
+          "description": "Restrict diving to bridges in a given state, e.g. `\"failed\"`. This is\nhow a noisy secondary watch stays cheap until something breaks.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "FailurePolicy": {
+      "description": "What a secondary failure does to an otherwise successful deploy.",
+      "oneOf": [
+        {
+          "description": "Deployed, but the icon says so with a warning overlay.",
+          "type": "string",
+          "const": "downgrade"
+        },
+        {
+          "description": "Treat it as an outright failure.",
+          "type": "string",
+          "const": "fail"
+        },
+        {
+          "description": "Do not let it affect the icon at all.",
+          "type": "string",
+          "const": "ignore"
+        }
+      ]
+    },
+    "IconConfig": {
+      "description": "Tray icon appearance.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "`auto` is a template image on macOS and the coloured set elsewhere;\n`template` forces a macOS template image; `color` forces the coloured set.",
+          "type": "string",
+          "default": "auto"
+        },
+        "states": {
+          "description": "Per-state glyph names, for themes that offer alternatives.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "theme": {
+          "description": "`builtin`, or a directory of `<state>.png` overrides.",
+          "type": "string",
+          "default": "builtin"
+        }
+      },
+      "additionalProperties": false
+    },
+    "JobOverride": {
+      "description": "How a job's class is forced, regardless of its raw status.",
+      "oneOf": [
+        {
+          "description": "A manual job that should read as a gate rather than as missing work.",
+          "type": "string",
+          "const": "gate"
+        },
+        {
+          "description": "Demote a blocking failure to a warning.",
+          "type": "string",
+          "const": "warning"
+        },
+        {
+          "description": "Promote an allow-failure failure to blocking.",
+          "type": "string",
+          "const": "blocking"
+        },
+        {
+          "description": "Hide the job from every verdict and from the rows.",
+          "type": "string",
+          "const": "ignore"
+        }
+      ]
+    },
+    "JobOverrides": {
+      "description": "Job-name patterns (literal, or \"re:<regex>\") mapped to a forced class. Evaluated in file order; the first match wins.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/JobOverride"
+      }
+    },
+    "JobsMode": {
+      "description": "Which jobs a pipeline row lists when it is expanded.\n\nPresentation only: the view model carries every job either way, so flipping\nthe mode redraws from what is already held instead of waiting for a fetch,\nand the verdict never depends on it.",
+      "oneOf": [
+        {
+          "description": "Only the jobs the verdict names: failures, warnings and gates.",
+          "type": "string",
+          "const": "failures"
+        },
+        {
+          "description": "Every job, parent and child, grouped by stage. The 0.1.0 default.",
+          "type": "string",
+          "const": "all"
+        }
+      ]
+    },
+    "LogConfig": {
+      "description": "Logging and the bounded request ring the debug pane reads.",
+      "type": "object",
+      "properties": {
+        "keep_requests": {
+          "description": "How many recent HTTP requests to keep for the debug pane.",
+          "type": "integer",
+          "format": "uint",
+          "default": 50,
+          "minimum": 0
+        },
+        "level": {
+          "description": "`error` | `warn` | `info` | `debug` | `trace`. `RUST_LOG` wins when set.",
+          "type": "string",
+          "default": "info"
+        }
+      },
+      "additionalProperties": false
+    },
+    "NotifyConfig": {
+      "description": "Which events notify, and what they say.",
+      "type": "object",
+      "properties": {
+        "blocking_failure": {
+          "description": "A new blocking failure appeared, or a bridge lost its child.",
+          "type": "boolean",
+          "default": true
+        },
+        "body": {
+          "description": "MiniJinja template for the notification body.",
+          "type": "string",
+          "default": "{{failures | join(', ') | default('all green', true)}}"
+        },
+        "click": {
+          "description": "Where clicking the notification goes.",
+          "$ref": "#/$defs/ClickTarget",
+          "default": "first_failure_or_pipeline"
+        },
+        "deployed": {
+          "description": "A deploy marker succeeded.",
+          "type": "boolean",
+          "default": true
+        },
+        "finished": {
+          "description": "A pipeline reached a settled state.",
+          "type": "boolean",
+          "default": true
+        },
+        "gate_opened": {
+          "description": "A bridge parked at a manual gate.",
+          "type": "boolean",
+          "default": false
+        },
+        "started": {
+          "description": "A pipeline started.",
+          "type": "boolean",
+          "default": false
+        },
+        "title": {
+          "description": "MiniJinja template for the notification title.",
+          "type": "string",
+          "default": "{{watch.id}} {{sha7}}: {{state}}"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PollConfig": {
+      "description": "Poll intervals, in seconds.",
+      "type": "object",
+      "properties": {
+        "idle_secs": {
+          "description": "Interval used when everything has settled.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 60,
+          "minimum": 0
+        },
+        "live_secs": {
+          "description": "Interval used while anything relevant is unsettled.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "PopoverConfig": {
+      "description": "Popover geometry.",
+      "type": "object",
+      "properties": {
+        "hide_on_blur": {
+          "description": "Dismiss the popover when it loses focus.",
+          "type": "boolean",
+          "default": true
+        },
+        "max_height": {
+          "description": "Maximum height in logical pixels before the list scrolls.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 720,
+          "minimum": 0
+        },
+        "width": {
+          "description": "Width in logical pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 440,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProjectRef": {
+      "description": "A project, addressed either by numeric id or by namespace path.",
+      "anyOf": [
+        {
+          "description": "Numeric project id, the cheapest and most stable form.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        {
+          "description": "`group/subgroup/project`, URL-encoded before use.",
+          "type": "string"
+        }
+      ]
+    },
+    "RateLimitBackoff": {
+      "description": "How far the backoff is allowed to grow after repeated rate limiting or\nserver errors.",
+      "type": "object",
+      "properties": {
+        "max_secs": {
+          "description": "Ceiling for the doubled interval, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 300,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Role": {
+      "description": "Whether a watch drives the tray icon.",
+      "oneOf": [
+        {
+          "description": "Contributes to the tray icon state and may notify.",
+          "type": "string",
+          "const": "primary"
+        },
+        {
+          "description": "Contributes rows to the popover only. Never touches the icon, never\nnotifies. This is what keeps an hourly schedule that is red by design\nout of the tray.",
+          "type": "string",
+          "const": "secondary"
+        }
+      ]
+    },
+    "ShowConfig": {
+      "description": "How many pipeline rows a watch contributes.",
+      "type": "object",
+      "properties": {
+        "jobs": {
+          "description": "Which jobs this watch's rows list, overriding `ui.jobs` for this watch\nalone. Absent means \"whatever `ui.jobs` says\"; see\n[`Watch::effective_jobs`].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobsMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_rows": {
+          "description": "Hard ceiling on rows for this watch.",
+          "type": "integer",
+          "format": "uint",
+          "default": 5,
+          "minimum": 0
+        },
+        "settled": {
+          "description": "How many already-settled pipelines to keep, on top of every unsettled\none. Unsettled pipelines are always shown.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "TokenSource": {
+      "description": "Where a token is read from.\n\nA literal token string is rejected at parse time with an explanatory error:\nbridgewatch never wants a credential sitting in a config file.",
+      "oneOf": [
+        {
+          "description": "An entry in the OS credential store, addressed exactly as another tool\nwrote it. `user` may be empty: `glab` stores its token with an empty\naccount on the macOS Keychain and an empty `username` attribute on the\nLinux Secret Service.",
+          "type": "object",
+          "properties": {
+            "keyring": {
+              "type": "object",
+              "properties": {
+                "service": {
+                  "description": "The credential store's service / collection name.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The account / username attribute. The empty string is valid.",
+                  "type": "string",
+                  "default": ""
+                }
+              },
+              "required": [
+                "service"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "keyring"
+          ]
+        },
+        {
+          "description": "An environment variable holding the token.",
+          "type": "object",
+          "properties": {
+            "env": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "env"
+          ]
+        },
+        {
+          "description": "A program to run; the first line of its stdout, trimmed, is the token.\nA non-zero exit is an error.",
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "command"
+          ]
+        },
+        {
+          "description": "bridgewatch's own credential-store entry, `bridgewatch:<account>`,\nwritten by the GUI or by `set_own_token`.",
+          "type": "object",
+          "properties": {
+            "own": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "own"
+          ]
+        }
+      ]
+    },
+    "UiConfig": {
+      "description": "Window and presentation settings. The core reads only `jobs`, to put each\nwatch's effective mode on the view model; the rest are the GUI shell's, and\nthey live here so the config file stays the one source.",
+      "type": "object",
+      "properties": {
+        "jobs": {
+          "description": "Which jobs an expanded pipeline row lists: `all` (every job, grouped by\nstage) or `failures` (only what the verdict names). A watch may override\nit with `show.jobs`.",
+          "$ref": "#/$defs/JobsMode",
+          "default": "all"
+        },
+        "launch_at_login": {
+          "description": "Register bridgewatch as a login item.",
+          "type": "boolean",
+          "default": false
+        },
+        "popover": {
+          "description": "Popover geometry and behaviour.",
+          "$ref": "#/$defs/PopoverConfig",
+          "default": {
+            "hide_on_blur": true,
+            "max_height": 720,
+            "width": 440
+          }
+        },
+        "theme_css": {
+          "description": "Path to a CSS file layered over the built-in theme.",
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false
+    },
+    "VerdictConfig": {
+      "description": "Optional Rhai hook replacing the built-in icon-state rules.",
+      "type": "object",
+      "properties": {
+        "script": {
+          "description": "Path to a `.rhai` script. `~` is expanded.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "script_source": {
+          "description": "Inline script, which takes precedence over `script`. Mostly for tests\nand for the GUI's script editor preview.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "Watch": {
+      "description": "One thing to watch: a project, a ref pattern and a set of pipeline sources.",
+      "type": "object",
+      "properties": {
+        "account": {
+          "description": "Which `[accounts.*]` entry to use.",
+          "type": "string"
+        },
+        "deploy_markers": {
+          "description": "Job names (or `re:` patterns) whose success means \"this deployed\".\nThe first one to succeed wins.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "dive": {
+          "description": "Which trigger jobs to walk into, and how deep.",
+          "$ref": "#/$defs/DiveConfig",
+          "default": {
+            "bridges": "*",
+            "depth": 1,
+            "exclude": [],
+            "only_when": null
+          }
+        },
+        "id": {
+          "description": "Stable identifier, used in notifications, `--watch` and the GUI.",
+          "type": "string"
+        },
+        "jobs": {
+          "description": "Per-job class overrides. Keys are matched in file order, first wins.",
+          "$ref": "#/$defs/JobOverrides",
+          "default": {}
+        },
+        "notify": {
+          "description": "Which events raise a notification, and how they read.",
+          "$ref": "#/$defs/NotifyConfig",
+          "default": {
+            "blocking_failure": true,
+            "body": "{{failures | join(', ') | default('all green', true)}}",
+            "click": "first_failure_or_pipeline",
+            "deployed": true,
+            "finished": true,
+            "gate_opened": false,
+            "started": false,
+            "title": "{{watch.id}} {{sha7}}: {{state}}"
+          }
+        },
+        "poll": {
+          "description": "Poll intervals for this watch.",
+          "$ref": "#/$defs/PollConfig",
+          "default": {
+            "idle_secs": 60,
+            "live_secs": 5
+          }
+        },
+        "post_deploy_failure": {
+          "description": "What a blocking failure *after* a successful deploy marker does.",
+          "$ref": "#/$defs/FailurePolicy",
+          "default": "downgrade"
+        },
+        "project": {
+          "description": "Numeric project id, or a `group/path` which is URL-encoded for you.",
+          "$ref": "#/$defs/ProjectRef"
+        },
+        "ref": {
+          "description": "Ref pattern: exact (`main`), glob (`pf/*`) or regex (`re:^release/.*$`).",
+          "type": "string",
+          "default": "main"
+        },
+        "role": {
+          "description": "Whether this watch drives the tray icon.",
+          "$ref": "#/$defs/Role",
+          "default": "primary"
+        },
+        "show": {
+          "description": "How many pipelines to list.",
+          "$ref": "#/$defs/ShowConfig",
+          "default": {
+            "max_rows": 5,
+            "settled": 1
+          }
+        },
+        "sibling_failure": {
+          "description": "What a failed sibling bridge does to a watch that otherwise deployed.",
+          "$ref": "#/$defs/FailurePolicy",
+          "default": "downgrade"
+        },
+        "sources": {
+          "description": "Pipeline sources to accept. Empty means all of them.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "account",
+        "project"
+      ]
+    }
+  }
+}

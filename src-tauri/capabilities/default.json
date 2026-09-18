@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the popover and the settings window may ask for: events, and nothing else. Every plugin (opener, notification, positioner, autostart) is driven from Rust, which the ACL does not govern; the commands this app defines itself are not subject to it either.",
+  "windows": ["popover", "settings", "wizard"],
+  "permissions": ["core:event:default"]
+}

@@ -1,0 +1,5 @@
+{
+  "primary": 2856963900,
+  "project": 82468124,
+  "source": "SYNTHESISED from the real recording 4cfaced9-deployed (pipeline 2856963900): the website child's job list trimmed to the 6 jobs the marketing-only lane runs (build:ecr_mirror_marketing, build:marketing, deploy:marketing, secret_detection, setup:dependencies, verify:secret_bearing_images). No marketing-only commit exists on main since 2026-09-01, so there was no real pipeline to record. No field altered."
+}

@@ -1,0 +1,25 @@
+[
+  {
+    "allow_failure": false,
+    "created_at": "2026-09-17T16:25:32.177Z",
+    "finished_at": "2026-09-17T16:26:30.613Z",
+    "id": 16569708413,
+    "name": "sentry:drift",
+    "pipeline": {
+      "created_at": "2026-09-17T16:25:30.630Z",
+      "id": 2858879998,
+      "iid": 13127,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "9da437fd575e00e9c74c4b8e9706cc9eab0020ad",
+      "source": "parent_pipeline",
+      "status": "success",
+      "updated_at": "2026-09-17T16:26:32.740Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2858879998"
+    },
+    "stage": "test",
+    "started_at": "2026-09-17T16:25:44.814Z",
+    "status": "success",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16569708413"
+  }
+]

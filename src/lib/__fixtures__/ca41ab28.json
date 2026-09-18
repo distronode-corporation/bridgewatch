@@ -1,0 +1,779 @@
+{
+  "icon_state": "deployed_with_failure",
+  "watches": [
+    {
+      "id": "main-push",
+      "role": "primary",
+      "icon_state": "deployed_with_failure",
+      "rows": [
+        {
+          "id": 2857464986,
+          "iid": 13072,
+          "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+          "sha7": "ca41ab2",
+          "ref": "main",
+          "source": "push",
+          "status": "failed",
+          "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857464986",
+          "state": "deployed_with_failure",
+          "deploy": "live",
+          "deploy_marker": {
+            "name": "deploy:origins",
+            "id": 16558670501,
+            "pipeline_id": 2857465135,
+            "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670501",
+            "started_at": "2026-09-17T14:40:34.699Z"
+          },
+          "deploy_failures": [],
+          "failures": [
+            "verify:android"
+          ],
+          "warnings": [],
+          "gates": [
+            "ios:smoke",
+            "test:ios:ui",
+            "test:ios:app",
+            "build:ios:sim",
+            "publish:android_bundle",
+            "verify:web_coverage_full 4/4",
+            "verify:web_coverage_full 3/4",
+            "verify:web_coverage_full 2/4",
+            "verify:web_coverage_full 1/4"
+          ],
+          "post_deploy_failures": [],
+          "sibling_failures": [
+            "trigger:android"
+          ],
+          "bridges": [
+            {
+              "name": "trigger:ios",
+              "status": "success",
+              "verdict": "passed",
+              "verdict_jobs": [],
+              "child_id": 2857465074,
+              "child_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465074",
+              "child_project_id": 82468124,
+              "dived": true,
+              "jobs": [
+                {
+                  "id": 16558670005,
+                  "name": "ios:smoke",
+                  "class": "gate",
+                  "status": "manual",
+                  "allow_failure": true,
+                  "stage": "build",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670005"
+                },
+                {
+                  "id": 16558670004,
+                  "name": "test:ios:ui",
+                  "class": "gate",
+                  "status": "manual",
+                  "allow_failure": true,
+                  "stage": "build",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670004"
+                },
+                {
+                  "id": 16558670003,
+                  "name": "test:ios:app",
+                  "class": "gate",
+                  "status": "manual",
+                  "allow_failure": true,
+                  "stage": "build",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670003"
+                },
+                {
+                  "id": 16558670002,
+                  "name": "build:ios:sim",
+                  "class": "gate",
+                  "status": "manual",
+                  "allow_failure": true,
+                  "stage": "build",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670002"
+                },
+                {
+                  "id": 16558670001,
+                  "name": "smoke:macos",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": true,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670001"
+                },
+                {
+                  "id": 16558670000,
+                  "name": "verify:ios",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670000"
+                }
+              ],
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668959"
+            },
+            {
+              "name": "trigger:android",
+              "status": "failed",
+              "verdict": "failed",
+              "verdict_jobs": [
+                "verify:android"
+              ],
+              "child_id": 2857465094,
+              "child_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465094",
+              "child_project_id": 82468124,
+              "dived": true,
+              "jobs": [
+                {
+                  "id": 16558670145,
+                  "name": "verify:android_sast_coverage",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "security",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670145"
+                },
+                {
+                  "id": 16558670144,
+                  "name": "semgrep-sast",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": true,
+                  "stage": "security",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670144"
+                },
+                {
+                  "id": 16558670143,
+                  "name": "android:smoke",
+                  "class": "not_built",
+                  "status": "skipped",
+                  "allow_failure": true,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670143"
+                },
+                {
+                  "id": 16558670142,
+                  "name": "publish:android_bundle",
+                  "class": "gate",
+                  "status": "manual",
+                  "allow_failure": true,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670142"
+                },
+                {
+                  "id": 16558670141,
+                  "name": "verify:android",
+                  "class": "blocking_failure",
+                  "status": "failed",
+                  "allow_failure": false,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670141"
+                }
+              ],
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668958"
+            },
+            {
+              "name": "trigger:voice_agent",
+              "status": "canceled",
+              "verdict": "canceled",
+              "verdict_jobs": [],
+              "child_id": 2857465116,
+              "child_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465116",
+              "child_project_id": 82468124,
+              "dived": true,
+              "jobs": [
+                {
+                  "id": 16558670361,
+                  "name": "deploy_voice_agent",
+                  "class": "not_built",
+                  "status": "canceled",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670361"
+                },
+                {
+                  "id": 16558670357,
+                  "name": "deploy_voice_agent_apac",
+                  "class": "not_built",
+                  "status": "canceled",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670357"
+                },
+                {
+                  "id": 16558670356,
+                  "name": "deploy_voice_agent_ca",
+                  "class": "not_built",
+                  "status": "canceled",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670356"
+                },
+                {
+                  "id": 16558670355,
+                  "name": "deploy_voice_agent_eu",
+                  "class": "not_built",
+                  "status": "canceled",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670355"
+                },
+                {
+                  "id": 16558670354,
+                  "name": "container_scanning",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "security",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670354"
+                },
+                {
+                  "id": 16558670352,
+                  "name": "secret_detection",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "security",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670352"
+                },
+                {
+                  "id": 16558670351,
+                  "name": "mirror:voice_agent_ecr_apac",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "mirror",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670351"
+                },
+                {
+                  "id": 16558670350,
+                  "name": "mirror:voice_agent_ecr_ca",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "mirror",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670350"
+                },
+                {
+                  "id": 16558670349,
+                  "name": "mirror:voice_agent_ecr_eu",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "mirror",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670349"
+                },
+                {
+                  "id": 16558670348,
+                  "name": "build_voice_agent",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "build",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670348"
+                },
+                {
+                  "id": 16558670347,
+                  "name": "verify:voice_agent",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670347"
+                }
+              ],
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668957"
+            },
+            {
+              "name": "trigger:website",
+              "status": "success",
+              "verdict": "passed",
+              "verdict_jobs": [],
+              "child_id": 2857465135,
+              "child_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465135",
+              "child_project_id": 82468124,
+              "dived": true,
+              "jobs": [
+                {
+                  "id": 16566583254,
+                  "name": "build:ecr_mirror",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "e2e",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16566583254"
+                },
+                {
+                  "id": 16558670505,
+                  "name": "deploy:cdn_seo",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670505"
+                },
+                {
+                  "id": 16558670504,
+                  "name": "deploy:canary_trigger",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": true,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670504"
+                },
+                {
+                  "id": 16558670503,
+                  "name": "deploy:marketing",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670503"
+                },
+                {
+                  "id": 16558670502,
+                  "name": "deploy:scheduler",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670502"
+                },
+                {
+                  "id": 16558670501,
+                  "name": "deploy:origins",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670501"
+                },
+                {
+                  "id": 16558670500,
+                  "name": "deploy:gmc_sync",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670500"
+                },
+                {
+                  "id": 16558670499,
+                  "name": "deploy:db_migrate_selfhosted",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670499"
+                },
+                {
+                  "id": 16558670498,
+                  "name": "deploy:db_migrate_regional",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670498"
+                },
+                {
+                  "id": 16558670497,
+                  "name": "deploy",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "deploy",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670497"
+                },
+                {
+                  "id": 16558670496,
+                  "name": "container_scanning:backup",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "security",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670496"
+                },
+                {
+                  "id": 16558670494,
+                  "name": "container_scanning",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "security",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670494"
+                },
+                {
+                  "id": 16558670493,
+                  "name": "secret_detection",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "security",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670493"
+                },
+                {
+                  "id": 16558670492,
+                  "name": "verify:web_e2e",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "e2e",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670492"
+                },
+                {
+                  "id": 16558670491,
+                  "name": "build:ecr_mirror_marketing",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "e2e",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670491"
+                },
+                {
+                  "id": 16558670489,
+                  "name": "build:scheduler_mirror",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "build",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670489"
+                },
+                {
+                  "id": 16558670488,
+                  "name": "build:backup_scan_image",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "build",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670488"
+                },
+                {
+                  "id": 16558670487,
+                  "name": "build:backup_image",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "build",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670487"
+                },
+                {
+                  "id": 16558670486,
+                  "name": "build:marketing",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "build",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670486"
+                },
+                {
+                  "id": 16558670485,
+                  "name": "build",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "build",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670485"
+                },
+                {
+                  "id": 16558670484,
+                  "name": "verify:web_coverage_merge",
+                  "class": "not_built",
+                  "status": "skipped",
+                  "allow_failure": true,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670484"
+                },
+                {
+                  "id": 16558670483,
+                  "name": "verify:web_coverage_full 4/4",
+                  "class": "gate",
+                  "status": "manual",
+                  "allow_failure": true,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670483"
+                },
+                {
+                  "id": 16558670482,
+                  "name": "verify:web_coverage_full 3/4",
+                  "class": "gate",
+                  "status": "manual",
+                  "allow_failure": true,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670482"
+                },
+                {
+                  "id": 16558670481,
+                  "name": "verify:web_coverage_full 2/4",
+                  "class": "gate",
+                  "status": "manual",
+                  "allow_failure": true,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670481"
+                },
+                {
+                  "id": 16558670480,
+                  "name": "verify:web_coverage_full 1/4",
+                  "class": "gate",
+                  "status": "manual",
+                  "allow_failure": true,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670480"
+                },
+                {
+                  "id": 16558670479,
+                  "name": "verify:web_test",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670479"
+                },
+                {
+                  "id": 16558670478,
+                  "name": "verify:origins_deploy_script",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670478"
+                },
+                {
+                  "id": 16558670477,
+                  "name": "verify:web_contrast",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670477"
+                },
+                {
+                  "id": 16558670476,
+                  "name": "verify:web_types",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670476"
+                },
+                {
+                  "id": 16558670475,
+                  "name": "verify:web_lint",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670475"
+                },
+                {
+                  "id": 16558670474,
+                  "name": "verify:secret_bearing_images",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": "verify",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670474"
+                },
+                {
+                  "id": 16558670473,
+                  "name": "setup:dependencies",
+                  "class": "passed",
+                  "status": "success",
+                  "allow_failure": false,
+                  "stage": ".pre",
+                  "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670473"
+                }
+              ],
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668956"
+            }
+          ],
+          "parent_jobs": [
+            {
+              "id": 16558668965,
+              "name": "verify:secret_detection_coverage",
+              "class": "passed",
+              "status": "success",
+              "allow_failure": false,
+              "stage": "scan-verify",
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668965"
+            },
+            {
+              "id": 16558668964,
+              "name": "verify:dependency_scanning_coverage",
+              "class": "passed",
+              "status": "success",
+              "allow_failure": false,
+              "stage": "scan-verify",
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668964"
+            },
+            {
+              "id": 16558668963,
+              "name": "verify:sast_coverage",
+              "class": "passed",
+              "status": "success",
+              "allow_failure": false,
+              "stage": "scan-verify",
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668963"
+            },
+            {
+              "id": 16558668962,
+              "name": "dependency-scanning",
+              "class": "passed",
+              "status": "success",
+              "allow_failure": true,
+              "stage": "test",
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668962"
+            },
+            {
+              "id": 16558668961,
+              "name": "secret_detection",
+              "class": "passed",
+              "status": "success",
+              "allow_failure": true,
+              "stage": "test",
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668961"
+            },
+            {
+              "id": 16558668960,
+              "name": "gitlab-advanced-sast",
+              "class": "passed",
+              "status": "success",
+              "allow_failure": true,
+              "stage": "test",
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668960"
+            },
+            {
+              "id": 16558668955,
+              "name": "dependency-scanning:python-resolution",
+              "class": "passed",
+              "status": "success",
+              "allow_failure": true,
+              "stage": ".pre",
+              "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558668955"
+            }
+          ],
+          "updated_at": "2026-09-17T15:42:58.829Z",
+          "created_at": "2026-09-17T09:23:29.067Z",
+          "live": false
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "hourly",
+      "role": "secondary",
+      "icon_state": null,
+      "rows": [],
+      "error": null
+    },
+    {
+      "id": "preflights",
+      "role": "secondary",
+      "icon_state": null,
+      "rows": [],
+      "error": null
+    }
+  ],
+  "errors": [],
+  "last_poll": "2026-09-17T19:25:43.106249Z",
+  "request_log": [
+    {
+      "method": "GET",
+      "path": "/projects/82468124/pipelines?ref=main&source=push&order_by=id&sort=desc&per_page=20",
+      "status": 200,
+      "ms": 0,
+      "ratelimit_remaining": 1999,
+      "ratelimit_reset": null,
+      "retry_after": null,
+      "error": null,
+      "at": "2026-09-17T19:25:43.012007Z"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/82468124/pipelines/2857464986/jobs?per_page=100&page=1",
+      "status": 200,
+      "ms": 0,
+      "ratelimit_remaining": 1999,
+      "ratelimit_reset": null,
+      "retry_after": null,
+      "error": null,
+      "at": "2026-09-17T19:25:43.012237Z"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/82468124/pipelines/2857464986/bridges?per_page=100&page=1",
+      "status": 200,
+      "ms": 0,
+      "ratelimit_remaining": 1999,
+      "ratelimit_reset": null,
+      "retry_after": null,
+      "error": null,
+      "at": "2026-09-17T19:25:43.087421Z"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/82468124/pipelines/2857465074/jobs?per_page=100&page=1",
+      "status": 200,
+      "ms": 0,
+      "ratelimit_remaining": 1999,
+      "ratelimit_reset": null,
+      "retry_after": null,
+      "error": null,
+      "at": "2026-09-17T19:25:43.093498Z"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/82468124/pipelines/2857465094/jobs?per_page=100&page=1",
+      "status": 200,
+      "ms": 0,
+      "ratelimit_remaining": 1999,
+      "ratelimit_reset": null,
+      "retry_after": null,
+      "error": null,
+      "at": "2026-09-17T19:25:43.094740Z"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/82468124/pipelines/2857465116/jobs?per_page=100&page=1",
+      "status": 200,
+      "ms": 0,
+      "ratelimit_remaining": 1999,
+      "ratelimit_reset": null,
+      "retry_after": null,
+      "error": null,
+      "at": "2026-09-17T19:25:43.095888Z"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/82468124/pipelines/2857465135/jobs?per_page=100&page=1",
+      "status": 200,
+      "ms": 0,
+      "ratelimit_remaining": 1999,
+      "ratelimit_reset": null,
+      "retry_after": null,
+      "error": null,
+      "at": "2026-09-17T19:25:43.098551Z"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/82468124/pipelines?ref=main&source=schedule&order_by=id&sort=desc&per_page=20",
+      "status": 200,
+      "ms": 0,
+      "ratelimit_remaining": 1999,
+      "ratelimit_reset": null,
+      "retry_after": null,
+      "error": null,
+      "at": "2026-09-17T19:25:43.106079Z"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/82468124/pipelines?order_by=updated_at&sort=desc&per_page=30",
+      "status": 200,
+      "ms": 0,
+      "ratelimit_remaining": 1999,
+      "ratelimit_reset": null,
+      "retry_after": null,
+      "error": null,
+      "at": "2026-09-17T19:25:43.106186Z"
+    }
+  ]
+}

@@ -1,0 +1,340 @@
+/*
+ * The app stylesheet: Tailwind v4 + shadcn-svelte's Rhea style, themed per
+ * platform through CSS custom properties.
+ *
+ * Replaces src/app.css once the shell switches main.ts to import this file.
+ * `[ui].theme_css` is still appended after it, so a user stylesheet only has to
+ * restate the custom properties it wants to change; the legacy names it may use
+ * (--red, --amber, --green, --blue, --grey and their -bg twins, --mono, --sans)
+ * are kept and feed the new tokens.
+ *
+ * Rhea provenance: tokens are the preset `b27GcrRo` (style "rhea", base colour
+ * "neutral") as served by https://shadcn-svelte.com/init?preset=b27GcrRo on
+ * 2026-09-18, with each oklch() value converted to the identical sRGB hex (the
+ * neutral ramp lands exactly on Tailwind's neutral-50..950). Converted because
+ * oklch() is not a colour we can count on in WebKitGTK 2.36; see the
+ * compatibility notes at the bottom. The one deliberate departure: Rhea's font
+ * is Inter; here the platform's own UI font is used instead, per the brief.
+ *
+ * Nothing in this file, or in anything it imports, loads from the network.
+ */
+
+@import "tailwindcss" source(none);
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+
+/* Class scanning is limited to src/ (this file is src/lib/theme/app.css), so
+   Tailwind never walks target/ or the Rust crates. */
+@source "../..";
+
+/* ------------------------------------------------------------------------ */
+/* Palette: Rhea neutral, the base for every platform                       */
+/* ------------------------------------------------------------------------ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Rhea light */
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary: #171717;
+  --primary-foreground: #fafafa;
+  --secondary: #f5f5f5;
+  --secondary-foreground: #171717;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+  --accent: #f5f5f5;
+  --accent-foreground: #171717;
+  --destructive: #e7000b;
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --ring: #a1a1a1;
+  --radius: 0.625rem;
+
+  /* Status tones. Kept under their legacy names so an existing
+     [ui].theme_css keeps working; mapped to --color-tone-* below. */
+  --red: #c3312f;
+  --amber: #9a6400;
+  --green: #1f7a44;
+  --blue: #1f5fbf;
+  --grey: #6b7280;
+  --red-bg: #fdecec;
+  --amber-bg: #fdf3e0;
+  --green-bg: #e9f6ee;
+  --blue-bg: #e9f0fd;
+  --grey-bg: #eef0f2;
+
+  /* Fonts. `--sans` / `--mono` are the legacy names; --bw-font-* is what
+     Tailwind's font-sans / font-mono resolve to. */
+  --sans: system-ui, -apple-system, "Segoe UI", Ubuntu, Cantarell, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  --bw-font-sans: var(--sans);
+  --bw-font-mono: var(--mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Rhea dark */
+    --background: #0a0a0a;
+    --foreground: #fafafa;
+    --card: #171717;
+    --card-foreground: #fafafa;
+    --popover: #171717;
+    --popover-foreground: #fafafa;
+    --primary: #e5e5e5;
+    --primary-foreground: #171717;
+    --secondary: #262626;
+    --secondary-foreground: #fafafa;
+    --muted: #262626;
+    --muted-foreground: #a1a1a1;
+    --accent: #262626;
+    --accent-foreground: #fafafa;
+    --destructive: #ff6467;
+    --border: rgb(255 255 255 / 10%);
+    --input: rgb(255 255 255 / 15%);
+    --ring: #737373;
+
+    --red: #ff7b72;
+    --amber: #e3b341;
+    --green: #56d364;
+    --blue: #79b8ff;
+    --grey: #9aa2ad;
+    --red-bg: #3a2022;
+    --amber-bg: #3a2f17;
+    --green-bg: #17301f;
+    --blue-bg: #17273a;
+    --grey-bg: #262a31;
+  }
+}
+
+/* ------------------------------------------------------------------------ */
+/* macOS: system font, system accent, Rhea's radius and density             */
+/* ------------------------------------------------------------------------ */
+
+html[data-platform="macos"] {
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  /* Fallback accent is systemBlue; the @supports block below swaps in the
+     accent the user picked in System Settings when WebKit exposes it. */
+  --primary: #007aff;
+  --primary-foreground: #ffffff;
+  --ring: #007aff;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-platform="macos"] {
+    --primary: #0a84ff;
+    --primary-foreground: #ffffff;
+    --ring: #0a84ff;
+  }
+}
+
+/* WebKit-only keyword that tracks the macOS accent colour live. */
+@supports (color: -apple-system-control-accent) {
+  html[data-platform="macos"] {
+    --primary: -apple-system-control-accent;
+    --ring: -apple-system-control-accent;
+  }
+}
+
+/* Vibrancy: the shell sets the native window effect (NSVisualEffectView); this
+   class makes the page let it through. Only honoured on macOS: WebKitGTK has no
+   window material behind a transparent page, just the desktop. */
+html.vibrancy[data-platform="macos"],
+html.vibrancy[data-platform="macos"] body {
+  background: transparent;
+}
+
+html.vibrancy[data-platform="macos"] {
+  --background: transparent;
+  --card: rgb(255 255 255 / 55%);
+  --popover: rgb(255 255 255 / 92%);
+  --muted: rgb(0 0 0 / 5%);
+  --secondary: rgb(0 0 0 / 5%);
+  --accent: rgb(0 0 0 / 6%);
+  --border: rgb(0 0 0 / 10%);
+}
+
+@media (prefers-color-scheme: dark) {
+  html.vibrancy[data-platform="macos"] {
+    --card: rgb(255 255 255 / 6%);
+    --popover: rgb(40 40 40 / 92%);
+    --muted: rgb(255 255 255 / 7%);
+    --secondary: rgb(255 255 255 / 7%);
+    --accent: rgb(255 255 255 / 9%);
+    --border: rgb(255 255 255 / 10%);
+  }
+}
+
+/* ------------------------------------------------------------------------ */
+/* Linux: Adwaita-like (libadwaita 1.x colours, Cantarell, Adwaita radii)   */
+/* ------------------------------------------------------------------------ */
+
+html[data-platform="linux"] {
+  --sans: "Adwaita Sans", Cantarell, "Noto Sans", Ubuntu, system-ui, sans-serif;
+  --mono: "Adwaita Mono", "Source Code Pro", "DejaVu Sans Mono", "Noto Sans Mono", monospace;
+
+  --background: #fafafb; /* window_bg_color */
+  --foreground: #2e2e32; /* window_fg_color, rgb(0 0 6 / 80%) on the bg */
+  --card: #ffffff; /* card_bg_color / view_bg_color */
+  --card-foreground: #2e2e32;
+  --popover: #ffffff; /* popover_bg_color */
+  --popover-foreground: #2e2e32;
+  --primary: #3584e4; /* accent_bg_color, Adwaita blue 3 */
+  --primary-foreground: #ffffff;
+  --secondary: #ebebed; /* headerbar / button bg */
+  --secondary-foreground: #2e2e32;
+  --muted: #ebebed;
+  --muted-foreground: #6e6e73;
+  --accent: #e3e3e6;
+  --accent-foreground: #2e2e32;
+  --destructive: #e01b24; /* destructive_bg_color */
+  --border: #dcdcdf;
+  --input: #dcdcdf;
+  --ring: #3584e4;
+  /* Rhea sizes its corners as multiples of --radius (buttons and inputs use
+     rounded-2xl = 1.8x, cards and dialogs 2.6x). 0.25rem puts buttons at
+     ~7px and cards at ~10px, next to Adwaita's 6px buttons and 12px cards. */
+  --radius: 0.25rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-platform="linux"] {
+    --background: #222226;
+    --foreground: #ffffff;
+    --card: #2e2e32; /* rgb(255 255 255 / 8%) over the window bg */
+    --card-foreground: #ffffff;
+    --popover: #36363a;
+    --popover-foreground: #ffffff;
+    --primary: #3584e4;
+    --primary-foreground: #ffffff;
+    --secondary: #36363a;
+    --secondary-foreground: #ffffff;
+    --muted: #36363a;
+    --muted-foreground: #b0b0b5;
+    --accent: #3d3d42;
+    --accent-foreground: #ffffff;
+    --destructive: #ff7b63; /* destructive_color, dark */
+    --border: #3d3d42;
+    --input: #3d3d42;
+    --ring: #78aeed; /* accent_color, dark */
+  }
+}
+
+/* ------------------------------------------------------------------------ */
+/* Tailwind theme: the shadcn token map (as the shadcn-svelte CLI writes it) */
+/* ------------------------------------------------------------------------ */
+
+@theme inline {
+  --font-sans: var(--bw-font-sans);
+  --font-mono: var(--bw-font-mono);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Status tones for the job view: text-tone-red, bg-tone-red-bg, ... */
+  --color-tone-red: var(--red);
+  --color-tone-amber: var(--amber);
+  --color-tone-green: var(--green);
+  --color-tone-blue: var(--blue);
+  --color-tone-grey: var(--grey);
+  --color-tone-red-bg: var(--red-bg);
+  --color-tone-amber-bg: var(--amber-bg);
+  --color-tone-green-bg: var(--green-bg);
+  --color-tone-blue-bg: var(--blue-bg);
+  --color-tone-grey-bg: var(--grey-bg);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+  /* The popover window is transparent so its rounded corners are real
+     corners; the popover root paints its own background. */
+  html[data-window="popover"],
+  html[data-window="popover"] body {
+    background: transparent;
+  }
+}
+
+/* The live marker for running jobs. A plain keyframe on opacity: no
+   @property, no color-mix, so it animates the same on WebKitGTK 2.36. */
+@keyframes bw-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@utility bw-live {
+  animation: bw-live-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bw-live {
+    animation: none;
+  }
+}
+
+/*
+ * WebKitGTK 2.36 (Ubuntu 22.04, the AppImage floor) — what this file and the
+ * components under src/lib/components/ui, src/components/jobs and
+ * src/components/wizard avoid or only use with a fallback:
+ *
+ * - oklch()/oklab() colour literals: every token above is hex/rgb().
+ * - color-mix(): not used in our CSS. Tailwind 4.3 emits every colour
+ *   utility that needs it, including Rhea's arbitrary
+ *   hover:bg-[color-mix(...)] on the secondary button, as a plain colour
+ *   first and the color-mix() inside @supports, so 2.36 gets the unmixed
+ *   colour (checked in the compiled output).
+ * - @property: Tailwind 4.3 initialises its --tw-* variables without it for
+ *   old engines; shadcn-svelte/tailwind.css registers a few for scroll-fade
+ *   and shimmer, which we do not use.
+ * - :has(): never in our own selectors. Rhea uses it for alert icon
+ *   placement, has-data-[icon=...] padding and field/label focus rings; an
+ *   engine without it drops those rules and keeps the defaults.
+ * - container queries (Rhea's card header sets container-type, nothing
+ *   queries it), native CSS nesting in authored CSS, dvh/svh units,
+ *   text-wrap: balance, field-sizing, relative colour syntax, scroll-driven
+ *   animations: none used by our components.
+ * The claims about 2.36 come from WebKit's shipping dates (cascade layers,
+ * :is/:where and rgb() space syntax predate it; color-mix and @property
+ * shipped after), not from running a 2.36 build.
+ */

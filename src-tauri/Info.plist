@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  A menu-bar app, not a windowed one.
+
+	  `ActivationPolicy::Accessory` in setup() does the same job, but it runs
+	  AFTER AppKit has decided whether to put an icon in the Dock, so without
+	  this key every launch flashes one. Declaring it here means the app is
+	  never a foreground application in the first place.
+	-->
+	<key>LSUIElement</key>
+	<true/>
+</dict>
+</plist>

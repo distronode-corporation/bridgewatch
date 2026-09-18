@@ -1,0 +1,18 @@
+# No blank issues — everything goes through the structured Bug report form (or the
+# links below). Keeps the tracker to real, reproducible bugs instead of setup
+# questions, which for a tray app are mostly "my token is not being found".
+#
+# ⚠️ The Discussions link needs Discussions ENABLED on the repository (Settings ->
+# Features). With blank issues off and Discussions off there is nowhere for a
+# question to go, so turn it on before publishing or delete that entry.
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 README — configuration, the verdict rules, and the icon table
+    url: https://github.com/distronode-corporation/bridgewatch#readme
+    about: Token sources, [watches] and [icon] keys, and what each tray state means. Most questions are answered here — please check first.
+  - name: 💬 Questions, setup help & ideas
+    url: https://github.com/distronode-corporation/bridgewatch/discussions
+    about: For "how do I…", credential trouble, or feature ideas. The issue tracker is for confirmed bugs only.
+  - name: 🔒 Security vulnerability
+    url: https://github.com/distronode-corporation/bridgewatch/security/advisories/new
+    about: Do not open a public issue. Report it privately here (see SECURITY.md); bridgewatch holds a GitLab token, so a report that leaks before a fix is worse than the bug.

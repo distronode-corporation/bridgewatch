@@ -1,0 +1,54 @@
+{
+  "source": "SYNTHESISED from the real recording ca41ab28-deployed-with-failure (pipeline 2857464986): trigger:website's downstream_pipeline set to null, its status left `success`, and its child job list deleted. Nothing else changed.",
+  "note": "A `strategy: depend` trigger whose child .gitlab-ci.yml fails to parse. The trigger job frequently still reads green, nothing downstream ran, and no deploy marker exists to find. That is `dead`, not `absent`, and the difference is the whole point.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "failed",
+      "watches": {
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "id": 2857464986,
+              "state": "failed",
+              "deploy": "dead",
+              "deploy_marker": null,
+              "failures": [
+                "verify:android",
+                "trigger:website"
+              ],
+              "warnings": [],
+              "gates": [
+                "ios:smoke",
+                "test:ios:ui",
+                "test:ios:app",
+                "build:ios:sim",
+                "publish:android_bundle"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [
+                "trigger:android",
+                "trigger:website"
+              ],
+              "bridges": {
+                "trigger:ios": "passed",
+                "trigger:android": "failed",
+                "trigger:voice_agent": "canceled",
+                "trigger:website": "dead"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    }
+  ]
+}

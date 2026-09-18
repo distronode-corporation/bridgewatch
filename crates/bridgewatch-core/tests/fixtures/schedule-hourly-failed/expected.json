@@ -1,0 +1,47 @@
+{
+  "source": "REAL: gitlab.com project 82468124 pipeline 2858879779, sha 9da437fd, ref main, source schedule. Recorded 2026-09-17.",
+  "note": "The hourly reconcile, red by design. It matches the `hourly` secondary watch only, whose dive.only_when = \"failed\" walks into the one failed bridge and leaves the other four unopened. With no primary rows the tray reads `unknown`, which is the honest answer to \"how is main?\" when no push has been looked at.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "unknown",
+      "watches": {
+        "main-push": {
+          "icon_state": null,
+          "rows": []
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": [
+            {
+              "id": 2858879779,
+              "state": "failed",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [
+                "drift:k8s"
+              ],
+              "warnings": [],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [
+                "trigger:k8s_drift"
+              ],
+              "bridges": {
+                "trigger:reconciler": "passed",
+                "trigger:k8s_drift": "failed",
+                "trigger:cloudflare_workers": "passed",
+                "trigger:sentry": "passed",
+                "trigger:newrelic": "passed"
+              }
+            }
+          ]
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    }
+  ]
+}

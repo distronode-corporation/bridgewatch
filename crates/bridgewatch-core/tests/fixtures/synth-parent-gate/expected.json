@@ -1,0 +1,73 @@
+{
+  "source": "SYNTHESISED from the real recording 04eff5c5-docs-only (pipeline 2859138213): one manual job, deploy_voice_agent, added to the parent's job list, modelled on the real manual deploy_voice_agent gate recorded in 9da437fd-parked-gate-stacked's child. The pipeline has no bridges, which is the shape every single-pipeline project has. No other field altered.",
+  "note": "The parent-level gate. `awaiting_gate` used to read the bridges only, so a project with no bridges — which is most projects — showed the outline check where README rule 8 promises the hourglass. Nothing is running, nothing is broken, and a human has not pressed a button: that is parked_gate.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "parked_gate",
+      "watches": {
+        "main-push": {
+          "icon_state": "parked_gate",
+          "rows": [
+            {
+              "id": 2859138213,
+              "state": "parked_gate",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [],
+              "warnings": [
+                "dependency-scanning:python-resolution"
+              ],
+              "gates": [
+                "deploy_voice_agent"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {}
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "the gate ignored is green again",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.jobs.deploy_voice_agent",
+          "value": { "string": "ignore" }
+        }
+      ],
+      "icon_state": "succeeded_no_deploy",
+      "watches": {
+        "main-push": {
+          "icon_state": "succeeded_no_deploy",
+          "rows": [
+            {
+              "id": 2859138213,
+              "state": "succeeded_no_deploy",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [],
+              "warnings": [
+                "dependency-scanning:python-resolution"
+              ],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {}
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

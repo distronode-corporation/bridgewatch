@@ -1,0 +1,409 @@
+name: Release
+
+# Fires on a `vX.Y.Z` tag and produces the four assets a 0.1 user can actually
+# install: a macOS .dmg per architecture and a Linux .deb + .AppImage. Windows is not
+# targeted in 0.1.
+#
+# ⛔ THE RELEASE IS CREATED AS A DRAFT AND PUBLISHED ONLY ONCE ALL FOUR ASSETS ARE
+# PRESENT AND ATTESTED. Until 2026-09-17 each of the three build legs created or
+# looked up a PUBLIC release and uploaded its own bundle to it, with
+# `fail-fast: false`, so the first leg to finish published a release with one asset
+# in it and a failing leg left that release permanently incomplete — visible to
+# users, and not something a re-run fixes. The three jobs below are the shape that
+# removes that: `guard` refuses a tag that should not be built, `build` holds no
+# write permission at all, and `publish` is the only thing that can make a release
+# public, which it does after checking the asset set twice.
+#
+# Linux builds on ubuntu-22.04 on purpose. glibc is forward-compatible and not
+# backward-compatible, so a binary linked against 24.04's glibc refuses to start on
+# 22.04, while one linked on 22.04 runs on both. The runner image is therefore the
+# distribution floor, and moving it is a user-visible change. ci.yml's `installers`
+# and its `rust` job run on that same image so the floor is exercised before tag time.
+#
+# macOS builds are UNSIGNED and UN-NOTARISED in 0.1. Gatekeeper refuses the first
+# launch. ⚠️ The Control-click -> "Open" bypass this comment described until
+# 2026-09-17 was REMOVED in macOS 15: the path is now System Settings -> Privacy &
+# Security -> "Open Anyway" after one refused launch, or `xattr -d
+# com.apple.quarantine`. README.md carries the user-facing wording.
+#
+# ⚠️ Ad-hoc signing (`APPLE_SIGNING_IDENTITY: "-"`, which the Tauri CLI reads and
+# turns into `codesign -s -`) would seal the .app bundle and is the only signing
+# improvement available without an Apple Developer account. It is deliberately NOT
+# enabled: it changes the Gatekeeper dialog the README documents and it has never
+# been run here. Enable it in a change that also rehearses a real tag, not before.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+# Never cancel a release in flight: a cancelled job can leave a draft release with
+# only some of its assets uploaded, which the publish job would then have to clean up.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Everything that can refuse the release before a single minute of build time is
+  # spent, plus the release notes, extracted once so the body cannot differ per leg.
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      body: ${{ steps.notes.outputs.body }}
+      have_notes: ${{ steps.notes.outputs.have_notes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Needed by the ancestry check below: a shallow clone has no merge base.
+          fetch-depth: 0
+          # Credentials kept here only: the `git fetch` below needs them in a private
+          # (staging) repository. This job runs no dependency code.
+
+      # ⛔ A TAG IS NOT A BRANCH, AND CI DOES NOT RUN ON ONE. ci.yml triggers on
+      # pushes to `main` and on pull requests, so a tag placed on a commit that never
+      # reached `main` — a local branch, an abandoned PR head, a detached HEAD — is
+      # built, attested and released without a single test having run against it.
+      # The attestation would be perfectly valid and would attest untested code.
+      - name: The tagged commit is on main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not an ancestor of origin/main."
+            echo "CI never ran on this commit. Merge it to main first, then move the tag."
+            exit 1
+          fi
+          echo "$GITHUB_SHA is on main"
+
+      # The three version literals agree with each other AND with the tag. Without
+      # this a `v0.1.1` tag on an unbumped tree ships four files named `_0.1.0_`,
+      # because Tauri names every bundle after tauri.conf.json and nothing compares
+      # the two.
+      - name: Versions agree with the tag
+        run: python3 scripts/check-version.py "$GITHUB_REF_NAME"
+
+      - name: Expose the bare version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Pulls the matching version's section out of CHANGELOG.md so the GitHub Release
+      # and the CHANGELOG cannot drift. Index-based rather than a `\[` regex so it is
+      # portable across awk flavours. Falls back to GitHub's generated notes when the
+      # tag has no CHANGELOG entry.
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v tag="## [${version}]" '
+            index($0, tag)==1 {cap=1; next}
+            index($0, "## [")==1 && cap==1 {cap=0}
+            substr($0,1,1)=="[" && cap==1 {exit}
+            cap {print}
+          ' CHANGELOG.md > release-notes.md
+          if [ -s release-notes.md ]; then
+            echo "have_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Random delimiter: the body is attacker-influenced only by whoever can push
+          # a tag, but a fixed one would still let a CHANGELOG line ending the heredoc
+          # truncate or inject the output.
+          delim="body_$(openssl rand -hex 16)"
+          {
+            echo "body<<${delim}"
+            cat release-notes.md
+            echo "${delim}"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: guard
+    # ⛔ READ-ONLY, DELIBERATELY. This job runs `cargo build`, which executes every
+    # build script in a ~600-crate dependency tree, plus `npm ci`'s install scripts.
+    # It used to hold `contents: write` and an `id-token` for the whole of that,
+    # because it was also the thing that created the release. It no longer uploads
+    # anything anywhere except this workflow run's own artifact store.
+    permissions:
+      contents: read
+    strategy:
+      # Surface all three failures in one run rather than one per re-run. Nothing
+      # public exists until `publish`, so a partially failed matrix costs only time.
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon runner (macos-latest is macOS 26 arm64), native build.
+          - id: macos-aarch64
+            platform: macos-latest
+            args: --target aarch64-apple-darwin
+            rust_targets: aarch64-apple-darwin
+            bundle_dir: target/aarch64-apple-darwin/release/bundle
+            expected: 1
+          # Intel build, cross-compiled from the same Apple Silicon runner. This is
+          # what tauri-action's own README does, and it avoids depending on the
+          # macos-13 Intel image, which is on its way out.
+          - id: macos-x86_64
+            platform: macos-latest
+            args: --target x86_64-apple-darwin
+            rust_targets: x86_64-apple-darwin
+            bundle_dir: target/x86_64-apple-darwin/release/bundle
+            expected: 1
+          # No --target, so the bundles land in target/release/bundle rather than
+          # target/<triple>/release/bundle.
+          # ⚠️ `target/` is the WORKSPACE target dir at the repo root: src-tauri is a
+          # workspace member, so there is no src-tauri/target/ (measured on the first
+          # local `tauri build`; the paths said src-tauri/target/ until then).
+          - id: linux-x86_64
+            platform: ubuntu-22.04
+            args: ''
+            rust_targets: ''
+            bundle_dir: target/release/bundle
+            expected: 2
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Kept in step with ci.yml's LINUX_TAURI_DEPS. libssl-dev is absent from both:
+      # reqwest is built on rustls and openssl-sys appears nowhere in Cargo.lock.
+      - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      # Plain rustup, which every GitHub-hosted image carries, instead of a third-party
+      # toolchain action: one less thing holding code execution in the job that builds
+      # what users install. Components match rust-toolchain.toml.
+      - name: Install the stable toolchain
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_targets }}
+        run: |
+          rustup toolchain install stable --profile minimal -c rustfmt -c clippy
+          if [ -n "$RUST_TARGET" ]; then rustup target add "$RUST_TARGET" --toolchain stable; fi
+          rustc --version
+
+      # ⛔ NO CACHES IN THIS WORKFLOW, DELIBERATELY (neither rust-cache nor setup-node's
+      # npm cache). A tag run can restore caches written by any main-branch run, and a
+      # restored target/ or node_modules is build input that nobody reviewed in this
+      # run. The release is rare and the minutes are cheap next to shipping an artifact
+      # built from a poisoned cache under a valid provenance attestation.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - run: npm ci
+
+      # `tauri build` reaches cargo through the CLI, which gives no clean way to pass
+      # `--locked`. This asserts the same property up front: it fails if the manifests
+      # and Cargo.lock disagree, so a release can never be built from a dependency set
+      # that is not the committed one.
+      - name: Cargo.lock is up to date
+        run: cargo fetch --locked
+
+      - name: Build the bundles
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          # ⛔ tauri-action defaults this to "true", and "true" means the .dmg bundler
+          # does NOT pass create-dmg's `--skip-jenkins`, so it runs the Finder window
+          # AppleScript on a headless runner. That osascript is the classic
+          # hours-long hang in this workflow. "false" restores the `CI: true` check
+          # and skips it; the only loss is the styled disk-image window.
+          TAURI_BUNDLER_DMG_IGNORE_CI: 'false'
+        with:
+          # ⛔ NO `tagName` AND NO `releaseId`, ON PURPOSE. With neither, the action
+          # logs "No releaseId or tagName provided, skipping all uploads..." and does
+          # nothing but build (verified in its src/index.ts at this pinned SHA). That
+          # is what lets this job be read-only, and it is also what stops it uploading
+          # the extra macOS asset it would otherwise produce: given a `.app` with no
+          # sibling `.app.tar.gz`, the action tars the bundle and uploads that too —
+          # under the SAME name from both macOS legs, and outside the attestation.
+          args: ${{ matrix.args }}
+          retryAttempts: 2
+
+      # ⛔ tauri-action EXITS 0 WHEN IT FINDS NO ARTIFACTS AND HAS NOT BEEN ASKED TO
+      # UPLOAD ANY ("The action was not configured to upload artifacts, therefore this
+      # is not handled as an error"). So the step above cannot be trusted to have
+      # produced anything. This is where that is caught, per leg, by count.
+      - name: Stage this leg's bundles
+        env:
+          BUNDLE_DIR: ${{ matrix.bundle_dir }}
+          EXPECTED: ${{ matrix.expected }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          # -type f skips bundle/macos/*.app, which is a directory, and the name
+          # filter is the whole of what this project ships.
+          find "$BUNDLE_DIR" -maxdepth 2 -type f \
+            \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
+            -exec cp {} staging/ \;
+          found="$(find staging -type f | wc -l | tr -d ' ')"
+          if [ "$found" -ne "$EXPECTED" ]; then
+            echo "::error::expected $EXPECTED bundle(s) under $BUNDLE_DIR, staged $found"
+            find "$BUNDLE_DIR" -maxdepth 3 || true
+            exit 1
+          fi
+          ls -l staging
+
+      # The core shells out to `secret-tool` on Linux (tauri.conf.json declares the
+      # dependency). A .deb without it installs cleanly and then cannot read a keyring
+      # token, so it is asserted on the built package, not on the config.
+      - name: The .deb depends on libsecret-tools
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          depends="$(dpkg-deb -f staging/*.deb Depends)"
+          echo "Depends: $depends"
+          grep -qw libsecret-tools <<<"$depends" || { echo "::error::the .deb does not depend on libsecret-tools"; exit 1; }
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bundles-${{ matrix.id }}
+          path: staging/
+          if-no-files-found: error
+          # The bundles are already compressed; re-deflating them costs minutes and
+          # saves nothing.
+          compression-level: 0
+
+  # The only job that can write to the repository, and the only one that can make a
+  # release public. It sees bundles, never source, and never runs a build script.
+  publish:
+    needs: [guard, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      # Creating the release and uploading its assets.
+      contents: write
+      # Both only for the provenance attestation: id-token to obtain the OIDC token
+      # Sigstore signs against, attestations to store the result.
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # ⛔ This job never checks out the repository, and `gh release` resolves its
+      # repository from the git remote of the working directory unless told. Without
+      # GH_REPO every `gh release` call below fails "not a git repository".
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      # v8 of download-artifact and v7 of upload-artifact both depend on
+      # @actions/artifact ^6, i.e. the same artifact protocol, and both run on node24.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: bundles-*
+          merge-multiple: true
+          path: assets
+
+      # ⛔ THE ASSET SET IS THE THING BEING DESIGNED OUT, SO IT IS ASSERTED BY NAME.
+      # A count is not enough: a leg that built the wrong architecture, or a tree
+      # whose tauri.conf.json version drifted from the tag, both produce the right
+      # number of files with the wrong names. These four names are the ones README.md
+      # tells users to download.
+      - name: The four release assets are exactly what was expected
+        run: |
+          set -euo pipefail
+          expected="$(printf '%s\n' \
+            "bridgewatch_${VERSION}_aarch64.dmg" \
+            "bridgewatch_${VERSION}_amd64.AppImage" \
+            "bridgewatch_${VERSION}_amd64.deb" \
+            "bridgewatch_${VERSION}_x64.dmg" | sort)"
+          actual="$(cd assets && find . -type f -printf '%f\n' | sort)"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::built assets do not match the four names a release must carry"
+            diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
+            exit 1
+          fi
+          printf '%s\n' "$actual"
+
+      # Signed provenance over the bytes a user downloads, verifiable with:
+      #   gh attestation verify bridgewatch_0.1.0_amd64.deb --repo distronode-corporation/bridgewatch
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: assets/*
+
+      # README.md promises every asset carries an attestation. This is the only place
+      # that claim is ever tested, and it runs before anything becomes public: a
+      # failure here leaves a draft (or nothing) rather than a release whose
+      # provenance does not verify.
+      - name: The attestations verify
+        run: |
+          set -euo pipefail
+          for f in assets/*; do
+            for attempt in 1 2 3 4 5; do
+              if gh attestation verify "$f" --repo "$GITHUB_REPOSITORY"; then
+                continue 2
+              fi
+              echo "attestation for $(basename "$f") not queryable yet (attempt $attempt)"
+              sleep 15
+            done
+            echo "::error::no verifiable attestation for $(basename "$f")"
+            exit 1
+          done
+
+      # Draft first. A draft is invisible to users and to the releases API's `latest`,
+      # so everything above this line can fail without anyone seeing a half-built
+      # release.
+      - name: Create the draft release
+        env:
+          NOTES: ${{ needs.guard.outputs.body }}
+          HAVE_NOTES: ${{ needs.guard.outputs.have_notes }}
+        run: |
+          set -euo pipefail
+          # A leftover draft from a failed run is deleted and rebuilt; a release that
+          # is already PUBLIC is never touched. `gh release delete` leaves the tag
+          # alone (that needs --cleanup-tag).
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
+              echo "deleting a leftover draft for $TAG"
+              gh release delete "$TAG" --yes
+            else
+              echo "::error::$TAG is already published. Refusing to modify a public release."
+              exit 1
+            fi
+          fi
+          # $NOTES arrives through the environment, never interpolated into this
+          # script: it is CHANGELOG text and would otherwise be shell source.
+          if [ "$HAVE_NOTES" = "true" ]; then
+            printf '%s\n' "$NOTES" > release-notes.md
+            gh release create "$TAG" --draft --title "bridgewatch $TAG" \
+              --notes-file release-notes.md assets/*
+          else
+            gh release create "$TAG" --draft --title "bridgewatch $TAG" \
+              --generate-notes assets/*
+          fi
+
+      # The same assertion again, this time against what GitHub actually stored. The
+      # check above proves the files existed on this runner; only this one proves the
+      # upload of each of them succeeded.
+      - name: GitHub holds all four assets
+        run: |
+          set -euo pipefail
+          expected="$(printf '%s\n' \
+            "bridgewatch_${VERSION}_aarch64.dmg" \
+            "bridgewatch_${VERSION}_amd64.AppImage" \
+            "bridgewatch_${VERSION}_amd64.deb" \
+            "bridgewatch_${VERSION}_x64.dmg" | sort)"
+          actual="$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::the draft release does not hold the expected assets; leaving it as a draft"
+            diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
+            exit 1
+          fi
+
+      - name: Publish
+        run: gh release edit "$TAG" --draft=false --latest

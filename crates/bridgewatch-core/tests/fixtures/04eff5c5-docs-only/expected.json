@@ -1,0 +1,39 @@
+{
+  "source": "REAL: gitlab.com project 82468124 pipeline 2859138213, sha 04eff5c5, ref main, source push. Recorded 2026-09-17.",
+  "note": "A .gitignore + CLAUDE.md commit. Zero bridges, so nothing to walk into and nothing to deploy.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "succeeded_no_deploy",
+      "watches": {
+        "main-push": {
+          "icon_state": "succeeded_no_deploy",
+          "rows": [
+            {
+              "id": 2859138213,
+              "state": "succeeded_no_deploy",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [],
+              "warnings": [
+                "dependency-scanning:python-resolution"
+              ],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {}
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "source": "ASSEMBLED from two real recordings: schedule-hourly-failed (pipeline 2858879779) and 4cfaced9-deployed (pipeline 2856963900). Rows and files combined into one list; no field altered.",
+  "note": "The case bridgewatch exists for on the tray side: a green primary push and a red secondary schedule in the same list. The icon must read `deployed`.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": [
+            {
+              "id": 2858879779,
+              "state": "failed",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [
+                "drift:k8s"
+              ],
+              "warnings": [],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [
+                "trigger:k8s_drift"
+              ],
+              "bridges": {
+                "trigger:reconciler": "passed",
+                "trigger:k8s_drift": "failed",
+                "trigger:cloudflare_workers": "passed",
+                "trigger:sentry": "passed",
+                "trigger:newrelic": "passed"
+              }
+            }
+          ]
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    }
+  ]
+}

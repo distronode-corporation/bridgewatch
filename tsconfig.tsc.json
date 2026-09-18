@@ -1,0 +1,13 @@
+{
+  // What `npm run typecheck` runs plain `tsc` against: tsconfig.json minus the
+  // vendored shadcn-svelte barrels.
+  //
+  // ⛔ Plain tsc cannot see a .svelte file's `<script module>` exports (it only
+  // knows the ambient `declare module "*.svelte"` default export), so
+  // `export { buttonVariants } from "./button.svelte"` in those index.ts files
+  // is TS2614 to tsc and perfectly valid to svelte-check. svelte-check runs on
+  // tsconfig.json, which still includes them, so nothing goes unchecked.
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "src/**/*.svelte"],
+  "exclude": ["src/lib/components/ui/**/index.ts"]
+}

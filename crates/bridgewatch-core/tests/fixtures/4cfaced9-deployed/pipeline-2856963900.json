@@ -1,0 +1,15 @@
+{
+  "created_at": "2026-09-17T06:44:27.662Z",
+  "finished_at": "2026-09-17T06:59:00.618Z",
+  "id": 2856963900,
+  "iid": 13054,
+  "name": null,
+  "project_id": 82468124,
+  "ref": "main",
+  "sha": "4cfaced9d33af808baf42af34c8eff48e2c19bc4",
+  "source": "push",
+  "started_at": "2026-09-17T06:44:28.646Z",
+  "status": "success",
+  "updated_at": "2026-09-17T06:59:00.643Z",
+  "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2856963900"
+}

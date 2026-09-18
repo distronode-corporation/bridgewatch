@@ -1,0 +1,49 @@
+[
+  {
+    "allow_failure": false,
+    "created_at": "2026-09-17T16:25:32.460Z",
+    "finished_at": "2026-09-17T16:26:42.014Z",
+    "id": 16569708602,
+    "name": "drift:env_regions",
+    "pipeline": {
+      "created_at": "2026-09-17T16:25:30.963Z",
+      "id": 2858880016,
+      "iid": 13128,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "9da437fd575e00e9c74c4b8e9706cc9eab0020ad",
+      "source": "parent_pipeline",
+      "status": "failed",
+      "updated_at": "2026-09-17T16:26:56.089Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2858880016"
+    },
+    "stage": "test",
+    "started_at": "2026-09-17T16:26:32.902Z",
+    "status": "success",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16569708602"
+  },
+  {
+    "allow_failure": false,
+    "created_at": "2026-09-17T16:25:32.460Z",
+    "failure_reason": "script_failure",
+    "finished_at": "2026-09-17T16:26:54.488Z",
+    "id": 16569708601,
+    "name": "drift:k8s",
+    "pipeline": {
+      "created_at": "2026-09-17T16:25:30.963Z",
+      "id": 2858880016,
+      "iid": 13128,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "9da437fd575e00e9c74c4b8e9706cc9eab0020ad",
+      "source": "parent_pipeline",
+      "status": "failed",
+      "updated_at": "2026-09-17T16:26:56.089Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2858880016"
+    },
+    "stage": "test",
+    "started_at": "2026-09-17T16:26:27.761Z",
+    "status": "failed",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16569708601"
+  }
+]

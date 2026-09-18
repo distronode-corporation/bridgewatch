@@ -1,0 +1,42 @@
+bridgewatch
+Copyright 2026 Distronode Corporation
+
+This product includes software developed by Distronode Corporation, licensed
+under the Apache License, Version 2.0. The full licence text is in LICENSE.
+
+bridgewatch is original work, not a fork. One set of third-party source files is
+vendored into this repository, as that project intends: the user interface
+components under src/lib/components/ui/ (except stepper/, which is ours) were
+generated from the shadcn-svelte registry (https://shadcn-svelte.com, "rhea"
+style) and are used under the MIT License below.
+
+  MIT License
+
+  Copyright (c) 2023 Hunter Johnston <https://github.com/huntabyte>
+  Copyright (c) 2023 CokaKoala <https://github.com/adriangonz97>
+  Copyright (c) 2023 shadcn
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+The distributed binaries statically link a large number of third-party Rust
+crates and bundle a compiled JavaScript frontend. Those dependencies keep their
+own licences, which are declared in Cargo.toml / Cargo.lock and package.json /
+package-lock.json and are not restated here. "bridgewatch" is a name used by
+Distronode Corporation; nothing in this repository claims endorsement by, or
+affiliation with, GitLab Inc., whose API this software is a client of.

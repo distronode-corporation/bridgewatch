@@ -1,0 +1,87 @@
+{
+  "source": "SYNTHESISED from the real recording 4cfaced9-deployed (pipeline 2856963900): in the website child, deploy:origins changed from success to failed with allow_failure set to true, and deploy:marketing given the status `approval_pending`, which no build of bridgewatch recognises. Every other field, including both pipeline rows and the trigger job's `success`, is the recording's.",
+  "note": "Two ways a deploy stops without anything going red. `allow_failure: true` on a deploy job means the PIPELINE stays green; it does not mean the deploy happened. And a status this build has never heard of is not evidence of success. Both used to end at rule 7, the outline check.",
+  "cases": [
+    {
+      "name": "a tolerated marker failure is still a failed deploy",
+      "icon_state": "failed",
+      "watches": {
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "failed",
+              "deploy": "failed",
+              "deploy_marker": null,
+              "failures": [
+                "deploy:origins"
+              ],
+              "warnings": [
+                "deploy:origins"
+              ],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed_with_warnings"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "a marker in an unreadable status says so",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.deploy_markers",
+          "value": { "array": [ { "string": "deploy:marketing" } ] }
+        }
+      ],
+      "icon_state": "unknown",
+      "watches": {
+        "main-push": {
+          "icon_state": "unknown",
+          "rows": [
+            {
+              "id": 2856963900,
+              "state": "unknown",
+              "deploy": "unknown",
+              "deploy_marker": null,
+              "failures": [],
+              "warnings": [
+                "deploy:origins"
+              ],
+              "gates": [
+                "verify:web_coverage_full 4/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 1/4"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {
+                "trigger:website": "passed_with_warnings"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

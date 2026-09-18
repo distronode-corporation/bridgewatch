@@ -1,0 +1,339 @@
+{
+  "source": "REAL: gitlab.com project 82468124 pipeline 2857464986, sha ca41ab28, ref main, source push. Recorded 2026-09-17.",
+  "note": "The website bridge deployed to all four origins while the android bridge failed and the voice-agent bridge was cancelled. The parent pipeline reads `failed`, which is the answer every other monitor gives and is not the useful one.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "deployed_with_failure",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed_with_failure",
+          "rows": [
+            {
+              "id": 2857464986,
+              "state": "deployed_with_failure",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "verify:android"
+              ],
+              "sibling_failures": [
+                "trigger:android"
+              ],
+              "post_deploy_failures": [],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 1/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 4/4",
+                "build:ios:sim",
+                "ios:smoke",
+                "test:ios:app",
+                "test:ios:ui",
+                "publish:android_bundle"
+              ],
+              "bridges": {
+                "trigger:ios": "passed",
+                "trigger:android": "failed",
+                "trigger:voice_agent": "canceled",
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "coverage shards without the gate override",
+      "overrides": [
+        {
+          "op": "unset",
+          "path": "watches.0.jobs.re:^verify:web_coverage_full"
+        }
+      ],
+      "icon_state": "deployed_with_failure",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed_with_failure",
+          "rows": [
+            {
+              "id": 2857464986,
+              "state": "deployed_with_failure",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "verify:android"
+              ],
+              "sibling_failures": [
+                "trigger:android"
+              ],
+              "gates": [
+                "verify:web_coverage_full 1/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 4/4",
+                "build:ios:sim",
+                "ios:smoke",
+                "test:ios:app",
+                "test:ios:ui",
+                "publish:android_bundle"
+              ],
+              "bridges": {
+                "trigger:ios": "passed",
+                "trigger:android": "failed",
+                "trigger:voice_agent": "canceled",
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "coverage shards ignored outright",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.jobs.re:^verify:web_coverage_full",
+          "value": {
+            "string": "ignore"
+          }
+        }
+      ],
+      "icon_state": "deployed_with_failure",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed_with_failure",
+          "rows": [
+            {
+              "id": 2857464986,
+              "state": "deployed_with_failure",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "verify:android"
+              ],
+              "sibling_failures": [
+                "trigger:android"
+              ],
+              "gates": [
+                "build:ios:sim",
+                "ios:smoke",
+                "test:ios:app",
+                "test:ios:ui",
+                "publish:android_bundle"
+              ],
+              "bridges": {
+                "trigger:ios": "passed",
+                "trigger:android": "failed",
+                "trigger:voice_agent": "canceled",
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "a failed sibling bridge treated as fatal",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.sibling_failure",
+          "value": {
+            "string": "fail"
+          }
+        }
+      ],
+      "icon_state": "failed",
+      "watches": {
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "id": 2857464986,
+              "state": "failed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "verify:android"
+              ],
+              "sibling_failures": [
+                "trigger:android"
+              ],
+              "gates": [
+                "verify:web_coverage_full 1/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 4/4",
+                "build:ios:sim",
+                "ios:smoke",
+                "test:ios:app",
+                "test:ios:ui",
+                "publish:android_bundle"
+              ],
+              "bridges": {
+                "trigger:ios": "passed",
+                "trigger:android": "failed",
+                "trigger:voice_agent": "canceled",
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "a failed sibling bridge ignored",
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.sibling_failure",
+          "value": {
+            "string": "ignore"
+          }
+        }
+      ],
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2857464986,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [
+                "verify:android"
+              ],
+              "sibling_failures": [
+                "trigger:android"
+              ],
+              "gates": [
+                "verify:web_coverage_full 1/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 4/4",
+                "build:ios:sim",
+                "ios:smoke",
+                "test:ios:app",
+                "test:ios:ui",
+                "publish:android_bundle"
+              ],
+              "bridges": {
+                "trigger:ios": "passed",
+                "trigger:android": "failed",
+                "trigger:voice_agent": "canceled",
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "the android bridge ignored",
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2857464986,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [],
+              "sibling_failures": [],
+              "post_deploy_failures": [],
+              "warnings": [],
+              "gates": [
+                "verify:web_coverage_full 1/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 4/4",
+                "build:ios:sim",
+                "ios:smoke",
+                "test:ios:app",
+                "test:ios:ui"
+              ],
+              "bridges": {
+                "trigger:ios": "passed",
+                "trigger:voice_agent": "canceled",
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      },
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.jobs.trigger:android",
+          "value": {
+            "string": "ignore"
+          }
+        }
+      ]
+    },
+    {
+      "name": "the android bridge demoted to a warning",
+      "icon_state": "deployed",
+      "watches": {
+        "main-push": {
+          "icon_state": "deployed",
+          "rows": [
+            {
+              "id": 2857464986,
+              "state": "deployed",
+              "deploy": "live",
+              "deploy_marker": "deploy:origins",
+              "failures": [],
+              "sibling_failures": [],
+              "post_deploy_failures": [],
+              "warnings": [
+                "verify:android"
+              ],
+              "gates": [
+                "verify:web_coverage_full 1/4",
+                "verify:web_coverage_full 2/4",
+                "verify:web_coverage_full 3/4",
+                "verify:web_coverage_full 4/4",
+                "build:ios:sim",
+                "ios:smoke",
+                "test:ios:app",
+                "test:ios:ui",
+                "publish:android_bundle"
+              ],
+              "bridges": {
+                "trigger:ios": "passed",
+                "trigger:android": "passed_with_warnings",
+                "trigger:voice_agent": "canceled",
+                "trigger:website": "passed"
+              }
+            }
+          ]
+        }
+      },
+      "overrides": [
+        {
+          "op": "set",
+          "path": "watches.0.jobs.trigger:android",
+          "value": {
+            "string": "warning"
+          }
+        }
+      ]
+    }
+  ]
+}

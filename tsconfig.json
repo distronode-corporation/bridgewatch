@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // `$lib` mirrors the alias in vite.config.ts / vitest.config.ts (shadcn-svelte
+    // components import through it). Paths resolve relative to this file.
+    "paths": { "$lib": ["./src/lib"], "$lib/*": ["./src/lib/*"] }
+  },
+  // ⛔ vite.config.ts and vitest.config.ts are NOT listed here. They are inputs
+  // of the referenced tsconfig.node.json, and a file that belongs to a
+  // referenced composite project is redirected to that project's .d.ts output:
+  // listing it in both makes `npx tsc --noEmit` fail with TS6305 ("Output file
+  // ... has not been built from source file ...") on a clean checkout. Those two
+  // files are type-checked by `npm run typecheck`, which builds the referenced
+  // project. svelte-check tolerated the error, which is why it went unnoticed.
+  "include": ["src/**/*.ts", "src/**/*.svelte"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

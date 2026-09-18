@@ -1,0 +1,29 @@
+[package]
+name = "bridgewatch-cli"
+description = "Command-line bridgewatch: bridge-aware GitLab CI verdicts, config tooling and fixture recording. Install with cargo install."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+default-run = "bridgewatch"
+# Not published to crates.io: the binary is distributed through the app
+# bundles, and `bridgewatch` is not a name this project has reserved there.
+# Only bridgewatch-core is publishable.
+publish = false
+
+[[bin]]
+name = "bridgewatch"
+path = "src/main.rs"
+
+[dependencies]
+bridgewatch-core = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal"] }
+
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+schemars = "1.2.2"
+toml = "1.1.6"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
