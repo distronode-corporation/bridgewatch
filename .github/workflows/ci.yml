@@ -303,9 +303,11 @@ jobs:
 
   # Static analysis of these workflows themselves: template injection, over-broad
   # token permissions, credential persistence, cache poisoning on the release path.
-  # Complements CodeQL's Actions queries. Findings go to code scanning (category
-  # `zizmor`) rather than failing the job, because SARIF mode suppresses zizmor's
-  # exit codes; the `main` ruleset's code-scanning rule is what blocks a PR on them.
+  # Complements CodeQL's Actions queries. Two modes, because SARIF mode suppresses
+  # zizmor's exit codes and a fork's pull request cannot upload SARIF at all:
+  #   push / schedule / dispatch  SARIF to code scanning (category `zizmor`), no gate
+  #   pull_request                annotations, and the job FAILS on a finding, which
+  #                               is what the `main` ruleset's required check enforces
   # Suppressions are inline `# zizmor: ignore[...]` comments with a reason.
   zizmor:
     runs-on: ubuntu-24.04
@@ -322,6 +324,8 @@ jobs:
       - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
         with:
           version: 1.30.1
+          advanced-security: ${{ github.event_name != 'pull_request' }}
+          annotations: ${{ github.event_name == 'pull_request' }}
 
   # Manual only. The same bundles release.yml builds, from any ref, UNSIGNED, as
   # workflow artifacts with 3-day retention: for installing a candidate from a private
