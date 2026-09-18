@@ -13,6 +13,15 @@ body line with a bracket.
 
 ## [Unreleased]
 
+### Security
+
+- quick-xml 0.38.4 -> 0.42.0 (through plist 1.10.1) for RUSTSEC-2026-0194 and
+  RUSTSEC-2026-0195, found by the new `cargo deny` job before GitHub's database had them.
+- CI now runs `cargo deny` (advisories, licences, sources), zizmor over the workflows,
+  dependency review on pull requests and a weekly OpenSSF Scorecard.
+- Release builds read the macOS signing identity from a tag-only `release` environment,
+  and `v*` tags are protected against being moved or deleted.
+
 ## [0.1.0] - 2026-09-18
 
 First release. GitLab only, macOS and Linux.
