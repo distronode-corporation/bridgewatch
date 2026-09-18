@@ -286,11 +286,21 @@ jobs:
         run: |
           set -euo pipefail
           mnt="$(mktemp -d)"
-          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" staging/*.dmg >/dev/null
+          # ⛔ The .dmg carries a software licence agreement (the Apache licence), which
+          # hdiutil asks to be accepted and CANCELS on an empty stdin ("attach canceled",
+          # the v0.1.0 run's first failure). `yes` accepts it, fed by process
+          # substitution rather than a pipe so pipefail cannot trip on yes's SIGPIPE.
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" staging/*.dmg < <(yes) >/dev/null
           trap 'hdiutil detach "$mnt" >/dev/null || true' EXIT
           app="$(find "$mnt" -maxdepth 1 -name '*.app' | head -1)"
+          [ -n "$app" ] || { echo "::error::no .app inside the .dmg"; exit 1; }
           codesign --verify --deep --strict --verbose=2 "$app"
-          codesign -dv --verbose=2 "$app" 2>&1 | grep -q 'Authority=Developer ID Application: Distronode Corporation (R935BA6767)' \
+          # ⛔ Captured first: `codesign | grep -q` under pipefail FAILS on a correct
+          # signature, because grep exits at the first match and codesign dies on the
+          # closed pipe. Proven both ways locally on 2026-09-18 (signed .dmg passes,
+          # unsigned .dmg fails).
+          sig="$(codesign -dv --verbose=2 "$app" 2>&1)"
+          grep -qF 'Authority=Developer ID Application: Distronode Corporation (R935BA6767)' <<<"$sig" \
             || { echo "::error::not signed with the Distronode Developer ID"; exit 1; }
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
