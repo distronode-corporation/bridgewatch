@@ -19,8 +19,23 @@ body line with a bracket.
   RUSTSEC-2026-0195, found by the new `cargo deny` job before GitHub's database had them.
 - CI now runs `cargo deny` (advisories, licences, sources), zizmor over the workflows,
   dependency review on pull requests and a weekly OpenSSF Scorecard.
-- Release builds run in a tag-only `release` environment, which will hold the macOS
-  signing identity, and `v*` tags are protected against being moved or deleted.
+- Release builds run in a tag-only `release` environment, which holds the macOS signing
+  identity as its own environment secrets, so no branch workflow and no pull request can
+  read it. `v*` tags are protected against being moved or deleted.
+- A weekly job re-runs `cargo deny` and `npm audit --audit-level=high`. Advisories land
+  against code that did not change, so a scan that only runs on a push never sees them.
+  The npm audit covers the whole tree, dev dependencies included, because this is a Vite
+  app and they are what gets bundled into the shipped frontend.
+- Dependabot's patch and minor updates now enable GitHub auto-merge and land on their own
+  once the eight checks the `main` ruleset requires have passed, dependency review among
+  them. A major update waits for a person. The workflow triggers on `pull_request`, never
+  `pull_request_target`, and never checks out the pull request's code.
+- deny.toml now lists all seven unmaintained transitive crates by advisory id, each with
+  the path it arrives by and what would retire it: proc-macro-error through Tauri's GTK 3
+  stack, smartstring through rhai, and five unic crates through urlpattern and
+  tauri-utils. `cargo deny` now judges unmaintained crates across the whole tree instead
+  of only the workspace's direct dependencies, so those seven are tolerated by name and a
+  new abandoned crate anywhere fails CI. No dependency changed.
 
 ## [0.1.0] - 2026-09-18
 

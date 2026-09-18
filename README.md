@@ -611,18 +611,25 @@ See [SECURITY.md](SECURITY.md). Report vulnerabilities privately through
 [GitHub's private vulnerability reporting](https://github.com/distronode-corporation/bridgewatch/security/advisories/new),
 not in a public issue.
 
-What guards the code and the release path, all on every push to `main`:
+What guards the code and the release path, on every push to `main` unless the item says
+otherwise:
 
 - CodeQL (Rust, TypeScript, Actions) and [zizmor](https://docs.zizmor.sh) over the
   workflows, both reporting to code scanning.
 - `cargo deny` against [deny.toml](deny.toml): RustSec advisories, a permissive-only
   licence allow-list, crates.io as the only source. Tolerated advisories are listed
   there with their reason.
+- A weekly re-run of `cargo deny` and of `npm audit --audit-level=high`, because an
+  advisory lands against code that did not change and so no push is coming to catch it.
+  The npm side audits the whole tree, dev dependencies included: this is a Vite app, so
+  they are what gets bundled into the shipped frontend.
 - Dependency review on every pull request, Dependabot for Cargo, npm and the pinned
   action SHAs, and a weekly [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch).
-- Release builds run in a `release` environment that only a `v*` tag can reach (the
-  macOS signing identity is moving there from repository secrets), and release tags
-  cannot be moved or deleted.
+- Dependabot's patch and minor updates merge themselves, but only once the eight checks
+  the `main` ruleset requires have passed. A major waits for a person.
+- Release builds run in a `release` environment that only a `v*` tag can reach and that
+  holds the macOS signing identity as its own environment secrets, so no branch and no
+  pull request can read it. Release tags cannot be moved or deleted.
 
 ## License
 

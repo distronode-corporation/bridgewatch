@@ -1,0 +1,125 @@
+name: Dependabot auto-merge
+
+# Dependabot opens grouped minor+patch pull requests every week against three
+# ecosystems (github-actions, cargo, npm), and each one otherwise waits on a human to
+# press the button after the same eight checks have already gone green. This workflow
+# turns on GitHub's own auto-merge for the routine half of that: a Dependabot PR whose
+# highest semver change is patch or minor is queued to squash-merge itself once the
+# `main` ruleset is satisfied. A major is deliberately left for a person, which is the
+# same split dependabot.yml already makes by grouping minor+patch per ecosystem and
+# leaving majors on their own (a major usually needs a workflow or source edit with it).
+# That config also holds every version update back behind a 7-day cooldown and ignores
+# TypeScript majors outright, so nothing here can merge a release that was yanked days
+# after publication.
+#
+# Auto-merge is a queue, not a merge: GitHub completes it only when the `main` ruleset
+# is satisfied. Read from the ruleset itself, that is 8 required status checks green
+# (rust on both platforms, msrv, repo, frontend, cargo-deny, zizmor, dependency-review)
+# and `required_approving_review_count: 0`, so nothing waits on a review that will never
+# come on a solo repository. The ruleset also sets `required_linear_history` and allows
+# only squash and rebase, which is why `--squash` is the method rather than a merge
+# commit.
+#
+# ⛔ THE TRIGGER IS `pull_request`, AND MUST NEVER BECOME `pull_request_target`. The
+# usual reason people reach for `pull_request_target` here is that it carries a
+# read-write token; the cost is that it runs with repository secrets in the context of
+# the base branch while the head is still untrusted. zizmor's `dangerous-triggers` audit
+# gates every workflow in this directory on pull requests and would fail the change, and
+# it would be right to. The `permissions:` key below is the supported way to get the same
+# token scope without that trade.
+#
+# ⛔ Two settings live outside this file and it cannot work without either of them.
+# The organisation's Actions allow-list is a NAMED list rather than a wildcard, so
+# `dependabot/fetch-metadata@*` has to be on it or every run fails at startup before a
+# step executes. Repository "Allow auto-merge" must also be on, or `gh pr merge --auto`
+# exits non-zero and the job reds on an otherwise healthy PR.
+#
+# ⚠️ EXPECTED, NOT YET OBSERVED, and worth confirming on the first real merge: a merge
+# performed through auto-merge that was enabled with `GITHUB_TOKEN` is attributed to
+# github-actions[bot], and GitHub does not start new workflow runs from events caused by
+# `GITHUB_TOKEN`. So the resulting push to `main` is expected NOT to trigger ci.yml or
+# scorecard.yml for that commit. That is acceptable rather than ideal: the PR's own
+# checks ran against this change, and scorecard.yml's and audit.yml's weekly schedules
+# plus the next ordinary push all cover main again. It is NOT proof of the merged tree:
+# the ruleset sets `strict_required_status_checks_policy: false`, so a Dependabot branch
+# need not be up to date, and a squash can land on a `main` newer than the one its
+# checks ran against. If a lockfile bump ever merges green and leaves main red, turn
+# that policy on (Dependabot rebases its own branches) rather than weakening this file.
+#
+# ⚠️ The ruleset also carries `require_extra_approval_for_unattributed_changes: true`.
+# Dependabot's commits are verified and attributed to dependabot[bot], so this is not
+# expected to hold a queued merge, but it has not been watched through a real merge yet.
+#
+# Fallback if the token turns out to be read-only on Dependabot pull requests despite
+# the `permissions:` block: merge by hand with `gh pr merge --squash <url>`, and delete
+# this workflow. Do not reach for `pull_request_target` to work around it.
+#
+# No `concurrency:` group. Enabling auto-merge is idempotent, so a force-push that
+# supersedes an in-flight run costs a few seconds of a small runner and nothing else;
+# cancelling would only add a way for the last run to be the cancelled one.
+
+on:
+  pull_request:
+
+# Nothing at the top level, so a job added here later starts with no token scope at all
+# rather than inheriting the repository default.
+permissions: {}
+
+jobs:
+  auto-merge:
+    name: Enable auto-merge for patch and minor updates
+    # ⛔ `github.event.pull_request.user.login`, NOT `github.actor`. zizmor's
+    # `bot-conditions` audit flags the latter as spoofable: `github.actor` is the last
+    # actor to touch the PR, not the one who opened it, so a third party who can cause
+    # any event on a Dependabot PR becomes the actor. `user.login` is the account that
+    # CREATED the pull request and cannot be changed after the fact.
+    #
+    # The repository check keeps this from running in a fork, where `GITHUB_TOKEN` is
+    # read-only on pull requests anyway and the only outcome would be a red job on
+    # somebody else's copy.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.repository == 'distronode-corporation/bridgewatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Dependabot-triggered runs get a READ-ONLY `GITHUB_TOKEN` by default, even on a
+    # repository whose default workflow permissions are read/write. An explicit
+    # `permissions:` key is what GitHub honours to lift that, and only for the scopes
+    # named: `pull-requests: write` to enable auto-merge on the PR, `contents: write`
+    # because the queued action is a write to the branch. Nothing else is granted.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # ⛔ No checkout, anywhere in this workflow, on purpose. Nothing here needs the
+      # tree, and not having it means a Dependabot PR's contents (a lockfile that could
+      # pull a compromised package, a build script) can never execute in a job holding a
+      # write-scoped token. Everything below reads the PR through the API instead.
+      #
+      # `update-type` is the HIGHEST semver change in the PR, which is the output that
+      # makes this safe on the grouped PRs dependabot.yml creates: confirmed from the
+      # action's source at this pin, where `output.ts` derives it with `maxSemver` over
+      # every updated dependency against a priority list of major, then minor, then
+      # patch. So one major inside a group of patches reports major and is skipped. It
+      # is also empty rather than wrong when a version cannot be parsed, and the check
+      # below is an allow-list, so that case is skipped too.
+      - name: Read Dependabot's metadata for this pull request
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      # `--auto` queues the merge rather than performing it, so this step finishing is
+      # not a merge: the eight required checks still have to pass first, and a red one
+      # leaves the PR sitting open exactly as it does today.
+      #
+      # ⚠️ `PR_URL` goes through `env:` rather than being interpolated into the `run:`
+      # body. That is zizmor's `template-injection` remediation, and the habit matters
+      # more than this particular value: an expression expanded inside `run:` is pasted
+      # into the shell before it executes.
+      - name: Enable auto-merge (squash)
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto --squash "$PR_URL"

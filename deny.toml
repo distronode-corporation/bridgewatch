@@ -12,10 +12,20 @@ targets = [
 all-features = true
 
 [advisories]
-# Unmaintained notices only for crates this workspace names directly: the Tauri tree
-# carries several abandoned transitive crates (proc-macro-error, unic-*, smartstring)
-# that we cannot replace, and failing on them would teach everyone to ignore the job.
-unmaintained = "workspace"
+# Unmaintained notices for the WHOLE tree, same as unsound below. The Tauri tree carries
+# seven abandoned transitive crates (proc-macro-error, smartstring, five unic-*) that we
+# cannot replace; each is listed by id in `ignore` with the path it arrives by and what
+# would retire it, so an EIGHTH abandoned crate anywhere in the tree fails the job and
+# becomes a decision.
+# ⚠️ This was "workspace" until 2026-09-18, which tolerated those seven by scope and
+# recorded nothing. The two cannot be combined: measured with cargo-deny 0.20.2, the
+# "workspace" scope never encounters a transitive advisory, so each of the seven entries
+# below printed `warning[advisory-not-detected]` on every run, i.e. they were dead lines.
+# Under "all" the same entries are what makes the check pass (exit 0, no warnings).
+# OpenSSF Scorecard reads OSV directly rather than this file, so it keeps counting all
+# eight as vulnerabilities whatever is written here; the entries are the written answer
+# to that count, not a way to lower it.
+unmaintained = "all"
 # Unsound notices for the WHOLE tree, so a new one anywhere is a decision, not noise.
 unsound = "all"
 # Every vulnerability and unmaintained/unsound notice fails the check unless it is
@@ -27,6 +37,29 @@ ignore = [
   # calls `VariantStrIter`. The Dependabot alert is dismissed as tolerable risk with
   # the same reason.
   { id = "RUSTSEC-2024-0429", reason = "glib 0.18 pinned by Tauri 2 GTK 3; VariantStrIter unused" },
+
+  # proc-macro-error 1.0.4 unmaintained, no fixed version. Linux only and build-time only:
+  # it is a proc-macro dependency of glib-macros 0.18.5, which arrives through glib 0.18,
+  # gtk 0.18, libappindicator, tray-icon and tauri. The same archived gtk-rs 0.18 stack as
+  # the glib entry above, so it goes when Tauri moves to GTK 4.
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 1.0.4 build-time only, pinned by Tauri 2 GTK 3" },
+
+  # smartstring 1.0.1 unmaintained, no fixed version. The only one here that arrives
+  # through a crate this project chose itself: rhai 1.26.1, a direct dependency of
+  # bridgewatch-core for the optional `[verdict].script` hook. bridgewatch never names
+  # smartstring; it goes when rhai drops or replaces it.
+  { id = "RUSTSEC-2026-0249", reason = "smartstring 1.0.1 via rhai 1.26.1, the verdict-script engine" },
+
+  # Five unic 0.9.0 crates, all unmaintained, none with a fixed version, and all one
+  # dependency: urlpattern 0.3.0 pulls unic-ucd-ident, which pulls the other four.
+  # urlpattern reaches us through tauri-utils 2.9.3, which is a dependency of both tauri
+  # and tauri-build. They are Unicode character tables and hold no logic of ours. All five
+  # go together, when tauri-utils moves to a urlpattern release that no longer uses unic.
+  { id = "RUSTSEC-2025-0081", reason = "unic-char-property 0.9.0 via urlpattern 0.3.0 and tauri-utils" },
+  { id = "RUSTSEC-2025-0075", reason = "unic-char-range 0.9.0 via urlpattern 0.3.0 and tauri-utils" },
+  { id = "RUSTSEC-2025-0080", reason = "unic-common 0.9.0 via urlpattern 0.3.0 and tauri-utils" },
+  { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident 0.9.0 via urlpattern 0.3.0 and tauri-utils" },
+  { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version 0.9.0 via urlpattern 0.3.0 and tauri-utils" },
 ]
 
 [licenses]

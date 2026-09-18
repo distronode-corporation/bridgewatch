@@ -1,0 +1,116 @@
+name: Audit
+
+# A weekly re-check of the dependency tree against the advisory databases, because an
+# advisory is published against code that did not change. Everything else here is
+# event-driven and so goes quiet exactly when nothing is happening: ci.yml's
+# `cargo-deny` runs on a push or a pull request, `dependency-review` runs on pull
+# requests only, and Dependabot's alerts are passive (they wait to be read). A quiet
+# week should still produce an answer, and this is the job that gives one.
+#
+# Alerting is the run status and nothing else. A failed scheduled run sends GitHub's
+# own failure email to the repository owner, which for a solo-maintained project is
+# the whole design: nothing here opens an issue, uploads SARIF or posts anywhere. If
+# this workflow is red on a Monday, something in the tree has an advisory against it.
+#
+# ⚠️ GitHub disables a scheduled workflow in a public repository after 60 days without
+# repository activity, and emails the owner when it does. On a dormant repository the
+# weekly check stops; re-enable it from the Actions tab (or push anything).
+#
+# No `concurrency` group: the two jobs are read-only, share no state with each other
+# or with any other workflow, and a manual run overlapping the Monday cron costs a
+# few runner-minutes and nothing else. A group here would only add a way to cancel a
+# check that is cheap to let finish.
+on:
+  schedule:
+    # Weekly, Monday, 30 minutes after scorecard.yml's '17 6 * * 1' so the two weekly
+    # jobs do not queue against each other.
+    - cron: '47 6 * * 1'
+  workflow_dispatch:
+
+# Read-only. Neither job writes anything back to the repository.
+permissions:
+  contents: read
+
+# Two independent jobs, deliberately not one: a Rust advisory and an npm advisory are
+# separate answers, and each should be reported whatever the other does. (`fail-fast`
+# is a matrix setting and does not apply; separate jobs never cancel one another.)
+jobs:
+  # The same four checks ci.yml runs on a push (RustSec advisories, the licence
+  # allow-list, banned crates, allowed sources, all from deny.toml), asked again on a
+  # week where nobody pushed. RustSec often carries an advisory days before GitHub's
+  # database, so this is not a duplicate of Dependabot.
+  #
+  # ⛔ The install step below is a DELIBERATE, byte-for-byte copy of ci.yml's
+  # `cargo-deny` job. Two copies of six lines is less machinery than a composite
+  # action plus the indirection of reading it, so the duplication is the choice. The
+  # cost is that a cargo-deny version bump must change BOTH files: the version and the
+  # digest live in `.github/workflows/ci.yml` as well as here, and a bump that touches
+  # only one leaves the two jobs testing with different binaries.
+  #
+  # No toolchain action, matching ci.yml: the runner image ships cargo, and
+  # rust-toolchain.toml names the channel for it.
+  cargo-deny:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CARGO_DENY_VERSION: 0.20.2
+      CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install cargo-deny
+        run: |
+          set -euo pipefail
+          name="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
+          curl -fsSL -o "$RUNNER_TEMP/deny.tgz" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${name}.tar.gz"
+          echo "${CARGO_DENY_SHA256}  $RUNNER_TEMP/deny.tgz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/deny.tgz" -C "$RUNNER_TEMP"
+          install -m 0755 "$RUNNER_TEMP/${name}/cargo-deny" "$HOME/.cargo/bin/cargo-deny"
+          cargo deny --version
+
+      # `--locked`: the advisory answer is about the tree that is committed, so a run
+      # that quietly resolved a different Cargo.lock would be answering another
+      # question.
+      - name: cargo deny check
+        run: cargo deny --locked check
+
+  # The npm half of the same question, against GitHub's advisory database.
+  npm-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # ⚠️ No `cache: npm`, unlike ci.yml's `frontend` job. Nothing is installed here
+      # (see below), so there is nothing for a cache to save, and a restored cache is
+      # one more input to a job whose entire output is a security verdict.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      # ⛔ No `npm ci`, on purpose. `npm audit` reads package-lock.json and posts the
+      # resolved tree to the advisory API; it needs no node_modules, so this job
+      # downloads no packages and runs no install scripts. Verified 2026-09-18 by
+      # copying only package.json and package-lock.json into an empty directory:
+      # `npm audit --audit-level=high` reported "found 0 vulnerabilities" over 198
+      # dependencies with no node_modules present, and errored with ENOLOCK when the
+      # lockfile was taken away, which is the control proving it read the lockfile
+      # rather than reading nothing.
+      #
+      # ⛔ And deliberately NOT `--omit=dev`, which reads like the tidier flag and is
+      # the wrong answer for a bundled frontend. Measured on the committed lockfile:
+      # 198 packages, of which exactly TWO (@tauri-apps/api, @tauri-apps/plugin-opener)
+      # are runtime `dependencies`. Svelte, Vite, Tailwind, bits-ui and the rest of
+      # what Vite COMPILES INTO THE SHIPPED APP are devDependencies, so `--omit=dev`
+      # would audit two packages and skip the code users actually run.
+      #
+      # `--audit-level=high` sets the failure bar, not the reporting bar: moderate and
+      # low advisories are still printed in the job log, they just do not turn the
+      # week red on their own.
+      - name: npm audit
+        run: npm audit --audit-level=high
