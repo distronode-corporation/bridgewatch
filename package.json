@@ -28,7 +28,7 @@
     "@tauri-apps/cli": "2.11.4",
     "bits-ui": "2.19.2",
     "cn": "0.3.0",
-    "jsdom": "28.1.0",
+    "jsdom": "30.0.1",
     "shadcn-svelte": "1.7.0",
     "svelte": "5.57.0",
     "svelte-check": "4.7.6",
