@@ -19,8 +19,8 @@ body line with a bracket.
   RUSTSEC-2026-0195, found by the new `cargo deny` job before GitHub's database had them.
 - CI now runs `cargo deny` (advisories, licences, sources), zizmor over the workflows,
   dependency review on pull requests and a weekly OpenSSF Scorecard.
-- Release builds read the macOS signing identity from a tag-only `release` environment,
-  and `v*` tags are protected against being moved or deleted.
+- Release builds run in a tag-only `release` environment, which will hold the macOS
+  signing identity, and `v*` tags are protected against being moved or deleted.
 
 ## [0.1.0] - 2026-09-18
 

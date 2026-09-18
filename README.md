@@ -620,8 +620,9 @@ What guards the code and the release path, all on every push to `main`:
   there with their reason.
 - Dependency review on every pull request, Dependabot for Cargo, npm and the pinned
   action SHAs, and a weekly [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch).
-- The macOS signing identity lives in a `release` environment that only a `v*` tag can
-  reach, and release tags cannot be moved or deleted.
+- Release builds run in a `release` environment that only a `v*` tag can reach (the
+  macOS signing identity is moving there from repository secrets), and release tags
+  cannot be moved or deleted.
 
 ## License
 

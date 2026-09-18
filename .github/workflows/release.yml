@@ -126,11 +126,11 @@ jobs:
     # anything anywhere except this workflow run's own artifact store.
     permissions:
       contents: read
-    # ⛔ The Apple signing and notary secrets are ENVIRONMENT secrets of `release`, not
-    # repository secrets, and the environment admits only `v*` tags. So no workflow on a
-    # branch, and no pull request, can read the Developer ID identity; only this job,
-    # on a release tag, can. Without this line every APPLE_* below expands to "" and the
-    # signature check fails the macOS legs.
+    # The `release` environment admits only `v*` tags. The Apple signing and notary
+    # secrets are to live there as ENVIRONMENT secrets, so that no branch workflow and
+    # no pull request can read the Developer ID identity. Until they are moved, the
+    # repository-level copies still resolve here (an environment secret only overrides
+    # a repository secret of the same name), so releases sign either way.
     environment: release
     strategy:
       # Surface all three failures in one run rather than one per re-run. Nothing
