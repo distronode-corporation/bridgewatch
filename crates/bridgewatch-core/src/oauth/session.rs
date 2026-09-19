@@ -46,12 +46,14 @@ pub const REFRESH_MARGIN_SECS: u64 = 300;
 /// How recently a token must have been obtained for a 401 on it to be taken
 /// as the endpoint's answer rather than as the token running out.
 ///
-/// ⚠️ Not every 401 is an expired token. GitLab's
-/// `/personal_access_tokens/self`, which the wizard's "Test connection" asks,
-/// refuses EVERY OAuth token with a 401, and on GitLab a refresh rotates the
-/// pair: refreshing on that answer would spend a refresh token each time
-/// somebody pressed the button, and prove nothing. A token obtained this
-/// recently has not expired, so its 401 is passed through untouched.
+/// ⚠️ Not every 401 is an expired token, and on GitLab a refresh rotates the
+/// pair, so refreshing on an answer that is not about expiry would spend a
+/// refresh token and prove nothing. A token obtained this recently has not
+/// expired, so its 401 is passed through untouched. Measured on gitlab.com
+/// 2026-09-19: `/personal_access_tokens/self`, which the wizard's "Test
+/// connection" asks, refuses an OAuth token with a 400, not the 401 this rule
+/// was first written for, so that endpoint never reaches the refresh at all;
+/// the rule stays as the guard for any endpoint that does answer 401.
 pub const FRESH_SECS: u64 = 60;
 
 /// Seconds since the Unix epoch. Injected so the tests can move time.

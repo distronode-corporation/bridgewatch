@@ -437,10 +437,12 @@ impl TokenReplyView {
 /// ⚠️ No client secret, on either provider. GitHub documents a device-flow
 /// app's refresh with `client_id`, `grant_type` and `refresh_token` only.
 /// GitLab's documentation shows `client_secret` on a refresh and does not
-/// say whether a NON-confidential application may leave it out. UNVERIFIED:
-/// `glab` refreshes without one, which is the best evidence to hand, and a
-/// refusal here lands on [`OAuthError::SignInAgain`], i.e. "sign in again",
-/// rather than anything that loops.
+/// say whether a NON-confidential application may leave it out. Measured on
+/// gitlab.com 2026-09-19 with bridgewatch's own application: a refresh with
+/// `client_id` alone answers 200 with a new pair, the old access token then
+/// answers 401, and replaying the old refresh token answers `invalid_grant`.
+/// A refusal here lands on [`OAuthError::SignInAgain`], i.e. "sign in
+/// again", rather than anything that loops.
 /// <https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens>
 /// <https://docs.gitlab.com/api/oauth2/#authorization-code-flow>
 pub async fn refresh(
