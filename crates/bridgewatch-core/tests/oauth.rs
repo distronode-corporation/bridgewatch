@@ -541,30 +541,24 @@ fn enterprise_and_self_managed_need_a_client_id_of_their_own() {
 /// github.com and gitlab.com need a typed client id too, and say it is THIS
 /// BUILD that lacks one.
 #[test]
-fn the_shipped_build_offers_no_built_in_sign_in_yet() {
+fn the_shipped_build_signs_in_with_the_registered_applications() {
+    // Registered 2026-09-19: the GitHub App `bridgewatch-ci` owned by
+    // distronode-corporation (Actions: read, Metadata: read, device flow on,
+    // expiring user tokens, installed on the org), and the distronode-corporation
+    // group application on gitlab.com (not confidential, device authorization
+    // grant on, read_api). Client ids are public identifiers, not secrets.
     let shipped = BuiltinClients::shipped();
+    assert_eq!(shipped.github_com, Some("Iv23linCrkhVaN0BiYBU"));
+    assert_eq!(shipped.github_app_slug, Some("bridgewatch-ci"));
     assert_eq!(
-        shipped,
-        BuiltinClients::default(),
-        "fill these in once the apps exist"
+        shipped.gitlab_com,
+        Some("34359b8c0970a5166211c80fe800514c8753dafd81da90f298026ba28e5a4d5a")
     );
     for provider in [Provider::Github, Provider::Gitlab] {
         let account = oauth_account(provider, None, None);
-        let err = oauth::client_id_for(&account, &source(&account), &shipped).unwrap_err();
-        assert!(
-            err.to_string().contains("no built-in sign-in application"),
-            "{err}"
-        );
-
-        let off = oauth::availability(provider, &account.base_url, None, &shipped);
-        assert!(
-            !off.available && !off.builtin && !off.needs_client_id,
-            "{off:?}"
-        );
-        let typed = oauth::availability(provider, &account.base_url, Some("mine"), &shipped);
-        assert!(typed.available, "{typed:?}");
-        let blank = oauth::availability(provider, &account.base_url, Some("  "), &shipped);
-        assert!(!blank.available, "{blank:?}");
+        let on = oauth::availability(provider, &account.base_url, None, &shipped);
+        assert!(on.available && on.builtin, "{on:?}");
+        assert!(oauth::client_id_for(&account, &source(&account), &shipped).is_ok());
     }
 }
 
@@ -686,19 +680,15 @@ fn a_wizard_that_signs_in_writes_only_where_the_sign_in_comes_from() {
         built.toml
     );
 
-    // Without a client id, in this build, the account step is told why.
+    // Without a client id, this build signs in with the registered gitlab.com
+    // application, so the account step has nothing to object to.
     let answers = bridgewatch_core::wizard::WizardAnswers {
         token: TokenSource::Oauth(OAuthSource::default()),
         project: Some(ProjectRef::Id(42)),
         ..Default::default()
     };
     let issues = bridgewatch_core::wizard::validate_answers(&answers);
-    assert!(
-        issues
-            .iter()
-            .any(|i| i.field == "token" && i.message.contains("no built-in sign-in application")),
-        "{issues:?}"
-    );
+    assert!(!issues.iter().any(|i| i.field == "token"), "{issues:?}");
 }
 
 #[test]
@@ -1472,8 +1462,10 @@ async fn a_404_on_a_signed_in_github_account_says_to_install_the_app() {
         .clone()
         .expect("an error on the watch");
     assert!(error.starts_with("not found:"), "{error}");
+    // The registered app's slug turns the hint into a link.
     assert!(
-        error.contains("install the app on the owner of this repository"),
+        error.contains("install it on the owner of this repository")
+            && error.contains("https://github.com/apps/bridgewatch-ci/installations/new"),
         "{error}"
     );
 

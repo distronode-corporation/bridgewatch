@@ -12,16 +12,17 @@
 //! makes shipping one in a public binary correct.
 
 /// The client id of bridgewatch's GitHub App on github.com, e.g. `Iv23li...`.
-pub const GITHUB_COM: Option<&str> = None;
+pub const GITHUB_COM: Option<&str> = Some("Iv23linCrkhVaN0BiYBU");
 
 /// The URL slug of that GitHub App, as in
 /// `https://github.com/apps/<slug>/installations/new`: where a user installs
 /// the app on an organisation whose repositories it cannot see yet.
-pub const GITHUB_APP_SLUG: Option<&str> = None;
+pub const GITHUB_APP_SLUG: Option<&str> = Some("bridgewatch-ci");
 
 /// The application id (GitLab calls the client id that) of bridgewatch's OAuth
 /// application on gitlab.com.
-pub const GITLAB_COM: Option<&str> = None;
+pub const GITLAB_COM: Option<&str> =
+    Some("34359b8c0970a5166211c80fe800514c8753dafd81da90f298026ba28e5a4d5a");
 
 /// The built-in applications, as one value.
 ///
