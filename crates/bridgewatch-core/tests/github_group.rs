@@ -811,6 +811,69 @@ async fn dive_bridges_selects_workflows_by_name() {
     assert_eq!(snapshot.icon_state.as_str(), "deployed_with_failure");
 }
 
+/// `dive.only_when` compares bridgewatch's NORMALISED status, not GitHub's
+/// word for it: a run that concluded `failure` is `failed` by the time any
+/// rule sees it, so `only_when = "failed"` (the value the wizard writes on a
+/// schedule watch, and the shipped example's) selects exactly the failed
+/// workflow on GitHub as it selects a failed bridge on GitLab.
+#[tokio::test]
+async fn dive_only_when_failed_selects_the_workflow_that_concluded_failure() {
+    let transport = Routed::new();
+    three_way_push(&transport);
+    let mut poller = poller_for(
+        &group_config("dive = { only_when = \"failed\" }"),
+        transport.clone(),
+    );
+
+    let snapshot = poller.tick().await.snapshot;
+
+    assert_eq!(transport.count("/jobs"), 1, "{:#?}", transport.seen());
+    assert_eq!(transport.count(&jobs_path(4103)), 1);
+    let row = &snapshot.watches[0].rows[0];
+    let dived: Vec<(&str, bool)> = row
+        .bridges
+        .iter()
+        .map(|b| (b.name.as_str(), b.dived))
+        .collect();
+    assert_eq!(dived, [("CI", false), ("Deploy", false), ("Lint", true)]);
+    assert_eq!(row.bridges[2].verdict_jobs, ["eslint"]);
+}
+
+/// And GitHub's own word is not a status bridgewatch knows: `failure` is
+/// warned about when the file loads and then matches nothing, which is the
+/// same answer any unknown value gets on GitLab.
+#[tokio::test]
+async fn dive_only_when_in_githubs_vocabulary_is_warned_about_and_matches_nothing() {
+    let raw = format!(
+        r#"{ACCOUNTS}
+[[watches]]
+id = "w"
+account = "gh"
+project = "acme-corp/monorepo"
+ref = "main"
+group = "commit"
+dive = {{ only_when = "failure" }}
+"#
+    );
+    let said = warnings(&raw);
+    assert!(
+        said.iter()
+            .any(|(path, message)| path == "watches.0.dive.only_when"
+                && message.contains("is not a status bridgewatch knows")),
+        "{said:#?}"
+    );
+
+    let transport = Routed::new();
+    three_way_push(&transport);
+    let mut poller = poller_for(
+        &group_config("dive = { only_when = \"failure\" }"),
+        transport.clone(),
+    );
+    let snapshot = poller.tick().await.snapshot;
+    assert_eq!(transport.count("/jobs"), 0, "{:#?}", transport.seen());
+    assert!(snapshot.watches[0].rows[0].bridges.iter().all(|b| !b.dived));
+}
+
 /// `dive.depth` above 1 walks into each run's own bridges, and a run has none:
 /// the client answers that without a request, so a deeper dive costs nothing
 /// and changes nothing (validation already says the key is ignored here).

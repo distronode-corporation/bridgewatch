@@ -552,6 +552,11 @@
           {saveDiagnostics}
           {saveError}
           {tokenNote}
+          primary={draft.primary}
+          onprimary={(primary) => {
+            draft.primary = primary;
+            void loadPreview();
+          }}
         />
       {/if}
     </div>

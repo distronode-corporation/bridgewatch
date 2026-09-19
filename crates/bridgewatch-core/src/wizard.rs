@@ -642,16 +642,30 @@ pub const PROJECT_PAGES: u32 = 3;
 /// project and the answer would be at best that project, at worst empty); an
 /// account whose listing is refused gets the same "type it" answer rather than
 /// an error, because typing an id still works for it.
+///
+/// ⚠️ The sentence names what the PROVIDER takes. GitHub addresses a repository
+/// only as `owner/repo`, and [`parse_project_input`] refuses an id there, so
+/// telling a GitHub user to "type the project id" sends them to an error. The
+/// GitLab sentences are unchanged to the byte.
 pub async fn list_projects(
     client: &dyn CiClient,
+    provider: Provider,
     token: &TokenKind,
     search: Option<&str>,
 ) -> Result<ProjectListing, WizardError> {
     if let TokenKind::Project { project_id } = token {
+        let reason = match provider {
+            Provider::Gitlab => {
+                "A project access token can read only its own project, so there is no \
+                 list to pick from. Type the project id or path."
+            }
+            Provider::Github => {
+                "This token can read only its own repository, so there is no list to \
+                 pick from. Type the repository as owner/repo."
+            }
+        };
         return Ok(ProjectListing::TypeIdOrPath {
-            reason: "A project access token can read only its own project, so there is no \
-                     list to pick from. Type the project id or path."
-                .to_string(),
+            reason: reason.to_string(),
             suggestion: *project_id,
         });
     }
@@ -661,10 +675,18 @@ pub async fn list_projects(
             truncated,
         }),
         Err(ClientError::Auth { status: 403, .. }) | Err(ClientError::NotFound { .. }) => {
+            let reason = match provider {
+                Provider::Gitlab => {
+                    "This token is not allowed to list projects. Type the project id or \
+                     path."
+                }
+                Provider::Github => {
+                    "This token is not allowed to list repositories. Type the repository \
+                     as owner/repo."
+                }
+            };
             Ok(ProjectListing::TypeIdOrPath {
-                reason: "This token is not allowed to list projects. Type the project id or \
-                         path."
-                    .to_string(),
+                reason: reason.to_string(),
                 suggestion: None,
             })
         }
@@ -1065,6 +1087,12 @@ pub struct WizardAnswers {
     pub schedule_watch: bool,
     /// Add a secondary watch for this ref glob, e.g. `pf/*`.
     pub preflight_ref: Option<String>,
+    /// Make a NEW watch primary even when the file already has a primary
+    /// watch. Without it the new watch is added as `role = "secondary"` there,
+    /// because two primaries mean the tray icon is the worse of the two (see
+    /// [`BuiltConfig::secondary_because`]). A file with no primary, and a watch
+    /// that already exists, are not affected.
+    pub primary: bool,
     /// Notification switches for the primary watch. `None` leaves them alone.
     pub notify: Option<NotifyAnswers>,
     /// Register as a login item. `None` leaves it alone.
@@ -1088,6 +1116,7 @@ impl Default for WizardAnswers {
             deploy_markers: Vec::new(),
             schedule_watch: false,
             preflight_ref: None,
+            primary: false,
             notify: None,
             launch_at_login: None,
             live_secs: None,
@@ -1402,6 +1431,10 @@ pub struct BuiltConfig {
     pub warnings: Vec<Diagnostic>,
     /// True when an existing file was edited rather than a new one started.
     pub edited_existing: bool,
+    /// Set when the new watch was added as `role = "secondary"` because the
+    /// file already had a primary watch: that watch's id. The shell says so,
+    /// since the wizard is otherwise understood to set up THE watch.
+    pub secondary_because: Option<String>,
 }
 
 /// The opening comment of a file the wizard starts from nothing.
@@ -1584,7 +1617,10 @@ fn add_minimal_watch(editor: &mut ConfigEditor, watch: &Watch) -> Result<(), Wiz
 ///   for the same project and source/ref when there is one, and are otherwise
 ///   appended as `<id>-schedule` / `<id>-preflight`;
 /// - a value that already equals the answer is not rewritten at all, so
-///   re-running the wizard with the same answers returns the file unchanged.
+///   re-running the wizard with the same answers returns the file unchanged;
+/// - a NEW watch added to a file that already has a primary watch is added as
+///   `role = "secondary"` unless [`WizardAnswers::primary`] says otherwise, and
+///   [`BuiltConfig::secondary_because`] names the primary that caused it.
 ///
 /// Nothing is ever removed. The result must load (errors refuse, warnings are
 /// returned) and must not contain anything shaped like a token
@@ -1675,15 +1711,30 @@ pub fn build_config(
     let existing_watch = current
         .as_ref()
         .and_then(|c| c.watches.iter().find(|w| w.id == answers.watch_id));
+    let mut secondary_because = None;
     match existing_watch {
         None => {
+            // ⚠️ Two primaries is a WARNING the file then carries forever (the
+            // tray icon becomes the worse of them), and the person who ran the
+            // wizard a second time usually meant "also watch this". An explicit
+            // answer still gets the old behaviour.
+            let other_primary = current
+                .as_ref()
+                .and_then(|c| c.watches.iter().find(|w| w.role.is_primary()));
+            let role = match other_primary {
+                Some(other) if !answers.primary => {
+                    secondary_because = Some(other.id.clone());
+                    Role::Secondary
+                }
+                _ => Role::Primary,
+            };
             let mut watch = new_watch(
                 &answers.watch_id,
                 &answers.account,
                 &project,
                 &answers.ref_name,
                 &answers.sources,
-                Role::Primary,
+                role,
             )?;
             watch.deploy_markers = answers.deploy_markers.clone();
             apply_poll_defaults(&mut watch, answers);
@@ -1855,5 +1906,6 @@ pub fn build_config(
         toml,
         warnings: loaded.warnings,
         edited_existing: existing.is_some(),
+        secondary_because,
     })
 }

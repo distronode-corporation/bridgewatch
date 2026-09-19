@@ -187,6 +187,8 @@ export interface Draft {
   scheduleWatch: boolean;
   preflightEnabled: boolean;
   preflightRef: string;
+  /** Primary even beside a primary already in the file. Asked on review, only then. */
+  primary: boolean;
 
   markers: string[];
   noMarker: boolean;
@@ -219,6 +221,7 @@ export function emptyDraft(provider: Provider = "gitlab"): Draft {
     scheduleWatch: false,
     preflightEnabled: false,
     preflightRef: "",
+    primary: false,
     markers: [],
     noMarker: false,
     notify: { deployed: true, blocking_failure: true, finished: false },
@@ -304,6 +307,7 @@ export function draftFromAnswers(answers: Partial<WizardAnswers>): Draft {
     draft.preflightEnabled = true;
     draft.preflightRef = answers.preflight_ref;
   }
+  if (answers.primary) draft.primary = true;
   if (answers.deploy_markers) {
     draft.markers = [...answers.deploy_markers];
     draft.noMarker = answers.deploy_markers.length === 0;
@@ -440,6 +444,8 @@ export function answersOf(draft: Draft): WizardAnswers {
     deploy_markers: draft.noMarker ? [] : draft.markers.map((m) => m.trim()).filter((m) => m.length > 0),
     schedule_watch: draft.scheduleWatch,
     preflight_ref: draft.preflightEnabled && !github ? draft.preflightRef.trim() : null,
+    // Only when asked, so a payload without the question is unchanged.
+    ...(draft.primary ? { primary: true } : {}),
     notify: { ...draft.notify },
     launch_at_login: draft.launchAtLogin,
     live_secs: draft.liveSecs,

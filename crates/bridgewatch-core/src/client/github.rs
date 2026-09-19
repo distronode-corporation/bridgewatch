@@ -53,6 +53,16 @@
 
 mod group;
 
+/// `scheme://host` of GitHub's WEB UI for an account's `base_url`: one leading
+/// `api.` comes off, and a GitHub Enterprise Server host is kept as it is.
+///
+/// The one rule for it, shared by the commit group's checks URL, the tray's
+/// "Open pipelines page" and the shell's link check. A delegate rather than a
+/// re-export so the rule stays where the commit group keeps it.
+pub fn web_origin(base_url: &str) -> String {
+    group::web_origin(base_url)
+}
+
 use std::sync::{Arc, Mutex};
 
 use serde::de::DeserializeOwned;

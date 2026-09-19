@@ -91,3 +91,60 @@ describe("AccountsTab, adding an account", () => {
     expect(labels).toEqual(["glab / OS keyring", "gh / OS keyring"]);
   });
 });
+
+describe("AccountsTab, changing an existing account's provider", () => {
+  function switchTo(section: Element, provider: "gitlab" | "github") {
+    const select = [...section.querySelectorAll<HTMLSelectElement>("select")].find((s) =>
+      [...s.options].some((o) => o.value === "github"),
+    )!;
+    select.value = provider;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+  }
+
+  it("gitlab to github removes GitLab's defaults in the same write", () => {
+    const h = render({
+      accounts: {
+        work: { provider: "gitlab", base_url: "https://gitlab.com", api_path: "/api/v4", header: "PRIVATE-TOKEN", token: { own: true } },
+      },
+    });
+    switchTo(host.querySelector("section.account")!, "github");
+    expect(h.edits).toEqual([
+      [
+        { op: "set", path: "accounts.work.provider", value: { string: "github" } },
+        { op: "unset", path: "accounts.work.base_url" },
+        { op: "unset", path: "accounts.work.api_path" },
+        { op: "unset", path: "accounts.work.header" },
+      ],
+    ]);
+    expect(host.querySelector('[data-slot="provider-switch-note"]')).toBeNull();
+  });
+
+  it("github to gitlab keeps an Enterprise host and API path, and says so in one line", () => {
+    const h = render({
+      accounts: {
+        ghe: { provider: "github", base_url: "https://ghe.acme.com", api_path: "/api/v3", header: "Authorization: Bearer", token: { own: true } },
+      },
+    });
+    switchTo(host.querySelector("section.account")!, "gitlab");
+    expect(h.edits).toHaveLength(1);
+    expect(h.edits[0][0]).toEqual({ op: "set", path: "accounts.ghe.provider", value: { string: "gitlab" } });
+    expect(h.edits[0].slice(1)).toEqual([{ op: "unset", path: "accounts.ghe.header" }]);
+    expect(host.querySelector('[data-slot="provider-switch-note"]')?.textContent).toBe(
+      'Kept base_url = "https://ghe.acme.com", api_path = "/api/v3" (not GitHub\'s default). Check they suit GitLab.',
+    );
+  });
+
+  it("an edit to any other field is passed through untouched", () => {
+    const h = render({
+      accounts: { work: { provider: "gitlab", base_url: "https://gitlab.com", api_path: "/api/v4", header: "PRIVATE-TOKEN", token: { own: true } } },
+    });
+    const header = [...host.querySelectorAll<HTMLSelectElement>("section.account select")].find((s) =>
+      [...s.options].some((o) => o.value === "PRIVATE-TOKEN"),
+    )!;
+    header.value = "Authorization: Bearer";
+    header.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+    expect(h.edits).toEqual([[{ op: "set", path: "accounts.work.header", value: { string: "Authorization: Bearer" } }]]);
+  });
+});
