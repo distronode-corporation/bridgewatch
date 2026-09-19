@@ -756,6 +756,17 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
                      per run, so it is ignored; set group = \"commit\" for it to apply",
                 ));
             }
+            if watch.group.is_run() && !watch.expect.is_empty() {
+                out.push(Diagnostic::warning(
+                    format!("{base}.expect"),
+                    "expect names the workflows every commit group must hold, and this \
+                     watch shows one row per run, so it is ignored; set group = \"commit\" \
+                     for it to apply",
+                ));
+            }
+            if !watch.group.is_run() {
+                expect_warnings(watch, &base, &mut out);
+            }
             // A warning rather than an error: the watch works, it just cannot
             // group anything, because the list it groups holds one workflow's
             // runs and one commit starts at most one run of a workflow.
@@ -792,6 +803,14 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
                     format!("{base}.fan_out_secs"),
                     "fan_out_secs is the window of a GitHub commit group and is ignored on \
                      a GitLab account",
+                ));
+            }
+            if !watch.expect.is_empty() {
+                out.push(Diagnostic::warning(
+                    format!("{base}.expect"),
+                    "expect names the GitHub workflows a commit group must hold and is \
+                     ignored on a GitLab account, where a trigger job that created no child \
+                     already reads dead on its own",
                 ));
             }
         }
@@ -949,6 +968,74 @@ pub const BUILTIN_GLYPHS: &[&str] = &[
     "slash",
     "hourglass",
 ];
+
+/// The warnings `expect` earns on a GitHub commit-group watch.
+///
+/// Every one of them is a shape that makes a group read `dead` for a reason
+/// that is not a missing workflow, which is the failure `expect` exists to
+/// report and therefore the one it must not cry wolf about.
+fn expect_warnings(watch: &Watch, base: &str, out: &mut Vec<Diagnostic>) {
+    let mut seen: Vec<&str> = Vec::new();
+    for (j, entry) in watch.expect.iter().enumerate() {
+        let path = format!("{base}.expect.{j}");
+        let file = workflow_file(entry);
+        if file.is_empty() {
+            out.push(Diagnostic::warning(
+                path,
+                "an empty entry names no workflow and is ignored",
+            ));
+            continue;
+        }
+        if seen.contains(&file) {
+            out.push(Diagnostic::warning(
+                path,
+                format!("{entry:?} names {file}, which an earlier entry already expects"),
+            ));
+            continue;
+        }
+        seen.push(file);
+        // ⚠ The entry is a FILE name, and the bridges on screen are named for
+        // the workflow's `name:`, which is what people will copy. A display
+        // name matches no run's path, so every group would read dead.
+        if !(file.ends_with(".yml") || file.ends_with(".yaml")) {
+            out.push(Diagnostic::warning(
+                path,
+                format!(
+                    "{entry:?} is not a workflow file name; expect matches the file a \
+                     workflow is defined in (ci.yml), not its display name, so as written \
+                     it matches no run and every commit group will read dead"
+                ),
+            ));
+            continue;
+        }
+        if let Some(only) = watch
+            .workflow
+            .as_deref()
+            .map(workflow_file)
+            .filter(|w| !w.is_empty() && !w.chars().all(|c| c.is_ascii_digit()))
+            && only != file
+        {
+            out.push(Diagnostic::warning(
+                path,
+                format!(
+                    "{entry:?} can never appear: workflow limits this watch to {only}'s \
+                     runs, so every commit group will read dead"
+                ),
+            ));
+        }
+    }
+    // A watch with no `sources` shows every event's groups, and the
+    // workflows a push runs are rarely the ones a schedule or a pull request
+    // runs, so an expectation written for one would read the others dead.
+    if !watch.expect.is_empty() && watch.sources.is_empty() {
+        out.push(Diagnostic::warning(
+            format!("{base}.expect"),
+            "expect applies to every commit group this watch shows, and with no sources \
+             that is every event's: a schedule or pull_request group missing a push-only \
+             workflow would read dead; list the events it holds for in sources",
+        ));
+    }
+}
 
 /// The `source` values GitLab documents for a pipeline, as of 17.x.
 ///

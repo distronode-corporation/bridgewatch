@@ -651,6 +651,13 @@
             "only_when": null
           }
         },
+        "expect": {
+          "description": "GitHub only, and only with `group = \"commit\"`: workflow FILE names\n(`ci.yml`) that must have a run in every commit group this watch shows.\nOnce a group has settled and its `fan_out_secs` window has passed, an\nexpected workflow with no run in it is a dead bridge, the way a GitLab\ntrigger job that created no child is. Until then it is a pending job.\nIt applies to every group the watch shows, whatever its event, so list\nonly workflows that run on EVERY event in `sources`, and none whose\n`paths` or `branches` filter can legitimately skip a push.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "fan_out_secs": {
           "description": "GitHub only, and only with `group = \"commit\"`: runs of one commit and\nevent created within this many seconds of the group's newest run are\none row. Absent is 90.",
           "type": [

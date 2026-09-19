@@ -1309,3 +1309,688 @@ fn the_keys_default_to_the_phase_two_behaviour_and_are_never_written_unasked() {
     let windowed = group_config("fan_out_secs = 15");
     assert_eq!(windowed.watches[0].commit_group_window(), Some(15));
 }
+
+// ---------------------------------------------------------------------------
+// `expect`: the dead bridge, restored from configuration
+// ---------------------------------------------------------------------------
+//
+// A workflow whose `on:` did not match leaves no run at all, so these bodies
+// carry the one extra key `expect` reads, the run's `path`. The clock is the
+// client's own seam, set per test, so "inside the window" is a fact of the test
+// rather than of how fast it ran.
+
+/// 09:00:00, the second every push below was created in.
+const T0: &str = "2026-09-18T09:00:00Z";
+
+fn at(t: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(t)
+        .expect("a test time parses")
+        .with_timezone(&chrono::Utc)
+}
+
+/// A run with its workflow file. `conclusion` empty is still in progress.
+fn flow(id: u64, name: &str, file: &str, event: &str, created: &str, conclusion: &str) -> String {
+    let (status, conclusion) = if conclusion.is_empty() {
+        ("in_progress", "null".to_string())
+    } else {
+        ("completed", format!("\"{conclusion}\""))
+    };
+    format!(
+        r#"{{"id":{id},"name":"{name}","path":".github/workflows/{file}","run_number":7,
+            "head_sha":"{SHA}","head_branch":"main","status":"{status}",
+            "conclusion":{conclusion},"event":"{event}",
+            "html_url":"https://github.com/acme-corp/monorepo/actions/runs/{id}",
+            "created_at":"{created}","updated_at":"{created}","run_started_at":"{created}"}}"#
+    )
+}
+
+fn flows_page(runs: &[String]) -> String {
+    format!(
+        r#"{{"total_count":{},"workflow_runs":[{}]}}"#,
+        runs.len(),
+        runs.join(",")
+    )
+}
+
+/// A stoppable clock, shared with the client it drives.
+#[derive(Clone)]
+struct Clock(Arc<Mutex<chrono::DateTime<chrono::Utc>>>);
+
+impl Clock {
+    fn at(t: &str) -> Self {
+        Self(Arc::new(Mutex::new(at(t))))
+    }
+
+    fn set(&self, t: &str) {
+        *self.0.lock().unwrap() = at(t);
+    }
+}
+
+/// The poller, with every GitHub client reading `clock`.
+fn clocked_poller(config: &Config, transport: Arc<Routed>, clock: &Clock) -> Poller {
+    let ring = RequestRing::new(50);
+    let mut clients: BTreeMap<String, Arc<dyn CiClient>> = BTreeMap::new();
+    for (name, account) in &config.accounts {
+        let clock = clock.clone();
+        let client = GitHubClient::new(
+            account,
+            &Secret::new("ghp_SECRET"),
+            transport.clone(),
+            ring.clone(),
+        )
+        .with_clock(move || *clock.0.lock().unwrap());
+        clients.insert(name.clone(), Arc::new(client));
+    }
+    Poller::with_clients(config, clients, ring).expect("poller builds")
+}
+
+/// A settled push of CI and Lint, both green, with every run's jobs routed.
+fn ci_and_lint(transport: &Arc<Routed>, lint: &str) {
+    transport
+        .on(
+            &list_path("push"),
+            Reply::ok(flows_page(&[
+                flow(6102, "Lint", "lint.yml", "push", T0, lint),
+                flow(6101, "CI", "ci.yml", "push", T0, "success"),
+            ])),
+        )
+        .on(&jobs_path(6101), Reply::ok(jobs_page(&[])))
+        .on(&jobs_path(6102), Reply::ok(jobs_page(&[])));
+}
+
+/// A commit-group watch on pushes to main, with no deploy marker.
+fn expecting(files: &str) -> Config {
+    config(&format!(
+        "sources = [\"push\"]\ngroup = \"commit\"\nexpect = [{files}]"
+    ))
+}
+
+/// ⛔ The case the key exists for. Release never started (its `on:` did not
+/// match, or GitHub refused the file before a run existed), and CI and Lint
+/// passed: a monitor reading the runs alone says green. Past the window, the
+/// missing workflow is a dead bridge and the push is `failed`, by the rule a
+/// GitLab parent with a dead bridge meets.
+#[tokio::test]
+async fn a_settled_push_missing_an_expected_workflow_reads_failed_with_the_dead_bridge_named() {
+    let transport = Routed::new();
+    ci_and_lint(&transport, "success");
+    let clock = Clock::at("2026-09-18T09:10:00Z");
+    let mut poller = clocked_poller(
+        &expecting(r#""ci.yml", "lint.yml", "release.yml""#),
+        transport.clone(),
+        &clock,
+    );
+
+    let snapshot = poller.tick().await.snapshot;
+
+    assert_eq!(snapshot.icon_state.as_str(), "failed");
+    let row = &snapshot.watches[0].rows[0];
+    assert_eq!(row.status, "success", "every run that exists passed");
+    assert!(row.parent_jobs.is_empty(), "nothing is still awaited");
+    let bridges: Vec<(&str, &str, &str, bool)> = row
+        .bridges
+        .iter()
+        .map(|b| {
+            (
+                b.name.as_str(),
+                b.status.as_str(),
+                b.verdict.as_str(),
+                b.dived,
+            )
+        })
+        .collect();
+    assert_eq!(
+        bridges,
+        [
+            ("CI", "success", "passed", true),
+            ("Lint", "success", "passed", true),
+            ("release.yml", "never_started", "dead", false),
+        ],
+        "the runs first, oldest first, then the absence, named as it was expected"
+    );
+    let dead = &row.bridges[2];
+    assert_eq!(dead.child_id, None);
+    assert_eq!(dead.child_url, None);
+    assert_eq!(
+        dead.web_url.as_deref(),
+        Some("https://github.com/acme-corp/monorepo/actions/workflows/release.yml"),
+        "the workflow's own page, on the web host"
+    );
+    assert_eq!(row.failures, ["release.yml"]);
+    assert_eq!(row.sibling_failures, ["release.yml"]);
+    assert!(!row.live);
+
+    // Nothing was asked for the absence: one list, and the two runs' jobs.
+    let mut seen = transport.seen();
+    seen.sort();
+    let mut want = vec![list_path("push"), jobs_path(6101), jobs_path(6102)];
+    want.sort();
+    assert_eq!(seen, want);
+}
+
+/// The same absence after the deploy marker succeeded is collateral damage,
+/// not a failed deploy: `deployed_with_failure`, exactly as a GitLab parent
+/// that deployed beside a dead sibling bridge reads.
+#[tokio::test]
+async fn a_missing_workflow_after_the_deploy_succeeded_reads_deployed_with_failure() {
+    let transport = Routed::new()
+        .on(
+            &list_path("push"),
+            Reply::ok(flows_page(&[
+                flow(6202, "Deploy", "deploy.yml", "push", T0, "success"),
+                flow(6201, "CI", "ci.yml", "push", T0, "success"),
+            ])),
+        )
+        .on(&jobs_path(6201), Reply::ok(jobs_page(&[])))
+        .on(
+            &jobs_path(6202),
+            Reply::ok(jobs_page(&[job(
+                9601,
+                "publish",
+                "success",
+                "2026-09-18T09:00:10Z",
+                "2026-09-18T09:01:00Z",
+            )])),
+        );
+    let clock = Clock::at("2026-09-18T09:10:00Z");
+    let mut poller = clocked_poller(
+        &group_config(r#"expect = ["ci.yml", "deploy.yml", "lint.yml"]"#),
+        transport,
+        &clock,
+    );
+
+    let snapshot = poller.tick().await.snapshot;
+
+    assert_eq!(snapshot.icon_state.as_str(), "deployed_with_failure");
+    let row = &snapshot.watches[0].rows[0];
+    assert_eq!(row.deploy, "live");
+    assert_eq!(row.sibling_failures, ["lint.yml"]);
+    assert_eq!(row.failures, ["lint.yml"]);
+
+    // And `sibling_failure = "fail"` makes it red, through the same policy.
+    let transport = Routed::new()
+        .on(
+            &list_path("push"),
+            Reply::ok(flows_page(&[
+                flow(6202, "Deploy", "deploy.yml", "push", T0, "success"),
+                flow(6201, "CI", "ci.yml", "push", T0, "success"),
+            ])),
+        )
+        .on(&jobs_path(6201), Reply::ok(jobs_page(&[])))
+        .on(&jobs_path(6202), Reply::ok(jobs_page(&[])));
+    let mut poller = clocked_poller(
+        &group_config(
+            "expect = [\"ci.yml\", \"deploy.yml\", \"lint.yml\"]\nsibling_failure = \"fail\"",
+        ),
+        transport,
+        &clock,
+    );
+    assert_eq!(poller.tick().await.snapshot.icon_state.as_str(), "failed");
+}
+
+/// ⛔ While any run is live the group is not finished, and an absence is not
+/// yet a fact. The expected workflow is a PENDING job of the group, never a
+/// dead bridge, however long ago the window closed.
+#[tokio::test]
+async fn a_live_group_missing_an_expected_workflow_does_not_read_dead() {
+    let transport = Routed::new();
+    ci_and_lint(&transport, "");
+    let clock = Clock::at("2026-09-18T10:00:00Z");
+    let mut poller = clocked_poller(
+        &expecting(r#""ci.yml", "lint.yml", "release.yml""#),
+        transport,
+        &clock,
+    );
+
+    let snapshot = poller.tick().await.snapshot;
+
+    assert_eq!(snapshot.icon_state.as_str(), "running");
+    let row = &snapshot.watches[0].rows[0];
+    assert_eq!(row.status, "running");
+    assert!(row.live);
+    assert!(
+        row.bridges.iter().all(|b| b.verdict != "dead"),
+        "{:#?}",
+        row.bridges
+    );
+    let waiting: Vec<(&str, &str)> = row
+        .parent_jobs
+        .iter()
+        .map(|j| (j.name.as_str(), j.status.as_str()))
+        .collect();
+    assert_eq!(waiting, [("release.yml", "pending")]);
+    assert!(row.failures.is_empty());
+}
+
+/// ⛔ The subtle one. Every run has SETTLED but the window is still open, so
+/// the absence is not yet a fact: the row reads `running`, not a green that
+/// turns red a minute later. And the group's own status is held `pending`,
+/// which is the only thing that makes the poller come back for a settled row;
+/// without it the cached green would stand for good. Past the window the next
+/// tick says `failed`, and the only notification is the failure: no premature
+/// `finished`.
+#[tokio::test]
+async fn a_group_just_inside_the_window_does_not_read_dead_and_does_once_it_closes() {
+    let transport = Routed::new()
+        .on(
+            &list_path("push"),
+            Reply::ok(flows_page(&[
+                flow(6102, "Lint", "lint.yml", "push", T0, ""),
+                flow(6101, "CI", "ci.yml", "push", T0, "success"),
+            ])),
+        )
+        .on(
+            &list_path("push"),
+            Reply::ok(flows_page(&[
+                flow(6102, "Lint", "lint.yml", "push", T0, "success"),
+                flow(6101, "CI", "ci.yml", "push", T0, "success"),
+            ])),
+        )
+        .on(&jobs_path(6101), Reply::ok(jobs_page(&[])))
+        .on(&jobs_path(6102), Reply::ok(jobs_page(&[])));
+    let clock = Clock::at("2026-09-18T09:00:20Z");
+    let mut poller = clocked_poller(
+        &expecting(r#""ci.yml", "lint.yml", "release.yml""#),
+        transport.clone(),
+        &clock,
+    );
+
+    // Tick 1 baselines, with Lint still running.
+    let first = poller.tick().await;
+    assert_eq!(first.snapshot.icon_state.as_str(), "running");
+    assert!(first.notifications.is_empty(), "the first tick is silent");
+
+    // Tick 2: every run settled, 60 s after the push, inside the 90 s window.
+    clock.set("2026-09-18T09:01:00Z");
+    let second = poller.tick().await;
+    let row = &second.snapshot.watches[0].rows[0];
+    assert_eq!(second.snapshot.icon_state.as_str(), "running");
+    assert_eq!(row.status, "pending", "held, so the poller comes back");
+    assert!(row.live);
+    assert_eq!(row.parent_jobs.len(), 1);
+    assert_eq!(row.parent_jobs[0].name, "release.yml");
+    assert!(row.bridges.iter().all(|b| b.verdict == "passed"));
+    assert!(
+        second.notifications.is_empty(),
+        "nothing settled, so nothing finished: {:?}",
+        second.notifications
+    );
+
+    // Tick 3: the window has closed and the list has not changed at all.
+    clock.set("2026-09-18T09:01:31Z");
+    transport.clear_seen();
+    let third = poller.tick().await;
+    let row = &third.snapshot.watches[0].rows[0];
+    assert_eq!(third.snapshot.icon_state.as_str(), "failed");
+    assert_eq!(row.status, "success");
+    assert!(!row.live);
+    assert!(row.parent_jobs.is_empty());
+    assert_eq!(row.bridges[2].name, "release.yml");
+    assert_eq!(row.bridges[2].verdict, "dead");
+    assert_eq!(
+        transport.seen(),
+        [list_path("push")],
+        "the group's detail came from the list; both runs' jobs were already held"
+    );
+
+    // The notify path: `blocking_failure`, raised exactly as a GitLab dead
+    // bridge raises it, and clicking it opens the workflow's page.
+    let kinds: Vec<&str> = third
+        .notifications
+        .iter()
+        .map(|n| n.kind.as_str())
+        .collect();
+    assert_eq!(kinds, ["blocking_failure"]);
+    let failure = &third.notifications[0];
+    assert_eq!(failure.key, "6102|blocking_failure|release.yml");
+    assert_eq!(
+        failure.url.as_deref(),
+        Some("https://github.com/acme-corp/monorepo/actions/workflows/release.yml")
+    );
+}
+
+/// With every expected workflow present the row is byte for byte what it is
+/// without `expect`, and so are the requests.
+#[tokio::test]
+async fn a_group_holding_every_expected_workflow_is_unchanged() {
+    let clock = Clock::at("2026-09-18T09:10:00Z");
+    let mut rows = Vec::new();
+    for extra in ["", r#"expect = ["ci.yml", ".github/workflows/lint.yml"]"#] {
+        let transport = Routed::new();
+        ci_and_lint(&transport, "failure");
+        let mut poller = clocked_poller(
+            &config(&format!(
+                "sources = [\"push\"]\ngroup = \"commit\"\n{extra}"
+            )),
+            transport.clone(),
+            &clock,
+        );
+        let snapshot = poller.tick().await.snapshot;
+        let mut seen = transport.seen();
+        seen.sort();
+        rows.push((
+            serde_json::to_value(&snapshot.watches[0].rows).expect("rows serialise"),
+            seen,
+        ));
+    }
+    assert_eq!(rows[0], rows[1]);
+    assert_eq!(rows[0].0[0]["state"], "failed", "Lint's own failure stands");
+}
+
+/// A workflow file GitHub could not start DOES leave a run, concluded
+/// `startup_failure`. That run failed; it is not missing.
+#[tokio::test]
+async fn a_startup_failure_is_a_failed_workflow_not_a_missing_one() {
+    let transport = Routed::new()
+        .on(
+            &list_path("push"),
+            Reply::ok(flows_page(&[
+                flow(
+                    6302,
+                    "Release",
+                    "release.yml",
+                    "push",
+                    T0,
+                    "startup_failure",
+                ),
+                flow(6301, "CI", "ci.yml", "push", T0, "success"),
+            ])),
+        )
+        .on(&jobs_path(6301), Reply::ok(jobs_page(&[])))
+        .on(&jobs_path(6302), Reply::ok(jobs_page(&[])));
+    let clock = Clock::at("2026-09-18T09:10:00Z");
+    let mut poller = clocked_poller(&expecting(r#""ci.yml", "release.yml""#), transport, &clock);
+
+    let snapshot = poller.tick().await.snapshot;
+
+    assert_eq!(snapshot.icon_state.as_str(), "failed");
+    let row = &snapshot.watches[0].rows[0];
+    let bridges: Vec<(&str, &str)> = row
+        .bridges
+        .iter()
+        .map(|b| (b.name.as_str(), b.verdict.as_str()))
+        .collect();
+    assert_eq!(bridges, [("CI", "passed"), ("Release", "failed")]);
+    assert_eq!(row.bridges[1].child_id, Some(6302));
+    assert_eq!(row.failures, ["Release"]);
+}
+
+/// `expect` holds for every group the watch shows, so a schedule watch expects
+/// what a schedule runs. Two nights: the one whose nightly run exists is
+/// green, the one that only ran the cleanup is dead. A push-only workflow is
+/// never demanded of it, because it is not in this watch's `expect`.
+#[tokio::test]
+async fn a_schedule_watch_expects_what_the_schedule_runs() {
+    let transport = Routed::new()
+        .on(
+            &list_path("schedule"),
+            Reply::ok(flows_page(&[
+                flow(
+                    7202,
+                    "Cleanup",
+                    "cleanup.yml",
+                    "schedule",
+                    "2026-09-18T03:00:00Z",
+                    "success",
+                ),
+                flow(
+                    7102,
+                    "Cleanup",
+                    "cleanup.yml",
+                    "schedule",
+                    "2026-09-17T03:00:00Z",
+                    "success",
+                ),
+                flow(
+                    7101,
+                    "Nightly",
+                    "nightly.yml",
+                    "schedule",
+                    "2026-09-17T03:00:00Z",
+                    "success",
+                ),
+            ])),
+        )
+        .on(&jobs_path(7202), Reply::ok(jobs_page(&[])))
+        .on(&jobs_path(7102), Reply::ok(jobs_page(&[])))
+        .on(&jobs_path(7101), Reply::ok(jobs_page(&[])));
+    let clock = Clock::at("2026-09-18T09:00:00Z");
+    let mut poller = clocked_poller(
+        &config(
+            "sources = [\"schedule\"]\ngroup = \"commit\"\nexpect = [\"nightly.yml\"]\n\
+             show = { settled = 2 }",
+        ),
+        transport,
+        &clock,
+    );
+
+    let snapshot = poller.tick().await.snapshot;
+    let rows = &snapshot.watches[0].rows;
+
+    let states: Vec<(u64, &str)> = rows.iter().map(|r| (r.id, r.state.as_str())).collect();
+    assert_eq!(
+        states,
+        [(7202, "failed"), (7102, "succeeded_no_deploy")],
+        "one row per night, and only the night without its nightly run is dead"
+    );
+    assert_eq!(rows[0].failures, ["nightly.yml"]);
+}
+
+/// `group = "run"` shows one run per row, where `expect` cannot mean anything:
+/// it is ignored, and validation says so.
+#[tokio::test]
+async fn one_run_per_row_ignores_expect_and_warns() {
+    let transport = Routed::new()
+        .on(
+            &list_path("push"),
+            Reply::ok(flows_page(&[flow(
+                6401, "CI", "ci.yml", "push", T0, "success",
+            )])),
+        )
+        .on(&jobs_path(6401), Reply::ok(jobs_page(&[])));
+    let clock = Clock::at("2026-09-18T09:10:00Z");
+    let mut poller = clocked_poller(
+        &config("sources = [\"push\"]\nexpect = [\"release.yml\"]"),
+        transport,
+        &clock,
+    );
+
+    let snapshot = poller.tick().await.snapshot;
+    let row = &snapshot.watches[0].rows[0];
+    assert_eq!(snapshot.icon_state.as_str(), "succeeded_no_deploy");
+    assert!(row.bridges.is_empty() && row.parent_jobs.is_empty());
+
+    let said = warnings(&format!(
+        r#"{ACCOUNTS}
+[[watches]]
+id = "runs"
+account = "gh"
+project = "acme-corp/monorepo"
+sources = ["push"]
+expect = ["release.yml"]
+"#
+    ));
+    assert!(
+        said.iter()
+            .any(|(p, m)| p == "watches.0.expect" && m.contains("set group = \"commit\"")),
+        "{said:?}"
+    );
+}
+
+/// Two watches on one list, one expecting and one not, must not answer for
+/// each other. The poller visits them in turn, so the memo slot the second one
+/// lists into must not be the one the first one reads its detail from: it is
+/// keyed by `expect` as well as by the request.
+#[tokio::test]
+async fn two_watches_on_one_list_keep_their_own_expectations() {
+    let transport = Routed::new();
+    ci_and_lint(&transport, "success");
+    let client = client(transport.clone()).with_clock(|| at("2026-09-18T09:10:00Z"));
+    let strict = grouped("push", 20, 90).expecting(&["release.yml".to_string()]);
+    let lenient = grouped("push", 20, 90);
+
+    let strict_rows = client.list_pipelines(&repo(), &strict).await.unwrap();
+    let lenient_rows = client.list_pipelines(&repo(), &lenient).await.unwrap();
+    assert_eq!(
+        ids(&strict_rows),
+        ids(&lenient_rows),
+        "the same group, twice"
+    );
+    transport.clear_seen();
+
+    let (jobs, bridges) = CiClient::listed_detail(&client, &repo(), &strict_rows[0], &strict)
+        .await
+        .unwrap();
+    assert!(jobs.is_empty());
+    assert_eq!(
+        bridges.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+        ["CI", "Lint", "release.yml"],
+        "the strict watch's own answer, although the lenient list came after it"
+    );
+    let (_, bridges) = CiClient::listed_detail(&client, &repo(), &lenient_rows[0], &lenient)
+        .await
+        .unwrap();
+    assert_eq!(
+        bridges.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+        ["CI", "Lint"]
+    );
+    assert!(transport.seen().is_empty(), "both answered from the memo");
+}
+
+/// `expect` is GitHub's: on a GitLab watch it warns and changes nothing, and
+/// the misspellings that would make every group read dead are called out.
+#[test]
+fn expect_warns_on_gitlab_and_on_entries_that_can_never_match() {
+    let said = warnings(&format!(
+        r#"{ACCOUNTS}
+[[watches]]
+id = "on-gitlab"
+account = "gl"
+project = 1
+expect = ["ci.yml"]
+deploy_markers = ["deploy"]
+
+[[watches]]
+id = "typos"
+account = "gh"
+role = "secondary"
+project = "acme-corp/monorepo"
+sources = ["push"]
+group = "commit"
+expect = ["ci.yml", ".github/workflows/ci.yml", "Release", ""]
+
+[[watches]]
+id = "one-workflow"
+account = "gh"
+role = "secondary"
+project = "acme-corp/monorepo"
+sources = ["push"]
+group = "commit"
+workflow = "ci.yml"
+expect = ["ci.yml", "lint.yml"]
+
+[[watches]]
+id = "every-event"
+account = "gh"
+role = "secondary"
+project = "acme-corp/monorepo"
+group = "commit"
+expect = ["ci.yml"]
+"#
+    ));
+    let says = |path: &str, needle: &str| said.iter().any(|(p, m)| p == path && m.contains(needle));
+    assert!(says("watches.0.expect", "ignored on a GitLab"), "{said:?}");
+    assert!(says("watches.1.expect.1", "already expects"), "{said:?}");
+    assert!(
+        says("watches.1.expect.2", "not its display name"),
+        "{said:?}"
+    );
+    assert!(says("watches.1.expect.3", "empty entry"), "{said:?}");
+    assert!(
+        !said.iter().any(|(p, _)| p == "watches.1.expect.0"),
+        "{said:?}"
+    );
+    assert!(says("watches.2.expect.1", "can never appear"), "{said:?}");
+    assert!(
+        !said.iter().any(|(p, _)| p == "watches.2.expect.0"),
+        "the one workflow it watches can appear: {said:?}"
+    );
+    assert!(says("watches.3.expect", "no sources"), "{said:?}");
+}
+
+/// Absent is empty, and a watch that never mentioned it is written back
+/// without it; the file name matches however much of the path was written.
+#[test]
+fn expect_defaults_to_nothing_and_matches_a_file_however_it_is_spelled() {
+    let loaded = group_config("");
+    assert!(loaded.watches[0].expect.is_empty());
+    let rendered = toml::to_string(&loaded.watches[0]).expect("serialises");
+    assert!(!rendered.contains("expect"), "{rendered}");
+
+    let with = group_config(r#"expect = ["ci.yml"]"#);
+    assert_eq!(with.watches[0].expected_workflows(), ["ci.yml"]);
+    let run = config("expect = [\"ci.yml\"]");
+    assert!(
+        run.watches[0].expected_workflows().is_empty(),
+        "one row per run expects nothing"
+    );
+
+    use bridgewatch_core::config::workflow_file;
+    assert_eq!(workflow_file("ci.yml"), "ci.yml");
+    assert_eq!(workflow_file(".github/workflows/ci.yml"), "ci.yml");
+    assert_eq!(
+        workflow_file(" .github/workflows/ci.yml@refs/heads/main "),
+        "ci.yml"
+    );
+    assert_eq!(workflow_file(""), "");
+}
+
+/// A GitLab client handed a query carrying `expect` (and a commit group) asks
+/// exactly what it asks without them: the fields are GitHub's, and GitLab
+/// reports a missing child itself, as a bridge with no downstream pipeline.
+#[tokio::test]
+async fn a_gitlab_client_ignores_expect_entirely() {
+    #[derive(Debug, Default)]
+    struct Recorder(Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl Transport for Recorder {
+        async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ClientError> {
+            self.0.lock().unwrap().push(request.path);
+            Ok(HttpResponse {
+                status: 200,
+                body: "[]".to_string(),
+                next_page: None,
+                ratelimit_remaining: None,
+                ratelimit_reset: None,
+                retry_after: None,
+                etag: None,
+                link: None,
+                oauth_scopes: None,
+            })
+        }
+    }
+
+    let plain = ListQuery::exact("main", Some("push".to_string()), 20);
+    let expecting = plain
+        .clone()
+        .in_commit_groups(Some(90))
+        .expecting(&["ci.yml".to_string()]);
+    let mut asked = Vec::new();
+    for query in [plain, expecting] {
+        let recorder = Arc::new(Recorder::default());
+        let gitlab = bridgewatch_core::client::GitLabClient::new(
+            &Account::default(),
+            &Secret::new("glpat-SECRET"),
+            recorder.clone(),
+            RequestRing::new(10),
+        );
+        let rows = CiClient::list_pipelines(&gitlab, &ProjectRef::Id(42), &query)
+            .await
+            .unwrap();
+        assert!(rows.is_empty());
+        asked.push(recorder.0.lock().unwrap().clone());
+    }
+    assert_eq!(asked[0].len(), 1);
+    assert_eq!(asked[0], asked[1]);
+}

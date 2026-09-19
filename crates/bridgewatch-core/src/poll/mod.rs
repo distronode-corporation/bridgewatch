@@ -602,13 +602,15 @@ pub fn list_query(watch: &Watch, rules: &WatchRules) -> ListQuery {
         },
         None => ListQuery::scan(per_page.max(30)),
     };
-    // GitLab ignores both; GitHub asks that workflow's own endpoint, and folds
-    // a commit's runs into one row. Carried on the query rather than read from
+    // GitLab ignores all three; GitHub asks that workflow's own endpoint, folds
+    // a commit's runs into one row, and holds each row to its expected
+    // workflows. Carried on the query rather than read from
     // the watch inside a client, so that the clients keep taking one request
     // description and nothing provider-shaped.
     query
         .for_workflow(watch.workflow.as_deref())
         .in_commit_groups(watch.commit_group_window())
+        .expecting(watch.expected_workflows())
 }
 
 /// Filter and trim the list rows a watch should show.

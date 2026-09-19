@@ -29,7 +29,10 @@
 //! are those runs. The folding, its key and its window live in [`group`]. The
 //! list request is the same one; the group's own jobs are empty and cost
 //! nothing, its bridges come from what the list returned, and a run's jobs are
-//! fetched through [`CiClient::child_jobs`] only when `dive` selects it. Which
+//! fetched through [`CiClient::child_jobs`] only when `dive` selects it. A
+//! watch's `expect` adds to both from the same list, still without a request:
+//! a pending job per expected workflow not yet seen, then a dead bridge once
+//! the group has settled past its window without it. Which
 //! shape a row is cannot be read off its id (a group's id is its newest run's),
 //! so the poller asks through [`CiClient::listed_detail`], which carries the
 //! query that listed it.
@@ -55,6 +58,7 @@ mod group;
 
 use std::sync::{Arc, Mutex};
 
+use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 
 use super::http::{HttpRequest, HttpResponse, RequestLog, RequestRing, Transport};
@@ -103,6 +107,9 @@ pub struct GitHubClient {
     ring: RequestRing,
     /// The commit groups the last grouped list presented. See [`group::Memo`].
     groups: Arc<Mutex<group::Memo>>,
+    /// What `expect` measures a group's window against. The wall clock, except
+    /// in a test that has to step over a window without sleeping through it.
+    clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
 }
 
 impl std::fmt::Debug for GitHubClient {
@@ -133,7 +140,18 @@ impl GitHubClient {
             transport,
             ring,
             groups: Arc::new(Mutex::new(group::Memo::default())),
+            clock: Arc::new(Utc::now),
         }
+    }
+
+    /// The same client, reading the time from `clock` rather than the wall.
+    ///
+    /// Only `expect` reads it: whether a commit group's window has passed is
+    /// the one thing this client decides by the time rather than by a response,
+    /// and a test that proves the passing has to be able to move it.
+    pub fn with_clock(mut self, clock: impl Fn() -> DateTime<Utc> + Send + Sync + 'static) -> Self {
+        self.clock = Arc::new(clock);
+        self
     }
 
     /// The request ring this client records into.
@@ -164,13 +182,16 @@ impl GitHubClient {
             return Ok(page.workflow_runs.into_iter().map(Into::into).collect());
         };
         let page_full = page.workflow_runs.len() >= query.per_page.clamp(1, 100) as usize;
+        let workflow_url = |file: &str| self.workflow_url(&repo, file);
+        let expect = group::Expect::new(&query.expect, (self.clock)(), &workflow_url);
         let groups = group::fold(
             page.workflow_runs,
             window,
             &|sha| self.commit_url(&repo, sha),
             page_full,
+            &expect,
         );
-        self.memo().replace(&path, window, &groups);
+        self.memo().replace(&path, window, &query.expect, &groups);
         Ok(groups.into_iter().map(|g| g.pipeline).collect())
     }
 
@@ -309,24 +330,25 @@ impl GitHubClient {
         Ok(repo.into())
     }
 
-    /// The bridges of a commit-group row: one per run in the group.
+    /// The jobs and bridges of a commit-group row: one bridge per run in the
+    /// group, plus what its `expect` adds (see [`group`]).
     ///
     /// Answered from what the list that produced the row returned, which is the
     /// normal case and costs nothing. A row this client did not just list (the
     /// memo is a cache of a response, not a source of truth) is answered by
     /// asking for that commit's runs by `head_sha` and folding them the same
     /// way, one request, rather than by guessing.
-    async fn group_bridges(
+    async fn group_detail(
         &self,
         project: &ProjectRef,
         row: &Pipeline,
         query: &ListQuery,
         window: u64,
-    ) -> Result<Vec<Bridge>, ClientError> {
+    ) -> Result<(Vec<Job>, Vec<Bridge>), ClientError> {
         let repo = repo_segment(project)?;
         let listed = list_path(&repo, query);
-        if let Some(bridges) = self.memo().bridges(&listed, window, row.id) {
-            return Ok(bridges);
+        if let Some(detail) = self.memo().detail(&listed, window, &query.expect, row.id) {
+            return Ok(detail);
         }
 
         let mut parts: Vec<String> = Vec::new();
@@ -343,11 +365,14 @@ impl GitHubClient {
         let path = runs_path(&repo, query.workflow.as_deref(), &parts);
         let (page, _) = self.get_json::<wire::RunsResponse>(&path).await?;
         let page_full = page.workflow_runs.len() >= 100;
+        let workflow_url = |file: &str| self.workflow_url(&repo, file);
+        let expect = group::Expect::new(&query.expect, (self.clock)(), &workflow_url);
         let groups = group::fold(
             page.workflow_runs,
             window,
             &|sha| self.commit_url(&repo, sha),
             page_full,
+            &expect,
         );
         // The group that IS this row, else the one holding its run: a run that
         // joined since the row was listed moves the group's id to its own.
@@ -366,8 +391,18 @@ impl GitHubClient {
         let mut memo = self.memo();
         let mut filed = found.clone();
         filed.pipeline.id = row.id;
-        memo.insert(&listed, window, &filed);
-        Ok(found.bridges.clone())
+        memo.insert(&listed, window, &query.expect, &filed);
+        Ok((found.jobs.clone(), found.bridges.clone()))
+    }
+
+    /// GitHub's page for one workflow file, which lists its runs. The link an
+    /// expected workflow with no run in a group carries.
+    fn workflow_url(&self, repo: &str, file: &str) -> String {
+        format!(
+            "{}/{repo}/actions/workflows/{}",
+            group::web_origin(&self.base_url),
+            urlencoding::encode(file)
+        )
     }
 
     /// GitHub's page for one commit's checks.
@@ -665,7 +700,8 @@ impl CiClient for GitHubClient {
     }
 
     /// One run per row: its jobs, and no bridges, which costs no request.
-    /// A commit group: no jobs of its own, and its runs as bridges.
+    /// A commit group: its runs as bridges, and no jobs of its own beyond a
+    /// `pending` one per expected workflow it is still waiting for.
     ///
     /// ⛔ The group's EMPTY job list is a real answer, and the poller stores it
     /// as fetched (`DetailSource::Fetched`), so the verdict engine reads "the
@@ -682,10 +718,7 @@ impl CiClient for GitHubClient {
                 let jobs = GitHubClient::pipeline_jobs(self, project, row.id).await?;
                 Ok((jobs, Vec::new()))
             }
-            Some(window) => {
-                let bridges = self.group_bridges(project, row, query, window).await?;
-                Ok((Vec::new(), bridges))
-            }
+            Some(window) => self.group_detail(project, row, query, window).await,
         }
     }
 

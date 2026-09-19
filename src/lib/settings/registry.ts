@@ -197,6 +197,15 @@ export const REGISTRY: RegistryEntry[] = [
     providerNote: "Ignored on a GitLab account: it is the window of a GitHub commit group.",
   },
   {
+    path: "watches.*.expect",
+    tab: "watches",
+    control: "list",
+    label: "Expected workflows",
+    hint: 'With "commit": workflow files (ci.yml) every row must hold; one that never ran reads dead.',
+    provider: "github",
+    providerNote: "Ignored on a GitLab account: a trigger job that created no child already reads dead.",
+  },
+  {
     path: "watches.*.sources",
     tab: "watches",
     control: "list",

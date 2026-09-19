@@ -57,6 +57,13 @@ pub struct ListQuery {
     /// **GitLab ignores it** for the same reason too: a GitLab pipeline already
     /// is the whole commit, and its requests are unchanged whatever this holds.
     pub commit_group: Option<u64>,
+    /// GitHub's `expect`: the workflow files every commit group must hold a
+    /// run of. Read only with [`Self::commit_group`] set.
+    ///
+    /// ⚠️ On the shared query for the same reason as [`Self::workflow`], and
+    /// **GitLab ignores it**: a GitLab pipeline that never created a child
+    /// already says so itself, as a bridge with no downstream pipeline.
+    pub expect: Vec<String>,
 }
 
 impl ListQuery {
@@ -69,6 +76,7 @@ impl ListQuery {
             order_by: "id",
             workflow: None,
             commit_group: None,
+            expect: Vec::new(),
         }
     }
 
@@ -82,6 +90,7 @@ impl ListQuery {
             order_by: "updated_at",
             workflow: None,
             commit_group: None,
+            expect: Vec::new(),
         }
     }
 
@@ -99,6 +108,12 @@ impl ListQuery {
     /// run per pipeline when `None`.
     pub fn in_commit_groups(mut self, window: Option<u64>) -> Self {
         self.commit_group = window;
+        self
+    }
+
+    /// The same query, with the workflows every commit group must hold.
+    pub fn expecting(mut self, workflows: &[String]) -> Self {
+        self.expect = workflows.to_vec();
         self
     }
 

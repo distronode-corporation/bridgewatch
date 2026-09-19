@@ -153,6 +153,7 @@ describe("provider applicability", () => {
     const marked = REGISTRY.filter((e) => e.provider);
     expect(marked.map((e) => e.path).sort()).toEqual([
       "watches.*.dive.depth",
+      "watches.*.expect",
       "watches.*.fan_out_secs",
       "watches.*.group",
       "watches.*.workflow",
@@ -172,6 +173,9 @@ describe("provider applicability", () => {
     expect(inapplicableNote(entry("watches.*.group"), "gitlab")).toMatch(/already is the whole commit/);
     expect(inapplicableNote(entry("watches.*.fan_out_secs"), "gitlab")).toMatch(/commit group/);
     expect(inapplicableNote(entry("watches.*.group"), "github")).toBeNull();
+    // `expect` is GitHub's too: GitLab reports a missing child on its own.
+    expect(inapplicableNote(entry("watches.*.expect"), "gitlab")).toMatch(/already reads dead/);
+    expect(inapplicableNote(entry("watches.*.expect"), "github")).toBeNull();
     // ...and dive selects workflow names on a commit group, so it is dimmed for neither.
     expect(inapplicableNote(entry("watches.*.dive.bridges"), "github")).toBeNull();
     expect(inapplicableNote(entry("watches.*.dive.exclude"), "github")).toBeNull();

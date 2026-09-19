@@ -464,6 +464,16 @@ pub struct Watch {
     /// one row. Absent is 90.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fan_out_secs: Option<u64>,
+    /// GitHub only, and only with `group = "commit"`: workflow FILE names
+    /// (`ci.yml`) that must have a run in every commit group this watch shows.
+    /// Once a group has settled and its `fan_out_secs` window has passed, an
+    /// expected workflow with no run in it is a dead bridge, the way a GitLab
+    /// trigger job that created no child is. Until then it is a pending job.
+    /// It applies to every group the watch shows, whatever its event, so list
+    /// only workflows that run on EVERY event in `sources`, and none whose
+    /// `paths` or `branches` filter can legitimately skip a push.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expect: Vec<String>,
     /// Pipeline sources to accept. Empty means all of them.
     #[serde(default)]
     pub sources: Vec<String>,
@@ -520,6 +530,34 @@ impl Watch {
             GroupMode::Commit => Some(self.fan_out_secs.unwrap_or(DEFAULT_FAN_OUT_SECS)),
         }
     }
+
+    /// The workflows every commit group must hold, or none when one row is one
+    /// run.
+    ///
+    /// ⚠️ Empty under `group = "run"`, where `expect` is inert (validation says
+    /// so): a row there is one run of one workflow, and demanding a second
+    /// workflow of it would read every row dead.
+    pub fn expected_workflows(&self) -> &[String] {
+        match self.group {
+            GroupMode::Run => &[],
+            GroupMode::Commit => &self.expect,
+        }
+    }
+}
+
+/// The workflow FILE an `expect` entry or a run's `path` names.
+///
+/// `ci.yml`, `.github/workflows/ci.yml` and `.github/workflows/ci.yml@main`
+/// are all `ci.yml`. GitHub loads workflow files only from directly inside
+/// `.github/workflows/`, so the last segment is unique in a repository, and an
+/// entry written as the whole path means the same file as one written short.
+/// An `@ref` suffix is dropped defensively: the reusable-workflow references
+/// GitHub reports carry one on the same kind of path, and whether a run's own
+/// `path` ever does has not been measured. Stripping it costs nothing if not.
+pub fn workflow_file(path: &str) -> &str {
+    let path = path.trim();
+    let path = path.split_once('@').map_or(path, |(file, _)| file);
+    path.rsplit('/').next().unwrap_or(path).trim()
 }
 
 /// The commit-group window when `fan_out_secs` is absent.

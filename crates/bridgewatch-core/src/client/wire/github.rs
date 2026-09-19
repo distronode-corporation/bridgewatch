@@ -59,6 +59,13 @@ pub struct WorkflowRun {
     /// file in the repository, not a person, so it is inside the allow-list.
     #[serde(default)]
     pub name: Option<String>,
+    /// The workflow's file, `.github/workflows/ci.yml`. Read only by the
+    /// commit group, where it is what `expect` matches: unlike `name` it is
+    /// unique in the repository and does not move when somebody edits the
+    /// workflow's `name:`. A path in the repository, not a person, so it is
+    /// inside the allow-list.
+    #[serde(default)]
+    pub path: Option<String>,
     /// The per-workflow run number, the `#42` GitHub's UI shows.
     #[serde(default)]
     pub run_number: Option<u64>,
