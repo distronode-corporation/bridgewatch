@@ -39,6 +39,9 @@ body line with a bracket.
   secondary watches printed `icon: unknown` and exited 4 over a verdict that had been read
   perfectly well, so a failed schedule never exited 1. Without `--watch`, and in the tray,
   nothing changes: primary watches alone decide.
+- Log output no longer carries ANSI colour escapes when stderr is not a terminal, so a
+  piped `bridgewatch check` and the desktop app's lines in the systemd journal are plain
+  text. `NO_COLOR` is honoured.
 - The `bridgewatch` CLI now follows the logging rule the app and the README already
   described: `[log].level` applies to bridgewatch's own crates and leaves everything else
   at `warn`, and an empty `RUST_LOG` counts as unset instead of silencing the run. A

@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bridgewatch_core::client::{ClientError, FixtureTransport, GitLabClient, RequestRing};
 use bridgewatch_core::config::edit::{ConfigEditor, Edit};
@@ -15,7 +16,7 @@ use bridgewatch_core::config::{self, Config};
 use bridgewatch_core::poll::Poller;
 use bridgewatch_core::token::Secret;
 
-/// Everything a scoped subscriber wrote.
+/// Everything the binary's one subscriber has written so far.
 #[derive(Clone, Default)]
 pub struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
 
@@ -40,23 +41,208 @@ impl Captured {
     }
 }
 
-/// Run `f` with everything logged at `level` or louder captured, and nothing
-/// installed globally.
+/// The one subscriber a log-capturing test binary ever installs, and the buffer
+/// it writes into.
 ///
-/// ⚠ `with_default` is thread-scoped, so anything asynchronous has to be
-/// POLLED inside the closure: a subscriber set here and a `block_on` outside it
-/// would capture nothing, and the assertions would read as a missing log line
-/// rather than as a broken harness.
-pub fn with_log<T>(level: tracing::Level, f: impl FnOnce() -> T) -> (T, String) {
-    let captured = Captured::default();
-    let writer = captured.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_ansi(false)
-        .with_writer(move || writer.clone())
-        .finish();
-    let out = tracing::subscriber::with_default(subscriber, f);
-    (out, captured.text())
+/// ⛔ It is GLOBAL and installed once, where the obvious thing is a scoped
+/// subscriber per test, because `tracing` answers "is this callsite enabled"
+/// out of two caches that a scoped subscriber cannot keep honest under a
+/// parallel test runner:
+///
+/// * the per-callsite `Interest`, cached in `DefaultCallsite::interest` and
+///   read by every `debug!` before anything else. `tracing-core`'s
+///   `rebuild_callsite_interest` ends in `interest.unwrap_or_else(
+///   Interest::never)`, so a callsite first reached on a thread with NO
+///   subscriber is cached as `never` for the life of the process, and the macro
+///   then short-circuits on `!interest.is_never()` without ever consulting a
+///   dispatcher;
+/// * the process-wide max level hint, `LevelFilter::set_max` called from
+///   `Callsites::rebuild_interest`, which is recomputed over whichever
+///   dispatchers are registered at that instant.
+///
+/// `tracing::subscriber::with_default` is THREAD-scoped and builds a fresh
+/// `Dispatch` per call, so a binary whose other tests drive the same code with
+/// no subscriber races the one test that installs one. That is not theoretical:
+/// on Linux `the_request_debug_line_never_carries_the_token` captured NOTHING
+/// on 12 of 12 runs, and its three `assert!(!log.contains(..))` lines all passed
+/// vacuously against the empty string.
+///
+/// One `Dispatch`, created once, settles both caches by construction:
+/// `Dispatch::new` calls `callsite::register_dispatch`, which rebuilds the
+/// interest of every callsite already registered and sets the max level; and
+/// because it is the only `Dispatch` the process ever builds, every later
+/// registration is computed against it from whichever thread gets there first.
+///
+/// ⛔ The remaining half of the guarantee is not in this file: a callsite
+/// reached BEFORE the install still caches `never`, and the rebuild that would
+/// fix it can lose the race to the registering thread's own store. So a binary
+/// that captures logs must contain ONLY tests that go through [`with_log`] (or
+/// [`start_capture`]) first, which is why the capturing tests live in test
+/// files of their own.
+static CAPTURE: std::sync::OnceLock<Captured> = std::sync::OnceLock::new();
+
+/// Distinguishes one [`with_log`] call's lines from another's.
+static NEXT_CASE: AtomicU64 = AtomicU64::new(0);
+
+fn capture() -> &'static Captured {
+    CAPTURE.get_or_init(|| {
+        let captured = Captured::default();
+        let writer = captured.clone();
+        // TRACE and no filter: the level a line was logged at is then a
+        // property of the line, which is what a test asserting "this is debug
+        // and not info" reads. Filtering here instead would put that assertion
+        // back on a subscriber, which is the thing that cannot be scoped.
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("the only subscriber this test binary installs");
+        captured
+    })
+}
+
+/// Install the capturing subscriber for setup that runs OUTSIDE [`with_log`].
+///
+/// Nothing a test builds before its first capture logs today, but "it happens
+/// not to" is the property that broke here once already: reaching a callsite
+/// before the subscriber exists is what poisons the interest cache.
+pub fn start_capture() {
+    let _ = capture();
+}
+
+/// Run `f` against the binary's shared subscriber and return only the lines
+/// `f` produced.
+///
+/// Every test in the binary writes into one buffer, so the selection happens
+/// after the fact rather than through a subscriber: each call takes a unique
+/// case number, `f` runs inside a span carrying it, and the formatter stamps
+/// that span onto every line logged while it is entered.
+///
+/// ⚠ Anything asynchronous still has to be POLLED inside the closure. The span
+/// is entered on this thread, so a `block_on` outside it would produce lines
+/// carrying no marker, and they would be filtered out here.
+pub fn with_log<T>(f: impl FnOnce() -> T) -> (T, String) {
+    let captured = capture();
+    let case = NEXT_CASE.fetch_add(1, Ordering::Relaxed);
+    let out = tracing::info_span!("bw_case", case).in_scope(f);
+    // The closing brace is part of the marker: without it `case=1` also selects
+    // `case=10`.
+    let marker = format!("bw_case{{case={case}}}");
+    let text = captured
+        .text()
+        .lines()
+        .filter(|line| line.contains(&marker))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    (out, text)
+}
+
+/// The level `tracing` recorded on the first captured line containing `needle`.
+///
+/// ⛔ This is how a test proves a line is `debug` rather than `info` now that
+/// the subscriber is shared and records everything. Installing two subscribers
+/// at two levels and comparing what each saw asserted the same thing about the
+/// FILTER; this asserts it about the event, which is where the decision
+/// actually lives.
+pub fn level_of(log: &str, needle: &str) -> Option<String> {
+    let line = log.lines().find(|line| line.contains(needle))?;
+    line.split_whitespace()
+        .find(|word| matches!(*word, "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE"))
+        .map(str::to_string)
+}
+
+/// A transport that replays a canned list of responses and records what it was
+/// asked for, headers included.
+///
+/// Shared rather than private to `tests/client.rs` because the log-capturing
+/// half of the client's tests lives in `tests/client_log.rs`, in a process of
+/// its own, and both halves have to drive the same double or the one that
+/// proves the credential never reaches a log line would be proving it about
+/// some other code path.
+#[derive(Debug, Default)]
+pub struct Canned {
+    responses: std::sync::Mutex<Vec<(u16, String, Option<String>)>>,
+    seen: std::sync::Mutex<Vec<bridgewatch_core::client::HttpRequest>>,
+}
+
+impl Canned {
+    /// Answer with each `(status, body, next_page)` in turn, then with `200 []`.
+    pub fn new(responses: Vec<(u16, String, Option<String>)>) -> Arc<Self> {
+        Arc::new(Self {
+            responses: std::sync::Mutex::new(responses),
+            seen: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Every path asked for, in order.
+    pub fn paths(&self) -> Vec<String> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.path.clone())
+            .collect()
+    }
+
+    /// Every header sent, in order.
+    pub fn headers(&self) -> Vec<(String, String)> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|r| r.headers.clone())
+            .collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl bridgewatch_core::client::Transport for Canned {
+    async fn execute(
+        &self,
+        request: bridgewatch_core::client::HttpRequest,
+    ) -> Result<bridgewatch_core::client::HttpResponse, ClientError> {
+        self.seen.lock().unwrap().push(request);
+        let mut responses = self.responses.lock().unwrap();
+        let (status, body, next_page) = if responses.is_empty() {
+            (200, "[]".to_string(), None)
+        } else {
+            responses.remove(0)
+        };
+        Ok(bridgewatch_core::client::HttpResponse {
+            status,
+            body,
+            next_page,
+            ratelimit_remaining: Some(1999),
+            ratelimit_reset: Some(1789669380),
+            retry_after: None,
+        })
+    }
+}
+
+/// A client over `transport`, spelling its credential the way `header` says.
+///
+/// The token is the same literal in every test so that an assertion about what
+/// did NOT leak has something specific to look for.
+pub fn client_with(
+    transport: Arc<dyn bridgewatch_core::client::Transport>,
+    header: bridgewatch_core::config::AuthHeader,
+) -> (GitLabClient, RequestRing) {
+    let account = bridgewatch_core::config::Account {
+        header,
+        ..Default::default()
+    };
+    let ring = RequestRing::new(10);
+    (
+        GitLabClient::new(
+            &account,
+            &Secret::new("glpat-SECRET"),
+            transport,
+            ring.clone(),
+        ),
+        ring,
+    )
 }
 
 /// A current-thread runtime, for a test that has to drive a future inside

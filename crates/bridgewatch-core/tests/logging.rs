@@ -6,14 +6,32 @@
 //! is the per-tick and per-request detail underneath it. The whole application
 //! used to have exactly one `info` call, which made the default level
 //! indistinguishable from silence.
+//!
+//! ⛔ EVERY TEST IN THIS FILE CAPTURES LOGS, and that is a rule rather than an
+//! accident. The binary installs one shared subscriber the first time
+//! `support::with_log` or `support::start_capture` is called, and a `tracing`
+//! callsite reached before that is cached as DISABLED for the life of the
+//! process, so a test added here that drives a poller outside a capture would
+//! silently empty another test's. The mechanism is written out against
+//! `tracing-core`'s source in `tests/support/mod.rs`. `describe_load` has no
+//! callsite of its own and is tested in `tests/config.rs` with the rest of the
+//! configuration surface.
+//!
+//! ⚠ The level a line was logged at is asserted ON the line
+//! (`support::level_of`) rather than by installing one subscriber per level.
+//! It is the same guarantee, stated where the decision is actually made.
 
 mod support;
 
 use bridgewatch_core::config::edit::Edit;
 use bridgewatch_core::poll::Poller;
-use support::{runtime, with_log};
+use support::{level_of, runtime, with_log};
 
 fn poller_for(fixture: &str) -> Poller {
+    // Building a poller logs nothing today, but "nothing logs here yet" is
+    // exactly the kind of property that decays: the subscriber has to exist
+    // before any code under test can reach a callsite.
+    support::start_capture();
     let config = support::config_with(&[] as &[Edit]);
     let dir = support::fixtures_dir().join(fixture);
     support::fixture_poller(&config, &dir).0
@@ -28,10 +46,15 @@ fn a_verdict_transition_is_logged_at_info_and_only_when_it_moves() {
     let runtime = runtime();
     let mut poller = poller_for("mixed-primary-green-secondary-red");
 
-    let (_, first) = with_log(tracing::Level::INFO, || runtime.block_on(poller.tick()));
+    let (_, first) = with_log(|| runtime.block_on(poller.tick()));
     assert!(
         first.contains("watch verdict changed"),
         "the first tick says what it found: {first}"
+    );
+    assert_eq!(
+        level_of(&first, "watch verdict changed"),
+        Some("INFO".to_string()),
+        "a transition is the line a default-ish run is FOR: {first}"
     );
     assert!(
         first.contains("watch=\"main-push\"") && first.contains("to=\"deployed\""),
@@ -46,7 +69,12 @@ fn a_verdict_transition_is_logged_at_info_and_only_when_it_moves() {
     );
     assert!(first.contains("from=\"-\""), "no previous verdict: {first}");
 
-    let (_, second) = with_log(tracing::Level::INFO, || runtime.block_on(poller.tick()));
+    let (_, second) = with_log(|| runtime.block_on(poller.tick()));
+    assert!(
+        !second.is_empty(),
+        "the second tick logged nothing at all, so the assertion below would \
+         hold for the wrong reason: {second}"
+    );
     assert!(
         !second.contains("watch verdict changed"),
         "nothing moved, so nothing is said: {second}"
@@ -60,35 +88,20 @@ fn the_per_tick_line_is_debug_and_not_info() {
     let runtime = runtime();
     let mut poller = poller_for("4cfaced9-deployed");
 
-    let (_, info) = with_log(tracing::Level::INFO, || runtime.block_on(poller.tick()));
-    assert!(!info.contains("tick complete"), "{info}");
-
-    let (_, debug) = with_log(tracing::Level::DEBUG, || runtime.block_on(poller.tick()));
-    assert!(debug.contains("tick complete"), "{debug}");
-    assert!(debug.contains("icon=deployed"), "{debug}");
+    let (_, log) = with_log(|| runtime.block_on(poller.tick()));
+    assert!(log.contains("tick complete"), "{log}");
+    assert_eq!(
+        level_of(&log, "tick complete"),
+        Some("DEBUG".to_string()),
+        "one line every few seconds is not something `info` prints: {log}"
+    );
+    assert!(log.contains("icon=deployed"), "{log}");
     // The request detail is the other half of `debug`, and it is what says
     // whether a tick asked for anything at all.
-    assert!(debug.contains("bridgewatch_core::client"), "{debug}");
-}
-
-/// `describe_load` is the line both front ends print when they have read a
-/// configuration, and the log level is part of it: `[log].level` is read from
-/// the file being reported, but `RUST_LOG` beats it, and nothing else would say
-/// so.
-#[test]
-fn the_config_line_names_the_file_the_counts_and_the_level() {
-    let config = support::config_with(&[] as &[Edit]);
-    let line = bridgewatch_core::config::describe_load(
-        "using /tmp/bw/config.toml",
-        Some(&config),
-        "warn,bridgewatch_core=info",
+    assert!(log.contains("bridgewatch_core::client"), "{log}");
+    assert_eq!(
+        level_of(&log, "bridgewatch_core::client"),
+        Some("DEBUG".to_string()),
+        "and it is debug too: {log}"
     );
-    assert!(line.contains("/tmp/bw/config.toml"), "{line}");
-    assert!(line.contains("3 watch(es)"), "{line}");
-    assert!(line.contains("1 account(s)"), "{line}");
-    assert!(line.contains("warn,bridgewatch_core=info"), "{line}");
-
-    let broken = bridgewatch_core::config::describe_load("reloaded /tmp/bw/config.toml", None, "");
-    assert!(broken.contains("does not load"), "{broken}");
-    assert!(broken.contains("nothing is watched"), "{broken}");
 }

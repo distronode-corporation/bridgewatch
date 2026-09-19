@@ -12,6 +12,7 @@
 //! "less, please" means less of all of it. `RUST_LOG` is the escape hatch for
 //! anything finer.
 
+use std::io::IsTerminal;
 use std::sync::{Mutex, OnceLock};
 
 use tracing_subscriber::layer::SubscriberExt;
@@ -42,9 +43,21 @@ pub fn init() {
     let from_env = rust_log.as_deref().is_some_and(|v| !v.trim().is_empty());
     let initial = directive(rust_log.as_deref(), None);
     let (filter, handle) = reload::Layer::new(EnvFilter::new(&initial));
+    // This process's stderr is the systemd user journal on Linux and a pipe
+    // under launchd, so colouring it (the fmt layer's default) writes escapes
+    // into every recorded line. The rule is `config::use_ansi` in the core,
+    // shared with the CLI's `init_tracing`.
+    let ansi = bridgewatch_core::config::use_ansi(
+        std::io::stderr().is_terminal(),
+        std::env::var("NO_COLOR").ok().as_deref(),
+    );
     let installed = tracing_subscriber::registry()
         .with(filter)
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_ansi(ansi),
+        )
         .try_init()
         .is_ok();
     if installed && !from_env {

@@ -1,92 +1,29 @@
-//! The GitLab client: URL shapes, pagination, status mapping, the request ring,
-//! and the promise that a token never reaches a log line.
+//! The GitLab client: URL shapes, pagination, status mapping and the request
+//! ring.
+//!
+//! ⛔ The promise that a token never reaches a LOG line is tested in
+//! `tests/client_log.rs` instead, and the split is load-bearing rather than
+//! tidiness: the tests here drive the client's `debug!` callsite with no
+//! subscriber installed, which is exactly what poisons `tracing`'s interest
+//! cache for a test trying to capture it. See the `CAPTURE` comment in
+//! `tests/support/mod.rs`.
 
 mod support;
 
 use std::sync::{Arc, Mutex};
 
-use bridgewatch_core::client::http::{HttpRequest, HttpResponse, Transport};
+use bridgewatch_core::client::http::HttpRequest;
 use bridgewatch_core::client::{ClientError, GitLabClient, ListQuery, RequestRing};
 use bridgewatch_core::config::{Account, AuthHeader, ProjectRef};
 use bridgewatch_core::status::Status;
 use bridgewatch_core::token::Secret;
-
-/// A transport that replays a scripted list of responses and records what it
-/// was asked for, headers included.
-#[derive(Debug, Default)]
-struct Scripted {
-    responses: Mutex<Vec<(u16, String, Option<String>)>>,
-    seen: Mutex<Vec<HttpRequest>>,
-}
-
-impl Scripted {
-    fn new(responses: Vec<(u16, String, Option<String>)>) -> Arc<Self> {
-        Arc::new(Self {
-            responses: Mutex::new(responses),
-            seen: Mutex::new(Vec::new()),
-        })
-    }
-    fn paths(&self) -> Vec<String> {
-        self.seen
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|r| r.path.clone())
-            .collect()
-    }
-    fn headers(&self) -> Vec<(String, String)> {
-        self.seen
-            .lock()
-            .unwrap()
-            .iter()
-            .flat_map(|r| r.headers.clone())
-            .collect()
-    }
-}
-
-#[async_trait::async_trait]
-impl Transport for Scripted {
-    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ClientError> {
-        self.seen.lock().unwrap().push(request);
-        let mut responses = self.responses.lock().unwrap();
-        let (status, body, next_page) = if responses.is_empty() {
-            (200, "[]".to_string(), None)
-        } else {
-            responses.remove(0)
-        };
-        Ok(HttpResponse {
-            status,
-            body,
-            next_page,
-            ratelimit_remaining: Some(1999),
-            ratelimit_reset: Some(1789669380),
-            retry_after: None,
-        })
-    }
-}
-
-fn client_with(transport: Arc<dyn Transport>, header: AuthHeader) -> (GitLabClient, RequestRing) {
-    let account = Account {
-        header,
-        ..Account::default()
-    };
-    let ring = RequestRing::new(10);
-    (
-        GitLabClient::new(
-            &account,
-            &Secret::new("glpat-SECRET"),
-            transport,
-            ring.clone(),
-        ),
-        ring,
-    )
-}
+use support::{Canned, client_with};
 
 /// An exact ref and a single source are pushed to the API; the ordering is by
 /// id so "newest" is not a guess.
 #[tokio::test]
 async fn an_exact_ref_and_one_source_go_into_the_query() {
-    let transport = Scripted::new(vec![(200, "[]".into(), None)]);
+    let transport = Canned::new(vec![(200, "[]".into(), None)]);
     let (client, _) = client_with(transport.clone(), AuthHeader::PrivateToken);
 
     client
@@ -114,7 +51,7 @@ async fn an_exact_ref_and_one_source_go_into_the_query() {
 /// `updated_at` and filtered here.
 #[tokio::test]
 async fn a_scanning_query_omits_ref_and_orders_by_updated_at() {
-    let transport = Scripted::new(vec![(200, "[]".into(), None)]);
+    let transport = Canned::new(vec![(200, "[]".into(), None)]);
     let (client, _) = client_with(transport.clone(), AuthHeader::PrivateToken);
 
     client
@@ -131,7 +68,7 @@ async fn a_scanning_query_omits_ref_and_orders_by_updated_at() {
 /// A project path is URL-encoded into the URL.
 #[tokio::test]
 async fn a_project_path_is_url_encoded() {
-    let transport = Scripted::new(vec![(200, "[]".into(), None)]);
+    let transport = Canned::new(vec![(200, "[]".into(), None)]);
     let (client, _) = client_with(transport.clone(), AuthHeader::PrivateToken);
 
     client
@@ -154,7 +91,7 @@ async fn a_project_path_is_url_encoded() {
 async fn jobs_paginate_on_x_next_page() {
     let page1 = r#"[{"id":1,"name":"a","status":"success"}]"#.to_string();
     let page2 = r#"[{"id":2,"name":"b","status":"failed"}]"#.to_string();
-    let transport = Scripted::new(vec![(200, page1, Some("2".into())), (200, page2, None)]);
+    let transport = Canned::new(vec![(200, page1, Some("2".into())), (200, page2, None)]);
     let (client, _) = client_with(transport.clone(), AuthHeader::PrivateToken);
 
     let jobs = client.pipeline_jobs(&ProjectRef::Id(1), 42).await.unwrap();
@@ -174,7 +111,7 @@ async fn jobs_paginate_on_x_next_page() {
 #[tokio::test]
 async fn pagination_stops_when_the_next_page_does_not_advance() {
     let body = r#"[{"id":1,"name":"a","status":"success"}]"#.to_string();
-    let transport = Scripted::new(vec![
+    let transport = Canned::new(vec![
         (200, body.clone(), Some("1".into())),
         (200, body, Some("1".into())),
     ]);
@@ -206,7 +143,7 @@ async fn statuses_map_to_the_right_errors() {
         (307, "redirect"),
         (308, "redirect"),
     ] {
-        let transport = Scripted::new(vec![(status, "{}".into(), None)]);
+        let transport = Canned::new(vec![(status, "{}".into(), None)]);
         let (client, _) = client_with(transport, AuthHeader::PrivateToken);
         let err = client
             .get_pipeline(&ProjectRef::Id(1), 1)
@@ -232,7 +169,7 @@ async fn statuses_map_to_the_right_errors() {
 /// panic.
 #[tokio::test]
 async fn a_bad_body_is_a_decode_error() {
-    let transport = Scripted::new(vec![(200, "not json at all".into(), None)]);
+    let transport = Canned::new(vec![(200, "not json at all".into(), None)]);
     let (client, _) = client_with(transport, AuthHeader::PrivateToken);
     let err = client
         .get_pipeline(&ProjectRef::Id(1), 7)
@@ -248,7 +185,7 @@ async fn a_bad_body_is_a_decode_error() {
 #[tokio::test]
 async fn an_unknown_status_decodes_instead_of_failing() {
     let body = r#"{"id":1,"sha":"abc","ref":"main","status":"quantum_superposition"}"#;
-    let transport = Scripted::new(vec![(200, body.into(), None)]);
+    let transport = Canned::new(vec![(200, body.into(), None)]);
     let (client, _) = client_with(transport, AuthHeader::PrivateToken);
 
     let pipeline = client.get_pipeline(&ProjectRef::Id(1), 1).await.unwrap();
@@ -271,7 +208,7 @@ async fn the_auth_header_is_configurable() {
             "Bearer glpat-SECRET",
         ),
     ] {
-        let transport = Scripted::new(vec![(200, "[]".into(), None)]);
+        let transport = Canned::new(vec![(200, "[]".into(), None)]);
         let (client, _) = client_with(transport.clone(), header);
         client
             .list_pipelines(&ProjectRef::Id(1), &ListQuery::scan(10))
@@ -285,7 +222,7 @@ async fn the_auth_header_is_configurable() {
 /// bounded. Nothing in it is the token.
 #[tokio::test]
 async fn the_request_ring_records_and_never_holds_the_token() {
-    let transport = Scripted::new(vec![]);
+    let transport = Canned::new(vec![]);
     let (client, ring) = client_with(transport, AuthHeader::PrivateToken);
 
     for i in 0..15u64 {
@@ -313,7 +250,7 @@ async fn the_request_ring_records_and_never_holds_the_token() {
 /// A failed request is recorded too, with the error and no status.
 #[tokio::test]
 async fn a_failed_request_is_still_recorded() {
-    let transport = Scripted::new(vec![(429, "{}".into(), None)]);
+    let transport = Canned::new(vec![(429, "{}".into(), None)]);
     let (client, ring) = client_with(transport, AuthHeader::PrivateToken);
     let _ = client.get_pipeline(&ProjectRef::Id(1), 1).await;
 
@@ -336,7 +273,7 @@ async fn a_failed_request_is_still_recorded() {
 #[test]
 fn debug_never_prints_the_credential_header() {
     for header in [AuthHeader::PrivateToken, AuthHeader::AuthorizationBearer] {
-        let (client, _) = client_with(Scripted::new(vec![]), header);
+        let (client, _) = client_with(Canned::new(vec![]), header);
         let rendered = format!("{client:?} {client:#?}");
         assert!(!rendered.contains("glpat-SECRET"), "{rendered}");
         assert!(rendered.contains("<redacted>"), "{rendered}");
@@ -357,36 +294,6 @@ fn debug_never_prints_the_credential_header() {
     assert!(!rendered.contains("glpat-SECRET"), "{rendered}");
     assert!(rendered.contains("PRIVATE-TOKEN") && rendered.contains("<redacted>"));
     assert!(rendered.contains("/projects/1"), "the rest is still useful");
-}
-
-/// ⛔ The debug LOG is the other place a credential could escape, and unlike
-/// the request ring it is a stream of free text that people paste into issues.
-/// `[log].level = "debug"` prints one line per request: the method, the path,
-/// the status, the size and the time, and nothing whatever about the header it
-/// was sent with. Asserted for both credential spellings, because only one of
-/// them has the word "token" in its name.
-#[test]
-fn the_request_debug_line_never_carries_the_token() {
-    let runtime = support::runtime();
-    for header in [AuthHeader::PrivateToken, AuthHeader::AuthorizationBearer] {
-        let transport = Scripted::new(vec![(200, "[]".into(), None)]);
-        let (client, _) = client_with(transport, header);
-        let (result, log) = support::with_log(tracing::Level::DEBUG, || {
-            runtime.block_on(client.list_pipelines(&ProjectRef::Id(1), &ListQuery::scan(10)))
-        });
-        result.expect("the scripted response is a success");
-
-        assert!(!log.contains("glpat-SECRET"), "{log}");
-        assert!(!log.to_ascii_lowercase().contains("bearer"), "{log}");
-        assert!(
-            log.contains("path=\"/projects/1/pipelines"),
-            "the path is what makes the line worth printing: {log}"
-        );
-        assert!(
-            log.contains("status=200") && log.contains("bytes=2"),
-            "{log}"
-        );
-    }
 }
 
 /// A `Secret` cannot be printed by accident.
