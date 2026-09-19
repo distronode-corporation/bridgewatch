@@ -7,6 +7,7 @@
 //! the PROVIDER: the poller, the fixture recorder and the setup wizard hold one
 //! of these and never name GitLab.
 
+pub mod conditional;
 pub mod fixture;
 pub mod github;
 pub mod gitlab;
@@ -15,6 +16,7 @@ pub mod wire;
 
 use std::sync::Arc;
 
+pub use conditional::ConditionalTransport;
 pub use fixture::FixtureTransport;
 pub use github::GitHubClient;
 pub use gitlab::{GitLabClient, ListQuery};
@@ -98,6 +100,16 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
 /// a failure case (an App installation token has to be exchanged before it can
 /// be used), and an infallible signature here would make adding one a change at
 /// every call site.
+///
+/// ⚠️ GitHub's client is handed its transport wrapped in a
+/// [`ConditionalTransport`], one per client and so one per account: GitHub does
+/// not charge an authenticated 304 against the rate limit, which is what lets a
+/// settled watch poll for free. GitLab's is not wrapped. gitlab.com answers
+/// `If-None-Match` too, but a 304 is a status GitLab's classifier reads as a
+/// redirect, its budget is 24 times larger, and no recorded fixture carries an
+/// `ETag` that could prove a GitLab watch reads the same with it on as off.
+/// Switching it on is this line and a 304 arm in `gitlab::status_error`, and it
+/// deserves a packet of its own.
 pub fn client_for(
     account: &Account,
     token: &Secret,
@@ -106,7 +118,15 @@ pub fn client_for(
 ) -> Result<Arc<dyn CiClient>, ClientError> {
     match account.provider {
         Provider::Gitlab => Ok(Arc::new(GitLabClient::new(account, token, transport, ring))),
-        Provider::Github => Ok(Arc::new(GitHubClient::new(account, token, transport, ring))),
+        Provider::Github => {
+            let conditional: Arc<dyn Transport> = Arc::new(ConditionalTransport::new(transport));
+            Ok(Arc::new(GitHubClient::new(
+                account,
+                token,
+                conditional,
+                ring,
+            )))
+        }
     }
 }
 

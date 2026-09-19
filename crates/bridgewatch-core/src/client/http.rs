@@ -76,9 +76,11 @@ pub struct HttpResponse {
     pub body: String,
     /// `x-next-page`, when GitLab said there is one.
     pub next_page: Option<String>,
-    /// `ratelimit-remaining`.
+    /// `ratelimit-remaining` (GitLab), or `x-ratelimit-remaining` (GitHub) when
+    /// the unprefixed header is absent.
     pub ratelimit_remaining: Option<u64>,
-    /// `ratelimit-reset`, a Unix timestamp.
+    /// `ratelimit-reset` (GitLab), or `x-ratelimit-reset` (GitHub) when the
+    /// unprefixed header is absent. A Unix timestamp either way.
     pub ratelimit_reset: Option<u64>,
     /// `retry-after`, in seconds.
     pub retry_after: Option<u64>,
@@ -87,7 +89,8 @@ pub struct HttpResponse {
     /// ⚠️ Kept byte for byte, weak `W/` prefix included, because the only thing
     /// it is ever used for is echoing back in `If-None-Match`, and a validator
     /// the server does not recognise is simply a cache miss it will not report.
-    /// Nothing reads it yet.
+    /// Read by [`super::conditional::ConditionalTransport`], which is the one
+    /// thing that sends it back.
     pub etag: Option<String>,
     /// `link`, exactly as received: the whole header, all relations, unparsed.
     ///
@@ -275,8 +278,22 @@ impl Transport for ReqwestTransport {
                 .map(str::to_string)
         };
         let next_page = header("x-next-page").filter(|s| !s.is_empty());
-        let ratelimit_remaining = header("ratelimit-remaining").and_then(|v| v.parse().ok());
-        let ratelimit_reset = header("ratelimit-reset").and_then(|v| v.parse().ok());
+        // ⛔ GitHub spells these `x-ratelimit-*` and GitLab spells them without
+        // the prefix. Reading only GitLab's spelling left both fields `None` on
+        // every GitHub response, which silently disarmed the classifier that
+        // tells an exhausted primary limit (a 403 with remaining 0) from a bad
+        // token, and left the debug pane's `rl` column blank. The unprefixed
+        // name is read FIRST so a GitLab response reads exactly as it always
+        // has; GitLab documents no `x-ratelimit-*` header, so the fallback is
+        // only ever reached on GitHub.
+        let number = |names: [&str; 2]| -> Option<u64> {
+            names
+                .iter()
+                .find_map(|name| header(name))
+                .and_then(|v| v.parse().ok())
+        };
+        let ratelimit_remaining = number(["ratelimit-remaining", "x-ratelimit-remaining"]);
+        let ratelimit_reset = number(["ratelimit-reset", "x-ratelimit-reset"]);
         let retry_after = header("retry-after").and_then(|v| v.parse().ok());
         // Taken verbatim: see the fields' docs. An empty header is not a value.
         let etag = header("etag").filter(|s| !s.is_empty());
