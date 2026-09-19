@@ -142,6 +142,11 @@ export interface WizardAnswers {
   deploy_markers: string[];
   schedule_watch: boolean;
   preflight_ref: string | null;
+  /**
+   * Make a NEW watch primary even though the file already has a primary one.
+   * Sent only when true, so every other payload is exactly what it was.
+   */
+  primary?: boolean;
   notify: NotifyAnswers | null;
   launch_at_login: boolean | null;
   live_secs: number | null;
@@ -154,6 +159,11 @@ export interface WizardPreview {
   warnings: DiagnosticView[];
   /** True when an existing file is being edited rather than started. */
   edited_existing: boolean;
+  /**
+   * The id of the primary watch already in the file, when the new watch was
+   * added as secondary because of it. Absent from an older shell.
+   */
+  secondary_because?: string | null;
 }
 
 /** `FailureKind`: what a rejected request failed on. */

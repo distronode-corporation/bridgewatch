@@ -13,9 +13,22 @@
     saveError: string | null;
     /** Where the token comes from, in words: the preview never holds it. */
     tokenNote: string | null;
+    /** The `primary` answer: primary beside a primary already in the file. */
+    primary?: boolean;
+    /** Change the `primary` answer; the preview is rebuilt from it. */
+    onprimary?: (primary: boolean) => void;
   }
 
-  let { preview, loading, error, saveDiagnostics, saveError, tokenNote }: Props = $props();
+  let {
+    preview,
+    loading,
+    error,
+    saveDiagnostics,
+    saveError,
+    tokenNote,
+    primary = false,
+    onprimary,
+  }: Props = $props();
 
   const where = (d: DiagnosticView) => (d.line !== null ? `line ${d.line}: ` : d.path ? `${d.path}: ` : "");
 </script>
@@ -41,6 +54,22 @@
       tabindex="0"
       aria-label="config.toml preview"
       data-slot="toml-preview">{preview.toml}</pre>
+    {#if preview.secondary_because}
+      <p class="text-muted-foreground text-xs" data-slot="secondary-note">
+        Added as a secondary watch, because "{preview.secondary_because}" is already primary and the tray icon
+        follows the primary watches.
+      </p>
+    {/if}
+    {#if onprimary && (preview.secondary_because || primary)}
+      <label class="flex items-center gap-2 text-xs" data-slot="primary-choice">
+        <input
+          type="checkbox"
+          checked={primary}
+          onchange={(event) => onprimary((event.currentTarget as HTMLInputElement).checked)}
+        />
+        Make this watch primary too
+      </label>
+    {/if}
     {#if tokenNote}
       <p class="text-muted-foreground text-xs" data-slot="token-note">{tokenNote}</p>
     {/if}

@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+use bridgewatch_core::client::github;
 use bridgewatch_core::config::{Config, ProjectRef, Provider};
 use bridgewatch_core::poll::PollNow;
 use bridgewatch_core::verdict::WatchView;
@@ -361,20 +362,13 @@ fn index_for(watches: &[WatchView], config: Option<&Config>) -> Option<String> {
     let account = config.accounts.get(&watch.account)?;
     match (&watch.project, account.provider) {
         // ⛔ GitHub's WEB host is not the account's `base_url`, which is the API
-        // host (`https://api.github.com`). One leading `api.` comes off, the
-        // same rule `wizard::gh_service_for` uses and for the same reason;
-        // GitHub Enterprise Server has no prefix to strip, because there the
-        // API is a path on the one host.
-        (ProjectRef::Path(path), Provider::Github) => {
-            let base = account.base_url.trim_end_matches('/');
-            let web = base
-                .split_once("://")
-                .map(|(scheme, rest)| {
-                    format!("{scheme}://{}", rest.strip_prefix("api.").unwrap_or(rest))
-                })
-                .unwrap_or_else(|| base.to_string());
-            Some(format!("{web}/{}/actions", path.trim_matches('/')))
-        }
+        // host (`https://api.github.com`). `web_origin` is the one rule for it,
+        // the same one the commit group's checks URL and the link check use.
+        (ProjectRef::Path(path), Provider::Github) => Some(format!(
+            "{}/{}/actions",
+            github::web_origin(&account.base_url),
+            path.trim_matches('/')
+        )),
         (ProjectRef::Path(path), Provider::Gitlab) => Some(format!(
             "{}/{}/-/pipelines",
             account.base_url.trim_end_matches('/'),

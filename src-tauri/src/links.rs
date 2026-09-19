@@ -3,7 +3,17 @@
 //! Every URL the app opens goes through [`open`]: the popover's pipeline and
 //! job links, the tray's "Open pipelines page", and anything added later. It
 //! opens a URL only when its scheme, host and port are those of a configured
-//! account's `base_url`.
+//! account's `base_url`, or, for a github account, of the web origin that
+//! `base_url` implies.
+//!
+//! ⛔ A github account's `base_url` is its API host (`https://api.github.com`),
+//! while every link GitHub hands out (a run's `html_url`, a commit's checks
+//! page, the Actions index) is on the WEB host (`https://github.com`). Trusting
+//! only `base_url` refused every one of them. The web origin comes from
+//! [`github::web_origin`], the same rule that built those URLs, so the two
+//! cannot drift: one leading `api.` comes off (github.com and a GHE.com
+//! data-residency host), and GitHub Enterprise Server keeps its host. Either
+//! way it is derived from the account's own configured host, never widened.
 //!
 //! Why here and not in the opener plugin's capability scope:
 //!
@@ -18,7 +28,8 @@
 //!
 //! The webview is granted no opener permission at all now; it asks the shell.
 
-use bridgewatch_core::config::Config;
+use bridgewatch_core::client::github;
+use bridgewatch_core::config::{Account, Config, Provider};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
@@ -34,7 +45,9 @@ pub fn check(candidate: &str, config: Option<&Config>) -> Result<Url, String> {
         return Err("no configuration is loaded, so no host is trusted".into());
     };
     let allowed = config.accounts.values().any(|account| {
-        Url::parse(account.base_url.trim()).is_ok_and(|base| same_origin(&base, &url))
+        trusted_origins(account)
+            .iter()
+            .any(|origin| Url::parse(origin).is_ok_and(|base| same_origin(&base, &url)))
     });
     if allowed {
         Ok(url)
@@ -43,6 +56,20 @@ pub fn check(candidate: &str, config: Option<&Config>) -> Result<Url, String> {
             "{} is not the host of any configured account",
             url.host_str().unwrap_or("(no host)")
         ))
+    }
+}
+
+/// The origins an account's links may be on: its `base_url`, and for a github
+/// account the web origin as well. A GitLab account's list is exactly what it
+/// always was.
+fn trusted_origins(account: &Account) -> Vec<String> {
+    let base = account.base_url.trim().to_string();
+    match account.provider {
+        Provider::Gitlab => vec![base],
+        Provider::Github => {
+            let web = github::web_origin(&base);
+            vec![base, web]
+        }
     }
 }
 
@@ -122,6 +149,79 @@ mod tests {
     fn userinfo_does_not_change_the_host() {
         let c = config(&["https://gitlab.com"]);
         assert!(check("https://gitlab.com@evil.example/", Some(&c)).is_err());
+    }
+
+    fn github(base: Option<&str>) -> Config {
+        let base = base
+            .map(|b| format!("base_url = \"{b}\"\n"))
+            .unwrap_or_default();
+        bridgewatch_core::config::parse_str(
+            &format!("[accounts.gh]\nprovider = \"github\"\n{base}"),
+            Path::new("x.toml"),
+        )
+        .expect("fixture parses")
+        .config
+    }
+
+    /// The three links the app opens for a github.com account: a run's
+    /// `html_url`, a commit group's checks page and the tray's Actions index.
+    /// All three are on the WEB host, not on the API host `base_url` names.
+    #[test]
+    fn a_github_com_account_opens_its_links_on_the_web_host() {
+        let c = github(None);
+        for good in [
+            "https://github.com/acme-corp/monorepo/actions/runs/4103",
+            "https://github.com/acme-corp/monorepo/commit/0f1e2d3c/checks",
+            "https://github.com/acme-corp/monorepo/actions",
+            "https://api.github.com/repos/acme-corp/monorepo",
+        ] {
+            assert!(check(good, Some(&c)).is_ok(), "{good:?} was refused");
+        }
+    }
+
+    #[test]
+    fn a_github_enterprise_server_account_trusts_its_one_host() {
+        let c = github(Some("https://ghe.acme.com"));
+        assert!(check("https://ghe.acme.com/o/r/actions/runs/9", Some(&c)).is_ok());
+        assert!(check("https://acme.com/o/r", Some(&c)).is_err());
+        assert!(check("https://github.com/o/r", Some(&c)).is_err());
+    }
+
+    #[test]
+    fn a_data_residency_account_trusts_its_web_and_api_hosts() {
+        let c = github(Some("https://api.acme.ghe.com"));
+        assert!(check("https://acme.ghe.com/o/r/actions/runs/9", Some(&c)).is_ok());
+        assert!(check("https://api.acme.ghe.com/repos/o/r", Some(&c)).is_ok());
+        assert!(check("https://ghe.com/o/r", Some(&c)).is_err());
+        assert!(check("https://other.ghe.com/o/r", Some(&c)).is_err());
+        assert!(check("https://github.com/o/r", Some(&c)).is_err());
+    }
+
+    #[test]
+    fn look_alike_hosts_are_refused_for_a_github_account() {
+        let c = github(None);
+        for bad in [
+            "https://github.com.evil.example/o/r",
+            "https://evilgithub.com/o/r",
+            "https://api.github.com.evil.example/",
+            "https://github.com@evil.example/o/r",
+            "http://github.com/o/r",
+            "https://github.com:8443/o/r",
+            "https://gist.github.com/o",
+        ] {
+            assert!(check(bad, Some(&c)).is_err(), "{bad:?} was allowed");
+        }
+    }
+
+    /// The web origin is a github rule only: a GitLab account whose host
+    /// happens to start with `api.` does not gain the bare domain.
+    #[test]
+    fn a_gitlab_account_gains_no_web_origin() {
+        let c = config(&["https://api.gitlab.example"]);
+        assert!(check("https://api.gitlab.example/g/p", Some(&c)).is_ok());
+        assert!(check("https://gitlab.example/g/p", Some(&c)).is_err());
+        let c = config(&["https://gitlab.com"]);
+        assert!(check("https://github.com/o/r", Some(&c)).is_err());
     }
 
     #[test]

@@ -95,6 +95,9 @@ pub struct WizardPreview {
     pub warnings: Vec<DiagnosticView>,
     /// True when an existing file is being edited.
     pub edited_existing: bool,
+    /// The id of the primary watch already in the file, when the new watch was
+    /// added as secondary because of it. The review step says so.
+    pub secondary_because: Option<String>,
 }
 
 /// `save`'s answer: the shell's `Validation`, plus answers the core refused
@@ -327,10 +330,15 @@ pub async fn wizard_list_projects(
         .await
         .map_err(fail)?;
     let search = search.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    wizard::list_projects(client.as_ref(), &identity.token, search)
-        .await
-        .map(Confirmable::Ready)
-        .map_err(fail)
+    wizard::list_projects(
+        client.as_ref(),
+        connection.provider,
+        &identity.token,
+        search,
+    )
+    .await
+    .map(Confirmable::Ready)
+    .map_err(fail)
 }
 
 /// Step 2: resolve a typed id, path or pasted project URL.
@@ -382,6 +390,7 @@ pub fn preview(answers: &WizardAnswers, existing: &str) -> Result<WizardPreview,
         toml: built.toml,
         warnings,
         edited_existing: built.edited_existing,
+        secondary_because: built.secondary_because,
     })
 }
 
@@ -672,6 +681,34 @@ mod tests {
         // no command): a first-run save is one click.
         let c = Confirmations::default();
         assert!(crate::commands::admit(Path::new("x.toml"), "", &p.toml, None, &c, None).is_ok());
+    }
+
+    /// The Tauri wizard hands `preview` the file on disk, so a second run over
+    /// a config with a primary adds a secondary watch and the preview says
+    /// which primary it deferred to; the `primary` answer overrides it.
+    #[test]
+    fn a_second_wizard_run_over_a_primary_adds_a_secondary_and_says_so() {
+        let first = preview(&answers(), "").unwrap().toml;
+        let mut second = answers();
+        second.project = Some(ProjectRef::Id(7));
+        second.watch_id = "other-main".into();
+
+        let p = preview(&second, &first).unwrap();
+        assert_eq!(p.secondary_because.as_deref(), Some("app-main"));
+        assert!(
+            p.warnings
+                .iter()
+                .all(|w| !w.message.contains("are primary"))
+        );
+
+        second.primary = true;
+        let p = preview(&second, &first).unwrap();
+        assert_eq!(p.secondary_because, None);
+        assert!(
+            p.warnings
+                .iter()
+                .any(|w| w.message.contains("2 watches are primary"))
+        );
     }
 
     #[test]

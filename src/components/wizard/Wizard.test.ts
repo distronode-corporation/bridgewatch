@@ -614,6 +614,45 @@ describe("re-running on an existing config", () => {
   });
 });
 
+describe("adding a watch to a config that already has a primary", () => {
+  it("says the new watch is secondary and why, and asks again with primary when the box is ticked", async () => {
+    const api = fakeApi({
+      previewConfig: vi.fn(async (answers: { primary?: boolean }) => ({
+        ...PREVIEW,
+        edited_existing: true,
+        secondary_because: answers.primary ? null : "main-push",
+      })),
+    });
+    await start(api);
+    await toReview();
+    expect(api.previewConfig.mock.calls[0][0]).not.toHaveProperty("primary");
+    expect(text('[data-slot="secondary-note"]')).toBe(
+      'Added as a secondary watch, because "main-push" is already primary and the tray icon follows the primary watches.',
+    );
+    const box = q<HTMLInputElement>('[data-slot="primary-choice"] input')!;
+    expect(box.checked).toBe(false);
+
+    box.checked = true;
+    box.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    expect(api.previewConfig).toHaveBeenCalledTimes(2);
+    expect(api.previewConfig.mock.calls[1][0]).toMatchObject({ primary: true });
+    expect(q('[data-slot="secondary-note"]')).toBeNull();
+    expect(q<HTMLInputElement>('[data-slot="primary-choice"] input')?.checked).toBe(true);
+
+    await click('[data-action="finish"]');
+    expect(api.save.mock.calls[0][0]).toMatchObject({ primary: true });
+  });
+
+  it("asks nothing when the file had no other primary", async () => {
+    const api = fakeApi();
+    await start(api);
+    await toReview();
+    expect(q('[data-slot="secondary-note"]')).toBeNull();
+    expect(q('[data-slot="primary-choice"]')).toBeNull();
+  });
+});
+
 describe("GitHub", () => {
   const GH_IDENTITY: Identity = {
     username: "octo",

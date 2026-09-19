@@ -705,6 +705,58 @@ fn init_edits_an_existing_config_rather_than_replacing_it() {
     assert!(stderr(&out).contains("edited"), "{}", stderr(&out));
 }
 
+/// The `role` line of the `7-main` watch in printed TOML.
+fn role_of_7_main(text: &str) -> String {
+    let block = text
+        .split("id = \"7-main\"")
+        .nth(1)
+        .expect("the watch is there");
+    let block = block.split("\n\n").next().unwrap_or("");
+    block
+        .lines()
+        .find(|l| l.starts_with("role = "))
+        .unwrap_or("(no role line)")
+        .to_string()
+}
+
+/// ⛔ Found by a real run: `init` into a config that already had a primary
+/// watch added a second primary, and the result warned "2 watches are
+/// primary". The new watch is now secondary there, and one stderr line says
+/// why and how to ask for the other answer.
+#[test]
+fn init_into_a_config_with_a_primary_adds_a_secondary_watch_and_says_so() {
+    let dir = TempDir::new("init-second");
+    let original = std::fs::read_to_string(example_config()).unwrap();
+    let path = dir.write("config.toml", &original);
+    let args = ["init", "--project", "7", "--glab"];
+
+    let out = run(bin().args(["--config"]).arg(&path).args(args));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert_eq!(role_of_7_main(&text), "role = \"secondary\"", "{text}");
+    let err = stderr(&out);
+    assert!(!err.contains("are primary"), "{err}");
+    let notes: Vec<&str> = err.lines().filter(|l| l.starts_with("note:")).collect();
+    assert_eq!(
+        notes,
+        [
+            "note: added \"7-main\" as role = \"secondary\" because \"main-push\" is already \
+             primary; pass --primary to make it primary too"
+        ]
+    );
+
+    let out = run(bin()
+        .args(["--config"])
+        .arg(&path)
+        .args(args)
+        .arg("--primary"));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(role_of_7_main(&stdout(&out)), "role = \"primary\"");
+    let err = stderr(&out);
+    assert!(err.contains("2 watches are primary"), "{err}");
+    assert!(!err.contains("note:"), "{err}");
+}
+
 /// Unusable answers are a usage error naming the step, and a token pasted
 /// where a variable name belongs is never echoed back.
 #[test]

@@ -215,6 +215,10 @@ struct InitArgs {
     /// Add a secondary watch for this ref glob, e.g. "pf/*".
     #[arg(long, value_name = "GLOB")]
     preflight: Option<String>,
+    /// Make the new watch primary even when the config already has a primary
+    /// watch. Without it the new watch is added as a secondary one there.
+    #[arg(long)]
+    primary: bool,
     /// Poll interval while a pipeline is live, in seconds.
     #[arg(long, value_name = "SECS")]
     live_secs: Option<u64>,
@@ -418,6 +422,7 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         deploy_markers: args.deploy_markers,
         schedule_watch: args.schedule,
         preflight_ref: args.preflight,
+        primary: args.primary,
         notify: None,
         launch_at_login: None,
         live_secs: args.live_secs,
@@ -438,6 +443,13 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         Ok(built) => {
             for w in &built.warnings {
                 eprintln!("warning: {}: {}", w.path, w.message);
+            }
+            if let Some(primary) = &built.secondary_because {
+                eprintln!(
+                    "note: added {:?} as role = \"secondary\" because {primary:?} is already \
+                     primary; pass --primary to make it primary too",
+                    answers.watch_id
+                );
             }
             eprintln!(
                 "{} {} (nothing written)",

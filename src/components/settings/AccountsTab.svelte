@@ -1,5 +1,6 @@
 <script lang="ts">
   import { concretePath, entriesFor, providerOf } from "../../lib/settings/registry";
+  import { providerSwitch } from "../../lib/settings/provider-switch";
   import { getAt } from "../../lib/settings/values";
   import type { Edit, Provider } from "../../lib/types";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -21,6 +22,30 @@
   let newProvider = $state<Provider>("gitlab");
 
   const accountAt = (name: string) => getAt(config, concretePath("accounts.*", name));
+
+  /** Per account, the line saying which customised values a provider change kept. */
+  let switchNotes = $state<Record<string, string>>({});
+
+  /**
+   * Every edit from an account's fields. A PROVIDER change also removes the
+   * old provider's defaults for base_url, api_path and header, in the same
+   * write, so the new provider's apply (see `providerSwitch`).
+   */
+  function editAccount(name: string, edits: Edit[]) {
+    const providerPath = concretePath("accounts.*.provider", name);
+    const change = edits.find((e) => (e.op === "set" || e.op === "unset") && e.path === providerPath);
+    if (!change) return onedit(edits);
+    const to: Provider =
+      change.op === "set" && "string" in change.value && change.value.string === "github" ? "github" : "gitlab";
+    const from = providerOf(accountAt(name));
+    if (from === to) return onedit(edits);
+    const { edits: extra, note } = providerSwitch(name, accountAt(name), from, to);
+    const notes = { ...switchNotes };
+    delete notes[name];
+    if (note !== null) notes[name] = note;
+    switchNotes = notes;
+    return onedit([...edits, ...extra]);
+  }
 
   function addAccount() {
     const name = newName.trim();
@@ -64,8 +89,11 @@
     <h3 class="mt-0 mb-2.5 text-[13px] font-semibold">{name}</h3>
     {#each fields as entry (entry.path)}
       {@const path = concretePath(entry.path, name)}
-      <Field {entry} {path} value={getAt(config, path)} {onedit} />
+      <Field {entry} {path} value={getAt(config, path)} onedit={(edits) => editAccount(name, edits)} />
     {/each}
+    {#if switchNotes[name]}
+      <p class="text-tone-amber text-xs" data-slot="provider-switch-note">{switchNotes[name]}</p>
+    {/if}
     <!-- ⛔ `getAt` splits on unquoted dots exactly as the core does, so an
          account called `gitlab.com` read as `accounts.gitlab.com.token`,
          found nothing, and showed every such account as bridgewatch's own

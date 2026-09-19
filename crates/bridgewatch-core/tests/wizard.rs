@@ -296,9 +296,14 @@ async fn projects_are_listed_across_pages_with_the_search_encoded() {
             ),
         ],
     );
-    let listing = wizard::list_projects(&client(t.clone()), &TokenKind::Personal, Some("my app"))
-        .await
-        .unwrap();
+    let listing = wizard::list_projects(
+        &client(t.clone()),
+        Provider::Gitlab,
+        &TokenKind::Personal,
+        Some("my app"),
+    )
+    .await
+    .unwrap();
     let ProjectListing::Projects {
         projects,
         truncated,
@@ -334,9 +339,14 @@ async fn a_long_project_list_is_capped_and_says_so() {
             (200, r#"[{"id":4,"path_with_namespace":"g/d"}]"#, Some("5")),
         ],
     );
-    let listing = wizard::list_projects(&client(t.clone()), &TokenKind::Personal, None)
-        .await
-        .unwrap();
+    let listing = wizard::list_projects(
+        &client(t.clone()),
+        Provider::Gitlab,
+        &TokenKind::Personal,
+        None,
+    )
+    .await
+    .unwrap();
     let ProjectListing::Projects {
         projects,
         truncated,
@@ -357,6 +367,7 @@ async fn a_project_token_gets_type_an_id_or_path_without_a_request() {
     let t = Routed::new();
     let listing = wizard::list_projects(
         &client(t.clone()),
+        Provider::Gitlab,
         &TokenKind::Project {
             project_id: Some(82468124),
         },
@@ -378,9 +389,10 @@ async fn a_project_token_gets_type_an_id_or_path_without_a_request() {
 async fn a_refused_listing_falls_back_to_typing_and_a_401_does_not() {
     for status in [403u16, 404] {
         let t = Routed::new().route("/projects?", status, "{}");
-        let listing = wizard::list_projects(&client(t), &TokenKind::Personal, None)
-            .await
-            .unwrap();
+        let listing =
+            wizard::list_projects(&client(t), Provider::Gitlab, &TokenKind::Personal, None)
+                .await
+                .unwrap();
         assert!(
             matches!(
                 listing,
@@ -393,13 +405,64 @@ async fn a_refused_listing_falls_back_to_typing_and_a_401_does_not() {
         );
     }
     let t = Routed::new().route("/projects?", 401, "{}");
-    let err = wizard::list_projects(&client(t), &TokenKind::Personal, None)
+    let err = wizard::list_projects(&client(t), Provider::Gitlab, &TokenKind::Personal, None)
         .await
         .unwrap_err();
     assert!(
         matches!(err, WizardError::Unauthorized { status: 401, .. }),
         "{err:?}"
     );
+}
+
+/// ⛔ The "type it" sentence names what the provider takes. GitHub has no
+/// repository id a watch can use, so it asks for owner/repo; GitLab's two
+/// sentences are pinned whole, because they are what its users already read.
+#[tokio::test]
+async fn the_type_it_hint_names_what_each_provider_takes() {
+    let t = Routed::new().route("/projects?", 403, "{}");
+    let ProjectListing::TypeIdOrPath { reason, .. } =
+        wizard::list_projects(&client(t), Provider::Gitlab, &TokenKind::Personal, None)
+            .await
+            .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        reason,
+        "This token is not allowed to list projects. Type the project id or path."
+    );
+    let ProjectListing::TypeIdOrPath { reason, .. } = wizard::list_projects(
+        &client(Routed::new()),
+        Provider::Gitlab,
+        &TokenKind::Project { project_id: None },
+        None,
+    )
+    .await
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        reason,
+        "A project access token can read only its own project, so there is no list to \
+         pick from. Type the project id or path."
+    );
+
+    for status in [403u16, 404] {
+        let t = Routed::new().route("/user/repos?", status, "{}");
+        let listing =
+            wizard::list_projects(&gh_client(t), Provider::Github, &TokenKind::Personal, None)
+                .await
+                .unwrap();
+        let ProjectListing::TypeIdOrPath { reason, suggestion } = listing else {
+            panic!("{status}: {listing:?}")
+        };
+        assert_eq!(
+            reason,
+            "This token is not allowed to list repositories. Type the repository as owner/repo."
+        );
+        assert_eq!(suggestion, None);
+        assert!(!reason.contains("id"), "GitHub refuses an id: {reason}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -748,6 +811,7 @@ fn answers() -> WizardAnswers {
         deploy_markers: vec!["deploy:production".into()],
         schedule_watch: true,
         preflight_ref: Some("pf/*".into()),
+        primary: false,
         notify: Some(NotifyAnswers {
             deployed: true,
             blocking_failure: true,
@@ -769,6 +833,10 @@ fn load(text: &str) -> config::Config {
 fn a_fresh_config_loads_and_means_the_answers() {
     let built = wizard::build_config(&answers(), None).unwrap();
     assert!(!built.edited_existing);
+    assert_eq!(
+        built.secondary_because, None,
+        "a new file has no other primary"
+    );
     assert!(
         built.toml.starts_with(wizard::NEW_FILE_HEADER),
         "{}",
@@ -874,6 +942,128 @@ fn re_running_on_an_existing_config_edits_rather_than_clobbers() {
     assert_eq!(c.watches[0].deploy_markers, ["deploy:origins"]);
     assert_eq!(c.watches[0].jobs.entries().len(), 2, "overrides untouched");
     assert!(!c.watches[0].notify.finished, "the answer landed");
+}
+
+/// A second project added to a file that already has a primary watch joins
+/// it as a SECONDARY watch. Two primaries make the tray icon the worse of the
+/// two, which the file then warns about forever; the person running the wizard
+/// again almost always meant "also watch this".
+#[test]
+fn a_new_watch_joins_a_file_that_has_a_primary_as_secondary() {
+    let example = support::example_config_raw();
+    let other = WizardAnswers {
+        project: Some(ProjectRef::Id(7)),
+        watch_id: "other-main".into(),
+        schedule_watch: false,
+        preflight_ref: None,
+        ..answers()
+    };
+    let built = wizard::build_config(&other, Some(&example)).unwrap();
+
+    assert_eq!(built.secondary_because.as_deref(), Some("main-push"));
+    let c = load(&built.toml);
+    let added = c.watches.iter().find(|w| w.id == "other-main").unwrap();
+    assert_eq!(added.role, Role::Secondary);
+    let primaries: Vec<&str> = c
+        .watches
+        .iter()
+        .filter(|w| w.role.is_primary())
+        .map(|w| w.id.as_str())
+        .collect();
+    assert_eq!(
+        primaries,
+        ["main-push"],
+        "the existing primary is untouched"
+    );
+    assert!(
+        !built
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("are primary")),
+        "{:#?}",
+        built.warnings
+    );
+    let block = built.toml.split("id = \"other-main\"").nth(1).unwrap();
+    let block = block.split("\n\n").next().unwrap();
+    assert!(
+        block.lines().any(|l| l == "role = \"secondary\""),
+        "the role is written out: {block}"
+    );
+}
+
+/// Asking for it still makes a second primary, with the warning that says
+/// what that means.
+#[test]
+fn a_new_watch_asked_to_be_primary_is_primary_beside_the_existing_one() {
+    let example = support::example_config_raw();
+    let other = WizardAnswers {
+        project: Some(ProjectRef::Id(7)),
+        watch_id: "other-main".into(),
+        schedule_watch: false,
+        preflight_ref: None,
+        primary: true,
+        ..answers()
+    };
+    let built = wizard::build_config(&other, Some(&example)).unwrap();
+
+    assert_eq!(built.secondary_because, None);
+    let c = load(&built.toml);
+    let added = c.watches.iter().find(|w| w.id == "other-main").unwrap();
+    assert_eq!(added.role, Role::Primary);
+    assert!(
+        built
+            .warnings
+            .iter()
+            .any(|w| w.message.starts_with("2 watches are primary")),
+        "{:#?}",
+        built.warnings
+    );
+}
+
+/// A file whose watches are all secondary has no primary to defer to, so the
+/// new watch is the primary, exactly as on a fresh file. And the flag changes
+/// nothing on a fresh file: the text is byte for byte the same either way.
+#[test]
+fn with_no_primary_in_the_file_the_new_watch_is_primary() {
+    let existing = "[accounts.gitlab]\nbase_url = \"https://gitlab.com\"\n\n\
+                    [[watches]]\nid = \"nightly\"\naccount = \"gitlab\"\nproject = 5\n\
+                    ref = \"main\"\nrole = \"secondary\"\n";
+    let other = WizardAnswers {
+        schedule_watch: false,
+        preflight_ref: None,
+        ..answers()
+    };
+    let built = wizard::build_config(&other, Some(existing)).unwrap();
+    assert_eq!(built.secondary_because, None);
+    let c = load(&built.toml);
+    assert_eq!(c.watches[1].role, Role::Primary);
+
+    let fresh = wizard::build_config(&answers(), None).unwrap();
+    let flagged = wizard::build_config(
+        &WizardAnswers {
+            primary: true,
+            ..answers()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(fresh.toml, flagged.toml);
+}
+
+/// Re-running for the watch that IS the primary keeps it primary: the rule is
+/// about a new watch meeting another one, never about the watch itself.
+#[test]
+fn re_running_for_the_primary_watch_keeps_it_primary() {
+    let example = support::example_config_raw();
+    let same = WizardAnswers {
+        project: Some(ProjectRef::Id(82468124)),
+        watch_id: "main-push".into(),
+        ..answers()
+    };
+    let built = wizard::build_config(&same, Some(&example)).unwrap();
+    assert_eq!(built.secondary_because, None);
+    let c = load(&built.toml);
+    assert_eq!(c.watches[0].role, Role::Primary);
 }
 
 /// Answers that cannot be used are refused with every problem and its step,
@@ -1167,6 +1357,7 @@ fn gh_answers() -> WizardAnswers {
         deploy_markers: vec!["publish".into()],
         schedule_watch: false,
         preflight_ref: None,
+        primary: false,
         notify: Some(NotifyAnswers {
             deployed: true,
             blocking_failure: true,
