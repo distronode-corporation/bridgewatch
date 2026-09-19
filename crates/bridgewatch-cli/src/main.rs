@@ -8,6 +8,7 @@
 
 mod render;
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -433,6 +434,13 @@ fn init_tracing(level: &str) -> String {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::new(&directive))
         .with_writer(std::io::stderr)
+        // The decision, and the reason it is not the default, are in
+        // `config::use_ansi`; `logging::init` in `src-tauri` makes the same
+        // call for the same reason.
+        .with_ansi(config::use_ansi(
+            std::io::stderr().is_terminal(),
+            std::env::var("NO_COLOR").ok().as_deref(),
+        ))
         .try_init();
     directive
 }

@@ -855,6 +855,31 @@ pub fn log_directive(rust_log: Option<&str>, level: Option<&str>, crates: &[&str
     }
 }
 
+/// Should the log writer emit ANSI colour?
+///
+/// ⛔ `tracing_subscriber`'s fmt layer colours by DEFAULT, and it does not look
+/// at where it is writing. So `bridgewatch check 2>&1 >/dev/null | head` came
+/// out full of `ESC[2m`, and the desktop app wrote the same escapes into the
+/// systemd user journal, where they are noise in every `journalctl` line
+/// forever.
+///
+/// ⚠ `no_color` is "present and not empty", which is the `NO_COLOR` convention
+/// and deliberately NOT how [`log_directive`] reads `RUST_LOG`. A blank
+/// `RUST_LOG` is treated as unset because an exported-but-empty variable is a
+/// leftover in a shell profile; a blank `NO_COLOR` is defined by the convention
+/// itself to mean nothing at all, so the two disagree on purpose.
+///
+/// Takes both facts as arguments rather than reading the environment so that
+/// the decision is testable without a terminal or a `set_var`. Lives here for
+/// the same reason [`log_directive`] does: `bridgewatch-cli`'s `init_tracing`
+/// and the shell's `logging::init` both need it and neither can see the other.
+pub fn use_ansi(stderr_is_terminal: bool, no_color: Option<&str>) -> bool {
+    if no_color.is_some_and(|v| !v.is_empty()) {
+        return false;
+    }
+    stderr_is_terminal
+}
+
 /// The one `info` line a shell logs when it has read a configuration.
 ///
 /// `head` says WHICH read this was ("using /path/config.toml", "reloaded

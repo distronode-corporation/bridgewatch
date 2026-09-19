@@ -1249,6 +1249,55 @@ fn the_log_directive_scopes_the_file_level_and_ignores_a_blank_rust_log() {
     }
 }
 
+/// `describe_load` is the line both front ends print when they have read a
+/// configuration, and the log level is part of it: `[log].level` is read from
+/// the file being reported, but `RUST_LOG` beats it, and nothing else would say
+/// so.
+///
+/// Lives here, beside `log_directive`, because it logs nothing itself: it
+/// builds a string. `tests/logging.rs` is reserved for tests that capture
+/// output, and one that does not would poison their subscriber.
+#[test]
+fn the_config_line_names_the_file_the_counts_and_the_level() {
+    let config = support::config_with(&[] as &[Edit]);
+    let line = config::describe_load(
+        "using /tmp/bw/config.toml",
+        Some(&config),
+        "warn,bridgewatch_core=info",
+    );
+    assert!(line.contains("/tmp/bw/config.toml"), "{line}");
+    assert!(line.contains("3 watch(es)"), "{line}");
+    assert!(line.contains("1 account(s)"), "{line}");
+    assert!(line.contains("warn,bridgewatch_core=info"), "{line}");
+
+    let broken = config::describe_load("reloaded /tmp/bw/config.toml", None, "");
+    assert!(broken.contains("does not load"), "{broken}");
+    assert!(broken.contains("nothing is watched"), "{broken}");
+}
+
+/// Colour is for a person reading a terminal, and both shells share the rule so
+/// that one of them cannot quietly keep escaping a pipe.
+///
+/// ⚠ `NO_COLOR` is "present and not empty", per the convention, which is NOT
+/// how `RUST_LOG` is read two functions up: a blank `RUST_LOG` counts as unset
+/// because it is a leftover in a shell profile, while a blank `NO_COLOR` is
+/// explicitly defined by the convention to mean nothing at all.
+#[test]
+fn ansi_is_for_a_terminal_and_no_color_overrules_it() {
+    assert!(config::use_ansi(true, None));
+    assert!(!config::use_ansi(false, None));
+
+    // Set and non-empty wins over a terminal, whatever the value says.
+    assert!(!config::use_ansi(true, Some("1")));
+    assert!(!config::use_ansi(true, Some("0")));
+    assert!(!config::use_ansi(true, Some("false")));
+    assert!(!config::use_ansi(false, Some("1")));
+
+    // Set but empty is not set.
+    assert!(config::use_ansi(true, Some("")));
+    assert!(!config::use_ansi(false, Some("")));
+}
+
 /// The shipped example states the global mode, so the key is discoverable.
 #[test]
 fn the_example_states_the_jobs_mode() {
