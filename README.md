@@ -2,20 +2,20 @@
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/distronode-corporation/bridgewatch/badge)](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch)
 
-A tray monitor for GitLab CI that understands parent/child pipelines, tells a scheduled
-pipeline apart from a push, and reports whether the thing you care about actually
-deployed.
+GitHub and GitLab pipelines in one tray app.
+
+bridgewatch is a tray monitor for GitLab CI and GitHub Actions. It shows one row per push
+with every downstream pipeline as a bridge, tells a scheduled pipeline apart from a push,
+and reports whether the thing you care about actually deployed, instead of the raw
+pipeline status.
 
 A Rust core crate, a `bridgewatch` CLI and a Tauri 2 GUI (Svelte 5). macOS and Linux.
 Apache-2.0.
 
-> **GitHub Actions support is coming, and is deliberately not in 0.1.0.** See
-> [GitHub support](#github-support) for why.
-
 ## Why another CI tray monitor
 
 Most CI tray monitors define "project status" as the status of the newest pipeline on a
-branch. On a real GitLab project three things go wrong with that.
+branch. On a real project three things go wrong with that.
 
 **Scheduled pipelines dominate the branch.** A project with an hourly schedule on `main`
 has far more scheduled pipelines than pushes, and a schedule can be red by design (a
@@ -23,10 +23,12 @@ reconciler that fails on purpose so drift is visible, for example). A monitor th
 the newest pipeline then shows red most of the day and is soon ignored. It is not wrong
 about any single pipeline; it is answering a different question.
 
-**`trigger:*` jobs hide the real result.** A parent pipeline that fans out to child
-pipelines through trigger jobs (GitLab calls them bridges) has a status that is an
-aggregate. It cannot say *which* component broke, and it cannot say "the website deployed
-while a sibling bridge failed", which is the most common shape of a partly-bad push.
+**Fan-out hides the real result.** On GitLab a parent pipeline fans out to child
+pipelines through trigger jobs (GitLab calls them bridges), and the parent's status is an
+aggregate. On GitHub a push fans out into several independent workflow runs, and nothing
+above them has a status at all. Either way nothing says *which* component broke, or "the
+website deployed while a sibling failed", which is the most common shape of a partly-bad
+push, and nothing notices a workflow that should have run and never started.
 
 **"Pipeline succeeded" is not "it shipped".** A pipeline can be green because the deploy
 job was skipped, is manual, or never ran. The question worth putting in a tray icon is
@@ -34,12 +36,16 @@ whether a named job ran and succeeded.
 
 So bridgewatch is:
 
-- **bridge-aware.** It walks the parent's trigger jobs into their child pipelines and
-  reads the child job lists (`dive.depth` levels deep, default 1).
-- **source-aware.** A watch filters by pipeline `source` (`push`, `schedule`, ...) and by
-  ref, so pushes, schedules and preflight branches are separate watches on the same
-  project. Only `primary` watches drive the tray icon and notifications; `secondary`
-  watches are rows in the popover and nothing else.
+- **bridge-aware.** One row is one push, and each downstream is a bridge on it. On
+  GitLab that is the parent pipeline, whose trigger jobs bridgewatch walks into their
+  child pipelines (`dive.depth` levels deep, default 1). On GitHub it is a commit group
+  (`group = "commit"`): every workflow run one push started, folded into one row with
+  each run as a bridge. A bridge that never produced its downstream (a trigger job that
+  created no child, or a workflow listed in `expect` that never started) reads dead.
+- **source-aware.** A watch filters by pipeline source or workflow event (`push`,
+  `schedule`, ...) and by ref, so pushes, schedules and preflight branches are separate
+  watches on the same project. Only `primary` watches drive the tray icon and
+  notifications; `secondary` watches are rows in the popover and nothing else.
 - **verdict-driven.** The icon state comes from marker jobs you name (for example
   `deploy:origins`), found anywhere in the parent or a child, not from the parent's
   status field.
@@ -48,7 +54,7 @@ So bridgewatch is:
 
 | State | Glyph (builtin) | Means |
 | --- | --- | --- |
-| `failed` | red octagon | The pipeline carrying the deploy marker failed before any marker succeeded, a bridge never created its child and no marker exists, a blocking job in the parent failed, or (with no marker) a bridge failed. |
+| `failed` | red octagon | The pipeline carrying the deploy marker failed before any marker succeeded, a bridge is dead (it never produced its downstream) and no marker exists, a blocking job in the parent failed, or (with no marker) a bridge failed. |
 | `deployed_with_failure` | amber triangle | A marker succeeded, and a sibling bridge failed or a blocking job failed around it, under the default `downgrade` policies. |
 | `deployed` | green filled check | A marker succeeded and nothing is holding it back. |
 | `running` | blue arrows | A marker is in flight, or (with no marker) something is still running. |
@@ -64,16 +70,198 @@ watch the worst state wins (in the order `failed`, `deployed_with_failure`, `run
 that follow the menu bar; on Linux they are coloured. The exact rules are under
 [Verdict rules](#verdict-rules).
 
-## GitHub support
+## GitHub Actions
 
-GitHub Actions support is planned for 0.2. It is not in 0.1.0 because the part that makes
-bridgewatch worth installing has no GitHub equivalent yet.
+GitHub has no parent/child pipelines. A push fans out into independent workflow runs,
+related only by their commit, event and branch. bridgewatch reads a GitHub watch in one of
+two forms, chosen with the watch's `group` key:
 
-GitHub has no parent/child pipelines. A push fans out into several independent workflow
-runs, which are related only by sharing a commit (`head_sha`) and an event. Before
-bridgewatch can walk a GitHub push the way it walks a GitLab parent pipeline, it needs a
-commit-group mapping that assembles those runs into one unit. A GitHub mode shipped
-without that would be a status dot per workflow, which other monitors already provide.
+- **`group = "run"`** (the default): one workflow run is one row, and the run's jobs are
+  its job list. `workflow` narrows the watch to one workflow file; without it every
+  workflow's runs are rows of their own.
+- **`group = "commit"`**: every run of one push (same commit, event and branch, created
+  within `fan_out_secs` of the newest run) is one row, and each run is a bridge on it. This
+  is the GitHub equivalent of a GitLab parent pipeline, and it is what gives the verdict
+  something to say: a push that deployed while a sibling workflow failed reads
+  `deployed_with_failure`, exactly as a GitLab parent with a failed bridge does. The row's
+  status is the worst of its runs, and its link is the commit's checks page. `dive`
+  selects which runs' jobs are fetched, by workflow name.
+
+`expect` adds the one thing the runs alone cannot show: a workflow that should have run
+and never started (its `on:` did not match, or GitHub refused the file). See
+[`expect`](#expect-a-workflow-that-never-started).
+
+### Quick start: the wizard
+
+Pick **GitHub Actions** on the first step of the [setup wizard](#first-run-the-setup-wizard),
+then **github.com** or **GitHub Enterprise**. If you have run `gh auth login`, the wizard
+offers **Use gh's token**: it writes the keyring source for gh's item (see
+[Reusing gh's login](#reusing-ghs-login)) and never copies the token. Then pick a
+repository (or type `owner/repo` or its URL), the events to watch, and optionally one
+workflow file. A new GitHub watch polls every 30 s while live and every 120 s when idle,
+because of the [rate limit](#rate-limits).
+
+The command-line equivalent prints the same file without touching the network:
+
+```
+bridgewatch init --provider github --project octo-org/octo-repo --gh --workflow ci.yml
+```
+
+The wizard writes a `group = "run"` watch: one row per workflow run, of the one workflow
+you named or of every workflow. To get one row per push, set **One row is** to `commit` on
+the watch in Settings, and add `expect` there, or write it by hand as below.
+
+### A hand-written config for github.com
+
+The shipped [`examples/github.toml`](examples/github.toml) follows this repository's own
+workflows in both forms. The minimal versions:
+
+```toml
+[accounts.github]
+provider = "github"            # base_url, api_path and header default to github.com's
+token = { keyring = { service = "gh:github.com", user = "" } }
+
+# One row per push, each workflow run a bridge.
+[[watches]]
+id = "main-push"
+account = "github"
+project = "octo-org/octo-repo"          # owner/repo; GitHub has no numeric form
+ref = "main"
+sources = ["push"]
+group = "commit"
+expect = ["ci.yml", "release.yml"]      # workflow FILES every push to main must start
+deploy_markers = ["deploy"]
+poll = { live_secs = 30, idle_secs = 120 }
+
+# One workflow, one row per run.
+[[watches]]
+id = "nightly"
+account = "github"
+project = "octo-org/octo-repo"
+ref = "main"
+sources = ["schedule"]
+workflow = "nightly.yml"                # the file name, or the workflow's numeric id
+role = "secondary"
+poll = { live_secs = 30, idle_secs = 120 }
+```
+
+Write the `poll` line yourself in a hand-written file: without it a watch gets the
+defaults of 5 s and 60 s, which are sized for GitLab.
+
+### Tokens for GitHub
+
+A **classic** personal access token needs the `repo` scope to read a private repository,
+and no scope for a public one. There is no narrower classic scope for reading Actions, and
+`workflow` is not one: it grants write access to workflow files. A **fine-grained** token
+needs **Actions: read** and **Metadata: read** on the repositories you watch.
+**Test connection** in the wizard lists a classic token's scopes and warns when `repo` is
+missing; GitHub reports no scopes for a fine-grained token, so the wizard says it cannot
+check one. GitHub reads a token only from the `Authorization` header, which is
+the default for a github account, and `header = "PRIVATE-TOKEN"` on one is an error.
+
+#### Reusing gh's login
+
+If you have run `gh auth login`, gh keeps its token in the OS keyring under service
+`gh:<host>` (`gh:github.com` for github.com). gh writes two items there: one under your
+login and one with an **empty** user, which is the active account that `gh auth switch`
+moves. bridgewatch reads the empty-user item, so switching accounts in gh carries over:
+
+```toml
+token = { keyring = { service = "gh:github.com", user = "" } }
+```
+
+`bridgewatch init --gh` and the wizard's **Use gh's token** write exactly that, with the
+host taken from the account (`gh:ghe.example.com` for an Enterprise Server host). The
+portable alternative runs gh itself, and works wherever gh does, including when gh keeps
+its token in a plain file rather than the keyring:
+
+```toml
+token = { command = ["gh", "auth", "token"] }
+# GitHub Enterprise Server: ["gh", "auth", "token", "--hostname", "ghe.example.com"]
+```
+
+A command source asks for confirmation before the app writes it, see
+[Command sources need confirmation](#command-sources-need-confirmation).
+
+### GitHub Enterprise Server
+
+github.com serves its API on its own host with no path prefix, so a github account
+defaults to `base_url = "https://api.github.com"` and an empty `api_path`. Enterprise
+Server serves it under a path on the server's own host:
+
+```toml
+[accounts.ghe]
+provider = "github"
+base_url = "https://ghe.example.com"
+api_path = "/api/v3"
+token = { keyring = { service = "gh:ghe.example.com", user = "" } }
+```
+
+The wizard and `bridgewatch init --provider github --base-url https://ghe.example.com`
+write the `/api/v3` for you. Links open on the web host: the server itself for
+Enterprise Server, and `https://github.com` for an account on `api.github.com`.
+
+### Rate limits
+
+A GitHub token gets 5,000 API requests an hour, shared with everything else that uses the
+same token, gh included. That is about 83 a minute, where gitlab.com allows 2,000 a
+minute, which is why a GitHub watch should poll more slowly than a GitLab one.
+
+What a tick costs, per GitHub watch: one request for the list of runs, plus one (`/jobs`)
+for each run that is live or changed and whose jobs are read. GitHub has no trigger jobs to
+fetch, and a commit group's bridges come from the list itself.
+
+bridgewatch sends conditional requests to GitHub (`If-None-Match` with the ETag of the
+last answer), and GitHub does not count an authenticated `304 Not Modified` against the
+limit. So a watch whose runs have not changed costs nothing: at the 120 s idle interval a
+settled watch sends 30 requests an hour and spends none of its budget. The validators are
+kept in memory only, so the first poll after a start is paid for in full. The Debug
+section shows the 304s and the remaining budget.
+
+An exhausted limit is a 403 or 429 carrying `x-ratelimit-remaining: 0` or `retry-after`.
+bridgewatch treats it as a rate limit, not a bad token, and waits until GitHub's reset time
+(or the `retry-after`) before asking again, whatever `rate_limit_backoff.max_secs` says.
+
+### `expect`: a workflow that never started
+
+On GitLab a trigger job that created no child is still there to be read as dead. On
+GitHub a workflow that did not start leaves nothing at all: no run, so nothing to be red.
+`expect` names the workflows every commit group must hold, and an absent one becomes a
+dead bridge.
+
+- Entries are workflow **file** names (`ci.yml`, or the full `.github/workflows/ci.yml`),
+  not the display names the bridges show. A file name does not change when someone edits
+  the workflow's `name:`.
+- **Timing.** A group is decided once every run in it has settled and `fan_out_secs` has
+  passed since its newest run. Until then a missing workflow is a pending job, and the
+  row reads `running`, not green. After that it is a dead bridge: the row reads `failed`,
+  or `deployed_with_failure` when a marker has already succeeded (under the default
+  `sibling_failure = "downgrade"`), and a primary watch raises a `blocking_failure`
+  notification. A real failure in a run that does exist still turns the row red at once.
+- A run that ended in `startup_failure` is a failed run, not an absence.
+- `expect` applies to every group the watch shows, so list only workflows that run on
+  **every** event in `sources`, and none whose `paths` or `branches` filters can
+  legitimately skip a push. A workflow that starts later than `fan_out_secs` after the
+  others lands in a row of its own.
+
+`config validate` warns about `expect` on a GitLab watch or with `group = "run"`, about
+duplicates, empty entries and entries that are not `.yml` or `.yaml` file names, about an
+entry that `workflow` rules out, and about `expect` with an empty `sources`.
+
+### What GitHub does not have
+
+- **No `allow_failure`.** `continue-on-error` does not appear in GitHub's jobs API, so
+  every failed job counts as a failure. Use a [`[watches.jobs]`](#reference) override to
+  tolerate one (`"lint" = "warning"`). On a commit group the same table applies to the
+  bridges, so it can tolerate a whole workflow by its name.
+- **No `dive.depth`.** GitHub runs do not nest: a called (reusable) workflow's jobs are in
+  its caller's job list, named `caller / callee`, and bridgewatch groups them by the part
+  before ` / `. `dive.depth` above 1 on a GitHub watch is a warning and is ignored.
+- **No stages.** The ` / ` prefix above is the only grouping a GitHub job list has.
+- **No preflight watch in the wizard.** A `pf/*` watch is a GitLab habit; on GitHub add a
+  watch with a glob `ref` in Settings or by hand if you want one.
+- **No fixture recording.** `bridgewatch fixture record` refuses a github account (exit
+  64) until GitHub recordings have their own personal-data allow-list.
 
 ## Platform support
 
@@ -132,8 +320,8 @@ sudo apt install ./bridgewatch_0.1.0_amd64.deb
 ```
 
 The package depends on `libsecret-tools`, because bridgewatch runs `secret-tool` to read a
-keyring item that has an empty user name, which is how glab stores its token (see
-[Tokens](#tokens)).
+keyring item that has an empty user name, which is how glab stores its token and how gh
+stores its active account's (see [Tokens](#tokens)).
 
 ### Linux: AppImage
 
@@ -142,8 +330,8 @@ chmod +x bridgewatch_0.1.0_amd64.AppImage
 ./bridgewatch_0.1.0_amd64.AppImage
 ```
 
-An AppImage declares no dependencies. If you reuse glab's token, install `secret-tool`
-yourself (`sudo apt install libsecret-tools` on Debian and Ubuntu). A token stored in
+An AppImage declares no dependencies. If you reuse glab's or gh's token, install
+`secret-tool` yourself (`sudo apt install libsecret-tools` on Debian and Ubuntu). A token stored in
 bridgewatch's own keyring entry goes through the Secret Service over D-Bus and does not
 need it; either way a Secret Service (GNOME Keyring, KWallet) has to be running.
 
@@ -152,31 +340,41 @@ need it; either way a Secret Service (GNOME Keyring, KWallet) has to be running.
 When there is no config file at the default path, bridgewatch opens a setup wizard. It is
 optional: **Skip, I'll edit config.toml** writes nothing and opens Settings on the **Edit
 as text** tab, where you can write the file yourself (start from
-[`examples/distronode.toml`](examples/distronode.toml)). Saving from that tab creates it.
+[`examples/distronode.toml`](examples/distronode.toml) for GitLab or
+[`examples/github.toml`](examples/github.toml) for GitHub). Saving from that tab creates
+it.
 
 The wizard's steps:
 
-1. **Account.** gitlab.com or a self-managed URL, and a token source: glab's keyring item
-   (offered when one exists for that host), a pasted token (stored in bridgewatch's own
-   keyring entry), an environment variable, or a command. **Test connection** names the
-   user the token authenticates as, and warns when it is a project access token or lacks
-   the `read_api` scope.
-2. **Project.** Pick from the projects the token can list, or type an id, a
-   `group/project` path or a project URL. A project access token cannot list projects,
-   so it always gets the typing form.
-3. **What to watch.** The default branch and push pipelines are pre-filled. Optionally
-   add a secondary watch for scheduled pipelines on the same branch and one for a
-   preflight ref glob such as `pf/*`.
-4. **Deploy detection.** Suggested marker jobs, ranked from the latest pipeline's job
-   names and stages (parent and direct children), or none.
+1. **Account.** GitLab (the default) or GitHub Actions; gitlab.com or a self-managed
+   URL, or github.com or a GitHub Enterprise URL; and a token source: the provider CLI's
+   keyring item (glab's or gh's, offered when one exists for that host), a pasted token
+   (stored in bridgewatch's own keyring entry), an environment variable, or a command.
+   **Test connection** names the user the token authenticates as. On GitLab it warns
+   when the token is a project access token or lacks the `read_api` scope; on GitHub it
+   lists a classic token's scopes and warns when `repo` is missing, see
+   [Tokens for GitHub](#tokens-for-github).
+2. **Project.** Pick from the projects (or repositories) the token can list, or type an
+   id, a `group/project` path or a project URL on GitLab, or `owner/repo` or a
+   repository URL on GitHub. A GitLab project access token cannot list projects, so it
+   always gets the typing form.
+3. **What to watch.** The default branch and push pipelines are pre-filled. On GitHub
+   the events are workflow events, and an optional workflow file narrows the watch to
+   one workflow. Optionally add a secondary watch for scheduled pipelines on the same
+   branch, and on GitLab one for a preflight ref glob such as `pf/*`.
+4. **Deploy detection.** Suggested marker jobs, ranked from the latest pipeline's (or
+   workflow run's) job names and stages (parent and direct children), or none.
 5. **Notifications and polling.** Which events notify, launch at login, and the live
-   poll interval.
+   poll interval (5 s for GitLab, 30 s for GitHub).
 6. **Review config.toml.** The exact file it will write, then **Finish**.
 
 The wizard writes through the same path as Settings. Run on an existing file, it edits
 that file rather than replacing it, and it refuses to write text that does not load or
-that contains something shaped like a GitLab token. Re-open it any time from the tray
-menu (**Setup wizard…**) or from Settings.
+that contains something shaped like a GitLab token (or, for a GitHub account, a GitHub
+token). When the file already has a primary watch, the new watch is added as
+`role = "secondary"`, so it does not take over the tray icon; tick **Make this watch
+primary too** on the review step to keep it primary. Re-open the wizard any time from the
+tray menu (**Setup wizard…**) or from Settings.
 
 `bridgewatch init` is the same logic from the command line, see [CLI](#cli).
 
@@ -189,15 +387,18 @@ as a first run: bridgewatch reports it and creates nothing.
   popover, right-click for the menu.
 - **Many Linux tray hosts deliver no left-click** (GNOME's extension included), so the
   first menu item, **Show status**, opens the popover. The menu also has **Open pipelines
-  page**, **Refresh now**, **Reload config**, **Open config file**, **Settings…**,
-  **Setup wizard…**, **Launch at login** and **Quit bridgewatch**.
+  page** (the repository's Actions page on GitHub), **Refresh now**, **Reload config**,
+  **Open config file**, **Settings…**, **Setup wizard…**, **Launch at login** and **Quit
+  bridgewatch**.
 - **Config problems** appear in a strip at the top of the popover, with a button that
   opens Settings. A file that fails validation does not take effect; the last good
   configuration keeps running.
 - **The Debug section** at the bottom of the popover shows the config path, the last
-  poll and the recent GitLab requests with status, timing and rate-limit headers. A 404
-  there usually means the project id or the token's scope, a 401 means the token, and no
-  requests at all for a watch means its ref or source filter matched nothing.
+  poll and the recent API requests with status, timing and rate-limit headers. A 404
+  there usually means the project id or the token's scope (GitHub answers 404, not 403,
+  for a private repository the token cannot see), a 401 means the token, and no requests
+  at all for a watch means its ref or source filter matched nothing. On GitHub a 304 is a
+  request the rate limit did not count, see [Rate limits](#rate-limits).
 - **Arguments.** `--config <path>` (also `-c <path>` or `--config=<path>`), `--help`,
   `--version`. `BRIDGEWATCH_CONFIG` names the config file too; an empty value counts as
   unset.
@@ -210,25 +411,27 @@ as a first run: bridgewatch reports it and creates nothing.
 ## The job view, and what "live" means
 
 Each pipeline row in the popover expands into its jobs: the parent's own jobs, then one
-row per bridge with that child pipeline's jobs, each list grouped by stage in pipeline
-order, with a status dot per job, a marker on running jobs and a duration that ticks
+row per bridge with that child pipeline's (or workflow run's) jobs, each list grouped by
+stage in pipeline order, with a status dot per job, a marker on running jobs and a duration that ticks
 locally between polls. Live pipelines start expanded and settled ones collapsed; a bridge
 that failed or lost its child starts expanded either way. What you open or close stays
-that way across refreshes. Every job links to its GitLab page.
+that way across refreshes. Every job links to its page on GitLab or GitHub. A GitHub
+workflow in `expect` that never started shows as a bridge marked **never started**, linked
+to the workflow's page.
 
 `[ui].jobs` picks what an expanded row lists: `all` (every job, the default) or
 `failures` (only failed jobs, tolerated failures and manual gates, and only the bridges
 that have something to say). `watches.show.jobs` overrides it per watch. This is
 presentation only: the verdict never depends on it.
 
-**GitLab offers a desktop app no push channel.** Webhooks need a public inbound URL, and
-the web UI's live updates use an internal channel. "Real time" in bridgewatch therefore
-means polling: every `poll.live_secs` (default 5 s) while any pipeline in any watch is
-running, and every `poll.idle_secs` (default 60 s) when everything has settled. The
-popover shows "updated Ns ago", and opening it polls at once if the last poll is at
+**Neither GitLab nor GitHub offers a desktop app a push channel.** Webhooks need a public
+inbound URL, and the web UIs' live updates use internal channels. "Real time" in
+bridgewatch therefore means polling: every `poll.live_secs` (default 5 s) while any
+pipeline in any watch is running, and every `poll.idle_secs` (default 60 s) when
+everything has settled. The popover shows "updated Ns ago", and opening it polls at once if the last poll is at
 least 2 s old.
 
-What a live tick costs, per watch: one pipeline-list request, plus two (`/jobs` and
+What a live tick costs, per GitLab watch: one pipeline-list request, plus two (`/jobs` and
 `/bridges`) for each pipeline that is live or changed, plus one for each dived child
 pipeline that is live or moved. A settled, unchanged pipeline is served from cache, so an
 idle watch costs its list request only. For the shipped example (a push pipeline with
@@ -238,6 +441,7 @@ minute per user. GitLab.com has also published proposed per-plan limits, not in 
 as of this release, whose Free-plan figure is 100 a minute; under those a busy estate on
 a Free account would be rate limited while a pipeline runs, and bridgewatch would back
 off (up to `rate_limit_backoff.max_secs`). Raise `live_secs` if that matters to you.
+GitHub's budget is far smaller and counts differently, see [Rate limits](#rate-limits).
 
 ## Tokens
 
@@ -247,6 +451,7 @@ the token comes from; it is resolved when the poller starts and again on every r
 
 ```toml
 token = { keyring = { service = "glab:gitlab.com:token", user = "" } }  # glab's item
+token = { keyring = { service = "gh:github.com", user = "" } }          # gh's active account
 token = { own = true }                                                  # bridgewatch's own item
 token = { env = "BRIDGEWATCH_TOKEN_GITLAB" }                            # an environment variable
 token = { command = ["pass", "gitlab/pat"] }                            # a program's output
@@ -254,7 +459,7 @@ token = { command = ["pass", "gitlab/pat"] }                            # a prog
 
 | Source | Notes |
 | --- | --- |
-| `keyring` | Any OS keyring item, addressed by service and user. Use it to reuse glab's login. |
+| `keyring` | Any OS keyring item, addressed by service and user. Use it to reuse glab's or gh's login. |
 | `own` | bridgewatch's own keyring item, service `bridgewatch:<account>`, written when you paste a token into Settings or the wizard. This is the default when an account has no `token` key. |
 | `env` | Read from the process environment, so it works when bridgewatch is started from a shell or a service unit that sets the variable. |
 | `command` | Runs the program (no shell) with stdin closed and a 10 s timeout, and uses the first line of its stdout. Writing one from Settings or the wizard needs an explicit confirmation, see below. |
@@ -268,11 +473,12 @@ If you have run `glab auth login`, the token is already in your OS keyring under
 name. The empty user is required: glab's keyring library writes the item that way and a
 lookup with any other user misses. The wizard and `bridgewatch init --glab` write this
 source for you. The self-managed `glab:<host>:token` form follows glab's naming but has
-not been checked against a live self-managed install.
+not been checked against a live self-managed install. gh's login works the same way, see
+[Reusing gh's login](#reusing-ghs-login).
 
-On macOS glab's library stores the value wrapped as `go-keyring-base64:` plus base64
-(older versions: `go-keyring-encoded:` plus hex); bridgewatch unwraps either wrapper, and
-passes an unwrapped value through unchanged, so the same config works on macOS and Linux.
+On macOS glab's keyring library (which gh uses too) stores the value wrapped as
+`go-keyring-base64:` plus base64 (older versions: `go-keyring-encoded:` plus hex);
+bridgewatch unwraps either wrapper, and passes an unwrapped value through unchanged, so the same config works on macOS and Linux.
 
 macOS may ask whether bridgewatch may read an item another program created. **Always
 Allow** stops it asking again each time the token is read.
@@ -291,7 +497,7 @@ token, or a keyring or environment source on a host no account used. Edits you m
 subject to this: the check is on the app's write path, and the file is yours.
 `config validate` warns about every command source.
 
-### Project access tokens
+### GitLab project access tokens
 
 A GitLab project access token can read only its own project, so it cannot list projects.
 The wizard then asks you to type the project id or path instead of offering a list, and a
@@ -330,16 +536,18 @@ configuration with every default filled in.
 
 Every key is optional unless marked required. Defaults in brackets.
 
-**`[accounts.<name>]`**, one per GitLab instance (at least one is required):
+**`[accounts.<name>]`**, one per GitLab instance or GitHub host (at least one is required).
+Accounts of both providers can sit in one file:
 
 | Key | Meaning |
 | --- | --- |
-| `base_url` | Instance root, no trailing slash [`https://gitlab.com`]. `http://` is accepted, with a warning unless the host is loopback. |
-| `api_path` | API prefix [`/api/v4`]. |
+| `provider` | `gitlab` or `github` [`gitlab`, so a file written before GitHub support means what it always did]. `base_url`, `api_path` and `header` default per provider. |
+| `base_url` | Instance root, no trailing slash [`https://gitlab.com`, or `https://api.github.com` for github]. For GitHub Enterprise Server, the server's root. `http://` is accepted, with a warning unless the host is loopback. |
+| `api_path` | API prefix [`/api/v4`, or empty for github]. GitHub Enterprise Server needs `/api/v3`. |
 | `token` | Token source, see [Tokens](#tokens) [`{ own = true }`]. |
-| `header` | `"PRIVATE-TOKEN"` (personal and project access tokens) or `"Authorization: Bearer"` (OAuth and CI job tokens) [`PRIVATE-TOKEN`]. |
+| `header` | `"PRIVATE-TOKEN"` (GitLab personal and project access tokens) or `"Authorization: Bearer"` (GitLab OAuth and CI job tokens, and every GitHub token) [`PRIVATE-TOKEN`, or `Authorization: Bearer` for github, where `PRIVATE-TOKEN` is an error]. |
 | `timeout_secs` | Per-request timeout [15]. |
-| `rate_limit_backoff.max_secs` | Ceiling for the backoff after rate limiting or server errors [300]. |
+| `rate_limit_backoff.max_secs` | Ceiling for the doubled interval after rate limiting or errors [300]. A `retry-after`, or GitHub's rate-limit reset time, is waited out in full even when it is longer. |
 
 **`[[watches]]`**, in display order:
 
@@ -347,23 +555,27 @@ Every key is optional unless marked required. Defaults in brackets.
 | --- | --- |
 | `id` | Required. Unique; used by `--watch`, notifications and the GUI. |
 | `account` | Required. An `[accounts.<name>]` key. |
-| `project` | Required. Numeric id or `group/path`. |
+| `project` | Required. GitLab: numeric id or `group/path`. GitHub: `owner/repo` (a numeric id is an error). |
 | `ref` | Exact name, glob (`pf/*`), or `re:` plus a regex [`main`]. A `re:` pattern is unanchored; write `re:^…$` to match the whole ref. |
-| `sources` | Pipeline sources to accept (`push`, `schedule`, `web`, `merge_request_event`, ...). Empty means all [`[]`]. |
+| `sources` | Pipeline sources (GitLab: `push`, `schedule`, `web`, `merge_request_event`, ...) or workflow events (GitHub: `push`, `schedule`, `pull_request`, `workflow_dispatch`, ...) to accept. Empty means all [`[]`]. |
+| `workflow` | GitHub only. One workflow, by file name (`ci.yml`) or numeric id; each run is a row. Absent means every workflow [unset]. |
+| `group` | GitHub only. `run` (one workflow run is one row) or `commit` (every run of one push is one row, each run a bridge) [`run`]. See [GitHub Actions](#github-actions). |
+| `fan_out_secs` | GitHub only, with `group = "commit"`. Runs of one commit, event and branch created within this many seconds of the group's newest run are one row [90]. |
+| `expect` | GitHub only, with `group = "commit"`. Workflow file names every group must hold; one with no run is a dead bridge once the group has settled and its window has passed. See [`expect`](#expect-a-workflow-that-never-started) [`[]`]. |
 | `role` | `primary` (drives the icon, may notify) or `secondary` (rows only) [`primary`]. |
 | `show.max_rows` | Most rows this watch shows [5]. |
 | `show.settled` | Settled pipelines kept below the unsettled ones [1]. |
 | `show.jobs` | `all` or `failures`; overrides `[ui].jobs` for this watch [unset]. |
-| `poll.live_secs` | Interval while anything is live [5]. |
-| `poll.idle_secs` | Interval when everything has settled [60]. |
-| `dive.bridges` | Glob over trigger-job names to walk into; `""` walks none [`*`]. |
-| `dive.exclude` | Trigger-job name globs to skip [`[]`]. |
-| `dive.depth` | Levels of child pipeline to walk [1]. |
+| `poll.live_secs` | Interval while anything is live [5; the wizard writes 30 for GitHub]. |
+| `poll.idle_secs` | Interval when everything has settled [60; the wizard writes 120 for GitHub]. |
+| `dive.bridges` | Glob over trigger-job names to walk into, or over workflow names on a GitHub commit group; `""` walks none [`*`]. |
+| `dive.exclude` | Trigger-job (or workflow) name globs to skip [`[]`]. |
+| `dive.depth` | Levels of child pipeline to walk [1]. GitLab only: GitHub runs do not nest. |
 | `dive.only_when` | Walk only into bridges in this status, e.g. `"failed"` [unset]. |
 | `deploy_markers` | Job names or `re:` patterns whose success means "deployed". With several, config order decides which success is reported [`[]`]. |
 | `sibling_failure` | What a failed or dead bridge other than the marker's does to a deploy: `downgrade`, `fail` or `ignore` [`downgrade`]. |
 | `post_deploy_failure` | The same for a blocking failure after the marker, or in the marker's own pipeline [`downgrade`]. |
-| `[watches.jobs]` | Job-name pattern (literal or `re:`) to `gate`, `warning`, `blocking` or `ignore`. File order, first match wins. |
+| `[watches.jobs]` | Job-name pattern (literal or `re:`) to `gate`, `warning`, `blocking` or `ignore`. File order, first match wins. Applies to bridges too. On GitHub it is the only way to tolerate a failure. |
 | `notify.deployed`, `notify.blocking_failure`, `notify.finished` | Notify on these events [true]. |
 | `notify.started`, `notify.gate_opened` | Notify on these events [false]. |
 | `notify.title`, `notify.body` | MiniJinja templates over the pipeline view (`watch.id`, `sha7`, `state`, `failures`, `warnings`, `gates`, `ref`, `source`, `url`, ...). |
@@ -403,12 +615,14 @@ and call depth are capped. A script that errors or returns an unknown name yield
 
 An unknown key, and a value of the right type that names nothing (a misspelt source,
 glyph or state, an unknown icon mode), is a warning and is ignored, so a file written for
-a newer build still loads on an older one. `config validate` lists every warning with its
+a newer build still loads on an older one. A key that belongs to the other provider
+(`workflow` on a GitLab watch, `dive.depth` above 1 on a GitHub one) is a warning too, so
+a watch can move between accounts without making the file unloadable. `config validate` lists every warning with its
 line and column. A value of the wrong type, or a literal token string, is an error.
 
-### Walk-through of the example
+### Walk-through of the examples
 
-The shipped example, [`examples/distronode.toml`](examples/distronode.toml), is the
+The GitLab example, [`examples/distronode.toml`](examples/distronode.toml), is the
 configuration the project was built against: one gitlab.com account and three watches on
 the same project.
 
@@ -424,9 +638,23 @@ the same project.
 - **`preflights`** watches the `pf/*` branch glob with `dive.bridges = ""`: for a
   preflight, the parent's status is the answer, and one request a tick is enough.
 
+The GitHub example, [`examples/github.toml`](examples/github.toml), follows this
+repository's own workflows on github.com through gh's keyring item.
+
+- **`main-push`** is the primary watch: push runs on `main`, folded by `group = "commit"`
+  into one row per push, with CI and Scorecard as its bridges. `expect` names both files,
+  so a push where either never started reads `failed` once the group settles. Nothing on
+  `main` deploys, so it has no marker; `config validate` warns about that, deliberately,
+  and the file's comment says why.
+- **`audit`** follows one workflow, `audit.yml`, on its weekly schedule: secondary, one
+  row per run.
+
+Both GitHub watches poll at 30 s and 120 s, what the wizard writes for GitHub.
+
 Job classes: `blocking` is the default for a job that is not allowed to fail, and a red
-one fails the verdict. `warning` shows in the popover and does not fail it (a job with
-`allow_failure: true` is a warning already; `blocking` promotes it). `gate` marks a
+one fails the verdict. `warning` shows in the popover and does not fail it (a GitLab job
+with `allow_failure: true` is a warning already, and `blocking` promotes it; GitHub
+reports no such flag, so there an override is the only way to get one). `gate` marks a
 manual or never-run job as a deliberate wait; it does **not** excuse a gated job that ran
 and failed. `ignore` removes the job from every verdict and list.
 
@@ -434,15 +662,18 @@ and failed. `ignore` removes the job from every verdict and list.
 
 For the newest pipeline of each watch that matches its `ref` and `sources`, bridgewatch
 reads the parent's jobs and bridges, then the jobs of every child pipeline that `dive`
-selects, classifies each job, and looks for the `deploy_markers` across all of them. The
-state is the first rule that matches:
+selects, classifies each job, and looks for the `deploy_markers` across all of them. On
+GitHub the "parent" is a workflow run (with no bridges), or with `group = "commit"` the
+push, whose bridges are its runs and whose own jobs are empty. The same rules apply to
+both. The state is the first rule that matches:
 
 1. **`unknown`** if the pipeline's job lists could not be read and nothing was cached.
 2. **`failed`** if no marker succeeded and the markers' own pipeline has a blocking
    failure (a marker that failed counts even when it was allowed to fail), or no marker
-   job exists and a bridge never created its child pipeline, or a blocking job in the
-   parent failed (unless it started after a successful marker, which rule 4 handles), or
-   there is no marker and any bridge failed.
+   job exists and a bridge is dead (a trigger job that never created its child pipeline,
+   or an expected GitHub workflow that never started), or a blocking job in the parent
+   failed (unless it started after a successful marker, which rule 4 handles), or there
+   is no marker and any bridge failed.
 3. **`unknown`** if a marker is in a status this build does not recognise.
 4. If a marker succeeded: **`failed`** when a sibling failure or post-deploy failure
    applies with policy `fail`; **`deployed_with_failure`** when one applies with policy
@@ -467,9 +698,11 @@ and their jobs), which is the fastest way to see why a pipeline got the state it
 
 Every URL the app opens (a job or pipeline in the popover, **Open pipelines page** in the
 tray menu) goes through one function in the Rust shell. It opens only `http` and `https`
-URLs whose scheme, host and port are those of a configured account's `base_url`, and
-refuses and logs anything else. The URLs come from GitLab's API, so this is what stops a
-hostile or compromised instance from making the app open an arbitrary page or a
+URLs whose scheme, host and port are those of a configured account's `base_url`, or for a
+github account its web host (`https://github.com` for `https://api.github.com`, the
+server itself for Enterprise Server), and refuses and logs anything else, look-alike
+hosts and other ports included. The URLs come from the provider's API, so this is what
+stops a hostile or compromised instance from making the app open an arbitrary page or a
 `file:` URL. The web views have no permission to open URLs themselves.
 
 ## CLI
@@ -496,30 +729,38 @@ bridgewatch watch --ticks 3              # stop after three ticks
 
 bridgewatch init --project group/project --glab --deploy-marker deploy:production
                                          # print the config the wizard would write
+bridgewatch init --provider github --project octo-org/octo-repo --gh --workflow ci.yml
+                                         # the same for a GitHub repository
 bridgewatch config path                  # the config file in effect
 bridgewatch config validate              # every problem, with line and column
 bridgewatch config schema                # JSON Schema for editor completion
 bridgewatch config dump                  # the config with every default filled in
 
-bridgewatch fixture record <pipeline-id> [--out <dir>] [--project <id|path>] [--list]
+bridgewatch fixture record <pipeline-id> [--out <dir>] [--account <name>] [--project <id|path>] [--list]
 bridgewatch fixture scrub <dir>... [--check]
 ```
 
 `--config <path>` (or `-c`) is accepted before or after any subcommand. `watch` does not
 write the GUI's notification ledger; it keeps its own.
 
-**`init`** is the wizard without the UI or the network. It takes `--project` (required;
-an id, a path or a project URL), `--base-url`, `--account`, `--ref`, `--watch-id`,
-`--source` (repeatable), `--deploy-marker` (repeatable), `--schedule`, `--preflight
-<glob>`, `--live-secs`, and one token source (`--glab`, `--token-env <var>`,
-`--token-keyring <service>` or `--token-command <arg>...`; none means `own = true`). It
-reads no token, fetches nothing and writes nothing: it prints the file to stdout, and if a
-config file already exists it prints that file edited, with its comments and other
-watches kept. Redirect it yourself once it reads right.
+**`init`** is the wizard without the UI or the network. It takes `--provider` (`gitlab`,
+the default, or `github`), `--project` (required; an id, a path or a project URL on
+GitLab, `owner/repo` or a repository URL on GitHub), `--base-url`, `--account`, `--ref`,
+`--watch-id`, `--workflow` (GitHub only), `--source` (repeatable; a workflow event on
+GitHub), `--deploy-marker` (repeatable), `--schedule`, `--preflight <glob>` (GitLab
+only), `--primary`, `--live-secs`, and one token source (`--glab`, `--gh`, `--token-env
+<var>`, `--token-keyring <service>` or `--token-command <arg>...`; none means
+`own = true`). It reads no token, fetches nothing and writes nothing: it prints the file
+to stdout, and if a config file already exists it prints that file edited, with its
+comments and other watches kept. When that file already has a primary watch, the new
+watch is added as secondary with a note on stderr; `--primary` keeps it primary. A new
+GitHub watch polls at 30 s live and 120 s idle unless `--live-secs` says otherwise.
+Redirect it yourself once it reads right.
 
 **`fixture record`** walks one parent pipeline and its children into a fixture directory
 for the core's tests; `fixture scrub` re-applies the allow-list that keeps personal data
-out of fixtures. See [CONTRIBUTING.md](CONTRIBUTING.md).
+out of fixtures. Recording is GitLab-only: a github account is refused with exit 64. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Exit codes
 
@@ -589,9 +830,11 @@ Bundles land in `target/release/bundle/` at the repository root. For development
 
 - **Polling, not push.** See [the job view](#the-job-view-and-what-live-means).
 - **Glob and regex refs, and more than one source, are filtered client-side over one
-  page.** GitLab's pipelines API filters `ref` by exact name and `source` by one value, so
-  those watches read the newest page for the project (4 × `show.max_rows` pipelines,
-  between 30 and 100) and filter it. A matching pipeline older than that page is not seen.
+  page.** GitLab's pipelines API filters `ref` by exact name and `source` by one value,
+  and GitHub's runs API filters `branch` and `event` the same way, so those watches read
+  the newest page for the project (4 × `show.max_rows` pipelines or runs, between 30 and
+  100) and filter it. A matching pipeline older than that page is not seen. On GitHub a
+  page without `workflow` holds every workflow's runs, so it covers less time.
 - **Notifications cannot be clicked through on desktop.** The Tauri notification plugin
   passes only title, body, icon and sound to macOS and Linux, so `notify.click` has no
   effect in 0.1. The popover row carries the same link.
@@ -602,13 +845,17 @@ Bundles land in `target/release/bundle/` at the repository root. For development
   but a merged-result pipeline is not paired with its branch pipeline.
 - **The wizard's deploy-marker suggestions look one level deep** (parent and direct
   children).
-- **GitHub Actions is not supported yet.** See [GitHub support](#github-support).
+- **The wizard does not write a GitHub commit group.** It writes one row per run; set
+  `group = "commit"` and `expect` in Settings or by hand.
+- **A GitHub commit group is formed by time.** A run that starts more than
+  `fan_out_secs` after the rest of its push (a slow `workflow_dispatch`, a re-push of the
+  same commit) is a row of its own. See [`expect`](#expect-a-workflow-that-never-started).
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The inner loop is `cargo test -p
-bridgewatch-core`, which runs against recorded fixtures with no network and no GitLab
-token.
+bridgewatch-core`, which runs against recorded fixtures and scripted responses with no
+network and no token.
 
 ## Security
 

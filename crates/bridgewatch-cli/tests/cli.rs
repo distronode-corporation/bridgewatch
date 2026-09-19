@@ -457,6 +457,27 @@ fn config_validate_accepts_the_example() {
     assert!(stdout(&out).contains(": ok ("), "{}", stdout(&out));
 }
 
+/// The shipped GitHub example validates with no error and exactly the one
+/// warning its own comment explains.
+#[test]
+fn config_validate_accepts_the_github_example() {
+    let out = run(bin()
+        .arg("--config")
+        .arg(repo_root().join("examples/github.toml"))
+        .args(["config", "validate"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains(": ok (1 account(s), 2 watch(es), 1 warning(s))"),
+        "{}",
+        stdout(&out)
+    );
+    let err = stderr(&out);
+    let warnings: Vec<&str> = err.lines().filter(|l| l.starts_with("warning:")).collect();
+    assert_eq!(warnings.len(), 1, "{err}");
+    assert!(warnings[0].contains("watches.0.deploy_markers"), "{err}");
+    assert!(!err.contains("error:"), "{err}");
+}
+
 /// ⛔ M16. A TOML syntax error is reported as `path:line:col`, on stderr, and
 /// exits 78.
 #[test]

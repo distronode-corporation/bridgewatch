@@ -1,0 +1,56 @@
+# bridgewatch against GitHub Actions, following this repository's own
+# workflows on github.com (distronode-corporation/bridgewatch, which is public).
+#
+# Two watches show the two forms a GitHub watch takes:
+#   main-push  group = "commit": one row per push, each workflow run a bridge.
+#   audit      workflow = "...": one workflow, one row per run.
+#
+# Keys this file leaves out take their defaults; examples/distronode.toml shows
+# [icon], [verdict], [ui], [log] and notification templates.
+# `bridgewatch config schema` prints the JSON Schema.
+
+[accounts.github]
+provider = "github"                    # base_url, api_path and header default per provider;
+                                       # they are written out below so you can see them
+base_url = "https://api.github.com"    # GitHub Enterprise Server: "https://ghe.example.com"
+api_path = ""                          # github.com has no API prefix; GitHub Enterprise Server is "/api/v3"
+token    = { keyring = { service = "gh:github.com", user = "" } }   # gh's active account, so `gh auth switch` carries over
+# token  = { command = ["gh", "auth", "token"] }   # the portable form; add "--hostname", "ghe.example.com" for GHES
+header   = "Authorization: Bearer"     # the only header GitHub reads; PRIVATE-TOKEN is an error on a github account
+timeout_secs = 15
+rate_limit_backoff = { max_secs = 900 } # caps the doubling after errors; an exhausted rate limit waits for GitHub's reset time either way
+
+[[watches]]
+id       = "main-push"
+account  = "github"
+project  = "distronode-corporation/bridgewatch"   # owner/repo; GitHub has no numeric form
+ref      = "main"                      # sent to the API as ?branch=main
+sources  = ["push"]                    # GitHub event names, sent as ?event=push
+role     = "primary"
+group    = "commit"                    # one row per push: the runs of one commit, event and branch
+fan_out_secs = 90                      # runs created within 90 s of the push's newest run are the same push (90 is the default)
+expect   = ["ci.yml", "scorecard.yml"] # workflow FILES every push to main starts; one that never runs is a dead bridge
+show     = { max_rows = 5, settled = 1 }
+poll     = { live_secs = 30, idle_secs = 120 }   # what the wizard writes for GitHub; the defaults, 5 s and 60 s, are sized for GitLab
+dive     = { bridges = "*", exclude = [] }       # globs over workflow NAMES ("CI", "Scorecard") on a commit group
+# Nothing on this repository's main deploys, so there is no marker and a green
+# push reads succeeded_no_deploy. `config validate` warns about a primary watch
+# with no marker, deliberately: on a project that does deploy, name the job here.
+deploy_markers = []
+sibling_failure = "downgrade"          # downgrade | fail | ignore
+post_deploy_failure = "downgrade"      # downgrade | fail | ignore
+[watches.jobs]
+# GitHub reports no allow_failure (continue-on-error is not in the jobs API), so
+# this table is the only way to tolerate a failure. Keys are job names as the
+# run shows them, matrix suffix included, or "re:" patterns.
+# "rust (macos-latest)" = "warning"   # gate | warning | blocking | ignore
+
+[[watches]]
+id       = "audit"
+account  = "github"
+project  = "distronode-corporation/bridgewatch"
+ref      = "main"
+sources  = ["schedule"]                # the weekly scheduled run
+role     = "secondary"                 # a row in the popover; never touches the icon
+workflow = "audit.yml"                 # one workflow: the file name, or its numeric id
+poll     = { live_secs = 30, idle_secs = 120 }

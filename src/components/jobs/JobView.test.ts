@@ -265,6 +265,72 @@ describe("BridgeJobs, the two links on the header", () => {
   });
 });
 
+describe("BridgeJobs, a dead bridge in words", () => {
+  function render(view: BridgeView) {
+    component = mount(BridgeJobs, {
+      target: host,
+      // Open, so the body text is in the DOM to be read.
+      props: { bridge: view, pipelineId: 5000, expansion: createExpansionStore(), defaultOpen: true, onOpen: () => {}, now: T0 },
+    });
+    flushSync();
+  }
+
+  const row = (name: string) => host.querySelector<HTMLElement>(`[data-bridge="${name}"]`)!;
+  const jobLink = () => host.querySelector<HTMLAnchorElement>('[data-slot="bridge-job-link"]')!;
+
+  it("keeps the GitLab words for a trigger job that created no child", () => {
+    render(
+      bridge({
+        name: "trigger:website",
+        status: "failed",
+        verdict: "dead",
+        child_id: null,
+        child_url: null,
+        child_project_id: null,
+        dived: false,
+        web_url: "https://gitlab.example/p/-/jobs/77",
+      }),
+    );
+    const text = row("trigger:website").textContent ?? "";
+    expect(text).toContain("no child");
+    expect(text).toContain("Child pipeline not inspected.");
+    expect(text).not.toContain("never started");
+    expect(text).not.toContain("Expected workflow did not run.");
+    expect(jobLink().textContent).toBe("job");
+    expect(jobLink().getAttribute("title")).toBe("the trigger job");
+    expect(jobLink().getAttribute("aria-label")).toBe("Open trigger job trigger:website in GitLab");
+    expect(host.querySelector('[data-slot="bridge-never-started"]')).toBeNull();
+  });
+
+  it("says an expected GitHub workflow never started, and links its workflow page", () => {
+    const url = "https://github.com/acme-corp/monorepo/actions/workflows/release.yml";
+    render(
+      bridge({
+        name: "release.yml",
+        status: "never_started",
+        verdict: "dead",
+        child_id: null,
+        child_url: null,
+        child_project_id: null,
+        dived: false,
+        web_url: url,
+      }),
+    );
+    const text = row("release.yml").textContent ?? "";
+    expect(host.querySelector('[data-slot="bridge-never-started"]')?.textContent?.trim()).toBe("never started");
+    expect(host.querySelector('[data-slot="bridge-never-started"]')?.getAttribute("title")).toBe(
+      "expected workflow did not run",
+    );
+    expect(text).toContain("Expected workflow did not run.");
+    expect(text).not.toContain("no child");
+    expect(text).not.toContain("Child pipeline");
+    expect(jobLink().textContent).toBe("workflow");
+    expect(jobLink().getAttribute("href")).toBe(url);
+    expect(jobLink().getAttribute("aria-label")).toBe("Open workflow release.yml");
+    expect(jobLink().getAttribute("aria-label")).not.toContain("GitLab");
+  });
+});
+
 describe("UpdatedAgo", () => {
   it("ticks once a second", () => {
     vi.useFakeTimers();

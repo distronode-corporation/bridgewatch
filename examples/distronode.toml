@@ -4,19 +4,8 @@
 # writes them back through toml_edit, so these comments survive an edit from the
 # settings pane. `bridgewatch config schema` prints the JSON Schema.
 
-# A GitHub account, commented out so this example still needs only a GitLab
-# token. Uncomment it and the watch further down to follow one workflow of the
-# public bridgewatch repository.
-#
-# [accounts.github]
-# provider = "github"
-# base_url = "https://api.github.com"  # GHES: "https://ghe.example.com", with api_path = "/api/v3"
-# api_path = ""                        # github.com mounts its API on a host, not behind a prefix
-# token    = { command = ["gh", "auth", "token"] }   # follows `gh auth switch`; works on GHES with --hostname
-# # token  = { keyring = { service = "gh:github.com", user = "" } }   # gh's active-account keychain item
-# header   = "Authorization: Bearer"   # the only header GitHub reads; PRIVATE-TOKEN is refused on a github account
-# timeout_secs = 15
-# rate_limit_backoff = { max_secs = 900 }   # GitHub's budget is 5000 an HOUR, so 300 s comes back too eagerly
+# A GitHub account and its watches live in examples/github.toml; accounts of
+# both providers can sit in one file, and each watch names its account.
 
 [accounts.gitlab]                    # any number of accounts; self-managed instances welcome
 provider = "gitlab"                    # "gitlab" (the default, and what an older file means) | "github"
@@ -64,24 +53,6 @@ ref = "main"
 sources = ["schedule"]
 role = "secondary"
 dive = { bridges = "*", depth = 1, only_when = "failed" }
-
-# The GitHub form: one workflow per watch. Uncomment with [accounts.github].
-#
-# [[watches]]
-# id       = "bw-ci"
-# account  = "github"
-# project  = "distronode-corporation/bridgewatch"   # owner/repo; GitHub has no endpoint for a numeric id
-# ref      = "main"                    # -> ?branch=main, filtered by the API
-# sources  = ["push"]                  # -> ?event=push, GitHub's event vocabulary, not GitLab's
-# role     = "secondary"
-# workflow = "ci.yml"                  # the workflow file name or its numeric id; empty = one row per run
-# show     = { max_rows = 5, settled = 1 }
-# poll     = { live_secs = 30, idle_secs = 120 }   # slower than GitLab's: 5000 requests an hour, shared with your own gh
-# deploy_markers = ["publish"]
-# [watches.jobs]
-# # On GitHub this table is the ONLY way to say a failure is tolerated:
-# # continue-on-error appears nowhere in the jobs API.
-# "tauri-smoke (ubuntu-22.04)" = "warning"
 
 [[watches]]
 id = "preflights"

@@ -15,6 +15,40 @@ body line with a bracket.
 
 ### Added
 
+- **GitHub Actions.** An account takes `provider = "github"` (the default stays
+  `gitlab`, so an existing file means what it always did), and `base_url`, `api_path`
+  and `header` default to github.com's. GitHub Enterprise Server is `base_url` plus
+  `api_path = "/api/v3"`. A GitHub watch names its repository as `owner/repo` and its
+  `sources` are workflow events. It reads in one of two forms:
+  - `group = "run"`, the default: one workflow run is one row, optionally narrowed to one
+    workflow with `workflow = "ci.yml"` (a file name or a numeric id).
+  - `group = "commit"`: every run one push started (same commit, event and branch,
+    created within `fan_out_secs`, default 90, of the newest) is one row, with each run
+    as a bridge. The verdict rules are the ones a GitLab parent pipeline gets, so a push
+    that deployed while a sibling workflow failed reads `deployed_with_failure`, and
+    `dive` selects workflows by name.
+- **`expect`**, for a workflow that never started. On a commit group,
+  `expect = ["ci.yml", "release.yml"]` names workflow files every push must start. Once
+  the group has settled and its window has passed, a missing one is a dead bridge, read
+  as a GitLab trigger job that created no child is; until then it is a pending job, so
+  the row reads running rather than green. `config validate` warns about the shapes that
+  would read a group dead for the wrong reason.
+- **Setting up GitHub from the wizard, Settings and the CLI.** The wizard offers GitHub
+  Actions beside GitLab, github.com or GitHub Enterprise, gh's keyring item when one
+  exists (the empty-user item under `gh:<host>`, which follows `gh auth switch`),
+  repositories by `owner/repo`, workflow events and an optional workflow. **Test
+  connection** lists a classic token's scopes and warns when `repo` is missing. New
+  GitHub watches poll at 30 s live and 120 s idle. `bridgewatch init` gains
+  `--provider`, `--gh` and `--workflow`. Settings dims the keys that do not apply to an
+  account's provider, and changing an account's provider drops the old provider's
+  default `base_url`, `api_path` and `header` while keeping values you customised.
+- **GitHub's rate limit is handled as one.** A 403 or 429 carrying
+  `x-ratelimit-remaining: 0` or `retry-after` backs off until GitHub's reset time rather
+  than being read as a bad token. Requests to GitHub are conditional (ETags, kept in
+  memory), and an authenticated 304 does not count against the 5,000 an hour, so a
+  settled GitHub watch costs nothing.
+- `examples/github.toml`, a GitHub example beside the GitLab one, following this
+  repository's own workflows in both forms.
 - The job view links a bridge to the trigger job itself, beside the existing link to the
   child pipeline it created. They are different pages in GitLab and either can be the one
   that explains a verdict. A bridge with no URL shows no link.
@@ -35,6 +69,11 @@ body line with a bracket.
 
 ### Fixed
 
+- `bridgewatch init` and the setup wizard no longer add a second primary watch to a file
+  that already has one. The new watch is written as `role = "secondary"`, with a note on
+  stderr from the CLI and a note on the wizard's review step; `--primary`, or **Make
+  this watch primary too** in the wizard, keeps it primary. A fresh config is written as
+  before.
 - `check --watch` and `watch --watch` now answer for the watches you name. Naming only
   secondary watches printed `icon: unknown` and exited 4 over a verdict that had been read
   perfectly well, so a failed schedule never exited 1. Without `--watch`, and in the tray,
@@ -59,6 +98,17 @@ body line with a bracket.
 
 ### Security
 
+- On macOS a keyring token source with `user = ""` now asks for the item whose account
+  is empty (`security find-generic-password -a ""`). It used to ask by service alone,
+  and when a service holds more than one item macOS returns a named one: gh keeps two
+  under `gh:<host>`, so the lookup could read a different account's token than the one
+  configured once somebody ran `gh auth switch`. glab writes only one item, so its
+  lookup reads what it always did.
+- A GitHub account's links open on its web host (`github.com` for `api.github.com`, the
+  server itself for Enterprise Server), matched by scheme, host and port like every
+  other link; look-alike hosts, other ports and `gist.github.com` are still refused. A
+  GitHub pagination `Link` that names another host is refused rather than followed, so
+  the token never travels with it.
 - quick-xml 0.38.4 -> 0.42.0 (through plist 1.10.1) for RUSTSEC-2026-0194 and
   RUSTSEC-2026-0195, found by the new `cargo deny` job before GitHub's database had them.
 - CI now runs `cargo deny` (advisories, licences, sources), zizmor over the workflows,

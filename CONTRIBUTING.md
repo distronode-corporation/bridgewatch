@@ -4,7 +4,8 @@
 
 ```
 crates/bridgewatch-core/   Rust library: config parsing and editing, token resolution, the
-                           GitLab client, the pipeline walk, the verdict rules, the poller,
+                           GitLab and GitHub clients, the pipeline walk (and GitHub's
+                           commit group), the verdict rules, the poller,
                            notifications and the setup wizard's logic. No Tauri dependency,
                            so it compiles and tests without a GUI toolchain.
 crates/bridgewatch-cli/    The `bridgewatch` command-line binary, over the core.
@@ -13,7 +14,8 @@ src-tauri/                 The Tauri 2 shell (crate `bridgewatch-app`): tray, wi
 src/                       Svelte 5 + TypeScript frontend: popover, job view, Settings,
                            setup wizard. UI components are vendored shadcn-svelte under
                            src/lib/components/ui/, themed in src/lib/theme/.
-examples/                  The shipped example config, distronode.toml.
+examples/                  The shipped example configs: distronode.toml (GitLab) and
+                           github.toml (GitHub).
 scripts/                   record-fixture.sh and check-version.py.
 ```
 
@@ -44,9 +46,9 @@ cargo run -p bridgewatch-cli -- -c examples/distronode.toml check \
 cargo test -p bridgewatch-core
 ```
 
-It has no network access, needs no GitLab token and runs against recorded fixtures,
-which is what makes it usable as a save-and-run loop. If a change makes this suite need a
-live GitLab, the change is in the wrong place: HTTP is behind the `Transport` trait and
+It has no network access, needs no token and runs against recorded fixtures and
+scripted responses, which is what makes it usable as a save-and-run loop. If a change
+makes this suite need a live GitLab or GitHub, the change is in the wrong place: HTTP is behind the `Transport` trait and
 the tests supply their own. Tests never read a real keyring either; token code is
 tested through the `TokenProvider` trait with a fake.
 
@@ -88,14 +90,15 @@ names no path.
 2. Regenerate the schema:
    `cargo run -p bridgewatch-cli -- config schema > src/lib/config.schema.json`.
 3. Add the control to `src/lib/settings/registry.ts`.
-4. Add it to `examples/distronode.toml` with a comment saying what it is for. Some core
-   tests edit that file and check that its comments survive verbatim, so change an
-   existing comment there only together with those tests.
+4. Add it to `examples/distronode.toml` with a comment saying what it is for, or to
+   `examples/github.toml` if it is GitHub-only. Some core tests edit those files and
+   check that their comments survive verbatim, so change an existing comment there only
+   together with those tests.
 5. Document it in the README's configuration reference.
 
 ## Fixtures
 
-The verdict rules are tested against real pipelines, not hand-written ones. A
+The verdict rules are tested against real GitLab pipelines, not hand-written ones. A
 hand-written fixture encodes what you believe GitLab returns, which is the belief under
 test. Two ways to record one:
 
@@ -119,6 +122,14 @@ script). The `fixtures_contain_no_personal_data` test checks every committed fix
 against the Rust list, and another test checks the script names every key.
 `bridgewatch fixture scrub <dir>...` re-applies the list in place; `--check` reports
 without writing.
+
+**GitHub has no recorder yet.** `bridgewatch fixture record` refuses a github account
+(exit 64), because a run payload carries author and committer names and email addresses,
+the commit message, the actor and runner names, and no allow-list covers those keys yet.
+The GitHub client's tests (`crates/bridgewatch-core/tests/github.rs` and
+`github_group.rs`) run over a scripted transport with hand-built bodies that hold only the
+keys the client decodes, with invented values, and say so where they stand in for a case
+no live sample exists for.
 
 What the allow-list keeps is still revealing: job names, stage names, branch names,
 commit SHAs, pipeline ids and timestamps. Job names can name components, regions and

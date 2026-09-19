@@ -18,7 +18,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
-    /// GitLab instances to talk to, keyed by the name watches refer to.
+    /// CI instances to talk to, GitLab or GitHub, keyed by the name watches
+    /// refer to.
     pub accounts: BTreeMap<String, Account>,
     /// What to watch. Order is the display order.
     pub watches: Vec<Watch>,
@@ -57,8 +58,9 @@ pub enum Provider {
     /// GitLab CI, the provider bridgewatch was built for.
     #[default]
     Gitlab,
-    /// GitHub Actions. One workflow run is one pipeline, and the watch's
-    /// `workflow` key says which workflow.
+    /// GitHub Actions. A watch's `group` key decides what one row is: one
+    /// workflow run (`run`, the default, narrowed by `workflow`), or every run
+    /// one push started (`commit`).
     Github,
 }
 
@@ -130,11 +132,13 @@ pub struct Account {
     #[serde(default)]
     pub provider: Provider,
     /// Instance root, without a trailing slash, e.g. `https://gitlab.com`.
-    /// Defaults per provider: gitlab.com, or `https://api.github.com`.
+    /// Defaults per provider: gitlab.com, or `https://api.github.com`. For
+    /// GitHub Enterprise Server, the server's root with `api_path = "/api/v3"`.
     #[serde(default = "default_base_url")]
     pub base_url: String,
     /// API prefix. Overridable for proxies that mount the API elsewhere.
-    /// Defaults per provider: `/api/v4`, or empty for GitHub.
+    /// Defaults per provider: `/api/v4`, or empty for github.com. GitHub
+    /// Enterprise Server needs `/api/v3`.
     #[serde(default = "default_api_path")]
     pub api_path: String,
     /// Where the token comes from. Never the token itself.
@@ -256,7 +260,8 @@ pub enum AuthHeader {
     #[default]
     #[serde(rename = "PRIVATE-TOKEN")]
     PrivateToken,
-    /// `Authorization: Bearer <token>`, for OAuth and CI job tokens.
+    /// `Authorization: Bearer <token>`, for GitLab OAuth and CI job tokens, and
+    /// for every GitHub token.
     #[serde(rename = "Authorization: Bearer")]
     AuthorizationBearer,
 }
@@ -315,7 +320,8 @@ pub enum TokenSource {
     /// An entry in the OS credential store, addressed exactly as another tool
     /// wrote it. `user` may be empty: `glab` stores its token with an empty
     /// account on the macOS Keychain and an empty `username` attribute on the
-    /// Linux Secret Service.
+    /// Linux Secret Service, and `gh` keeps its active account's token under
+    /// `gh:<host>` the same way.
     Keyring {
         /// The credential store's service / collection name.
         service: String,
@@ -442,30 +448,33 @@ pub struct Watch {
     pub id: String,
     /// Which `[accounts.*]` entry to use.
     pub account: String,
-    /// Numeric project id, or a `group/path` which is URL-encoded for you.
+    /// GitLab: a numeric project id, or a `group/path` which is URL-encoded
+    /// for you. GitHub: `owner/repo`, which is the only form GitHub accepts.
     pub project: ProjectRef,
     /// Ref pattern: exact (`main`), glob (`pf/*`) or regex (`re:^release/.*$`).
     #[serde(rename = "ref", default = "default_ref")]
     pub ref_pattern: String,
     /// GitHub only: the one workflow this watch follows, as its file name
-    /// (`ci.yml`) or its numeric id. Absent or empty is every workflow, and
-    /// then the watch shows one row per run.
+    /// (`ci.yml`) or its numeric id. Absent or empty is every workflow. Leave
+    /// it out with `group = "commit"`, which needs every workflow's runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
     /// GitHub only: what one row is. `run` (the default) is one workflow run;
-    /// `commit` folds every run of one commit and event into one row, each
-    /// run appearing as a bridge, so `dive` selects workflow names.
+    /// `commit` folds every run of one push (same commit, event and branch)
+    /// into one row, each run appearing as a bridge, so `dive` selects
+    /// workflow names.
     // Skipped when it is the default, like `workflow`: a watch the settings
     // window or the wizard writes back must not gain a line nobody asked for.
     #[serde(default, skip_serializing_if = "GroupMode::is_run")]
     pub group: GroupMode,
-    /// GitHub only, and only with `group = "commit"`: runs of one commit and
-    /// event created within this many seconds of the group's newest run are
-    /// one row. Absent is 90.
+    /// GitHub only, and only with `group = "commit"`: runs of one commit,
+    /// event and branch created within this many seconds of the group's
+    /// newest run are one row. Absent is 90.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fan_out_secs: Option<u64>,
     /// GitHub only, and only with `group = "commit"`: workflow FILE names
-    /// (`ci.yml`) that must have a run in every commit group this watch shows.
+    /// (`ci.yml`, or the whole `.github/workflows/ci.yml` path), not display
+    /// names, that must have a run in every commit group this watch shows.
     /// Once a group has settled and its `fan_out_secs` window has passed, an
     /// expected workflow with no run in it is a dead bridge, the way a GitLab
     /// trigger job that created no child is. Until then it is a pending job.
@@ -474,7 +483,8 @@ pub struct Watch {
     /// `paths` or `branches` filter can legitimately skip a push.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expect: Vec<String>,
-    /// Pipeline sources to accept. Empty means all of them.
+    /// Pipeline sources (GitLab) or workflow events (GitHub) to accept. Empty
+    /// means all of them.
     #[serde(default)]
     pub sources: Vec<String>,
     /// Whether this watch drives the tray icon.
@@ -737,10 +747,13 @@ fn default_settled() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PollConfig {
-    /// Interval used while anything relevant is unsettled.
+    /// Interval used while anything relevant is unsettled. The setup wizard
+    /// starts a GitHub watch at 30, because a GitHub token gets 5,000
+    /// requests an hour.
     #[serde(default = "default_live_secs")]
     pub live_secs: u64,
-    /// Interval used when everything has settled.
+    /// Interval used when everything has settled. The setup wizard starts a
+    /// GitHub watch at 120.
     #[serde(default = "default_idle_secs")]
     pub idle_secs: u64,
 }
@@ -785,19 +798,21 @@ fn default_idle_secs() -> u64 {
     60
 }
 
-/// Which trigger jobs to walk into.
+/// Which trigger jobs to walk into, or on a GitHub commit group, which
+/// workflow runs.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DiveConfig {
-    /// Glob over trigger-job names. `"*"` dives into all of them; `""` into
-    /// none, which turns the watch into a cheap one-request-per-tick row.
+    /// Glob over trigger-job names, or workflow names on a GitHub commit
+    /// group. `"*"` dives into all of them; `""` into none, which turns the
+    /// watch into a cheap one-request-per-tick row.
     #[serde(default = "default_dive_bridges")]
     pub bridges: String,
     /// Trigger-job name globs to skip even when `bridges` matches them.
     #[serde(default)]
     pub exclude: Vec<String>,
     /// How many levels of child pipeline to walk. `1` is the parent's own
-    /// children.
+    /// children. GitLab only: GitHub runs do not nest.
     #[serde(default = "default_depth")]
     pub depth: u8,
     /// Restrict diving to bridges in a given state, e.g. `"failed"`. This is
@@ -1104,7 +1119,8 @@ fn default_popover_height() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LogConfig {
-    /// `error` | `warn` | `info` | `debug` | `trace`. `RUST_LOG` wins when set.
+    /// `error` | `warn` | `info` | `debug` | `trace` | `off`. `RUST_LOG` wins
+    /// when set.
     #[serde(default = "default_log_level")]
     pub level: String,
     /// How many recent HTTP requests to keep for the debug pane.

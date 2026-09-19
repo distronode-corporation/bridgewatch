@@ -5,6 +5,12 @@
    * the trigger job itself and the child pipeline it created. They are
    * different pages and either can be the one that explains a verdict.
    *
+   * A GitHub `expect` bridge (status `never_started`) has no child and no
+   * trigger job: its one link is the workflow's own page, and its words say
+   * the workflow never started rather than naming a child pipeline. Keyed on
+   * the status the core sends, not on a provider flag, so the GitLab wording
+   * is untouched.
+   *
    * Open/closed lives in the `expansion` store, keyed by pipeline id + bridge
    * name, so a snapshot refresh that replaces `bridge` with a new object does
    * not collapse it.
@@ -34,6 +40,7 @@
   const open = $derived(expansion.isOpen(pipelineId, bridge.name, defaultOpen));
   const tone = $derived(bridgeTone(bridge.verdict));
   const shownCount = $derived(filterJobs(bridge.jobs, mode).length);
+  const neverStarted = $derived(bridge.status === "never_started");
   const bodyId = $derived(`bridge-${pipelineId}-${bridge.name.replace(/[^A-Za-z0-9_-]/g, "_")}`);
 
   function openUrl(event: MouseEvent, url: string | null) {
@@ -79,10 +86,10 @@
       <a
         href={bridge.web_url}
         class="text-muted-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm text-[11px] outline-none hover:underline focus-visible:ring-2"
-        title="the trigger job"
-        aria-label={`Open trigger job ${bridge.name} in GitLab`}
+        title={neverStarted ? "the expected workflow" : "the trigger job"}
+        aria-label={neverStarted ? `Open workflow ${bridge.name}` : `Open trigger job ${bridge.name} in GitLab`}
         data-slot="bridge-job-link"
-        onclick={(event) => openUrl(event, bridge.web_url)}>job</a
+        onclick={(event) => openUrl(event, bridge.web_url)}>{neverStarted ? "workflow" : "job"}</a
       >
     {/if}
     {#if bridge.child_url}
@@ -94,12 +101,18 @@
         data-slot="bridge-child-link"
         onclick={(event) => openUrl(event, bridge.child_url)}>child</a
       >
+    {:else if bridge.verdict === "dead" && neverStarted}
+      <span class="text-tone-red shrink-0 text-[11px]" title="expected workflow did not run" data-slot="bridge-never-started"
+        >never started</span
+      >
     {:else if bridge.verdict === "dead"}
       <span class="text-tone-red shrink-0 text-[11px]" title="the trigger job created no child pipeline">no child</span>
     {/if}
   </div>
   <Collapsible.Content id={bodyId} class="pt-0.5 pb-1 pl-5">
-    {#if !bridge.dived}
+    {#if neverStarted}
+      <p class="text-muted-foreground px-1 text-xs">Expected workflow did not run.</p>
+    {:else if !bridge.dived}
       <!-- `dived: false` means nobody looked, NOT that the child had no jobs. -->
       <p class="text-muted-foreground px-1 text-xs">Child pipeline not inspected.</p>
     {:else if bridge.child_id === null}

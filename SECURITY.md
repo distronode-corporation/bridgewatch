@@ -35,13 +35,17 @@ What bridgewatch does to protect you, so a report can say which of these it brea
 - The config file records where a token comes from (a keyring item, bridgewatch's own
   keyring entry, an environment variable, or a command), never the token. A literal token
   string in `token = ...` is refused at load time, and the setup wizard refuses to write
-  a file that contains anything shaped like a GitLab token.
+  a file that contains anything shaped like a GitLab token, or for a GitHub account a
+  GitHub token.
 - In memory a token is a `Secret` whose `Debug` and `Display` print `<redacted>`. The
   request log records method, API path, status and timing, never headers.
 - A token pasted into Settings or the wizard goes to the OS keyring (service
   `bridgewatch:<account>`), not to a file.
-- HTTP redirects are not followed; a 3xx from GitLab is an error. This keeps the
-  `PRIVATE-TOKEN` header from travelling to whatever host a redirect names.
+- HTTP redirects are not followed; a redirect from GitLab or GitHub is an error (a `304`
+  answering bridgewatch's own conditional request to GitHub is not a redirect). This keeps
+  the `PRIVATE-TOKEN` or `Authorization` header from travelling to whatever host a
+  redirect names. GitHub paginates through a `Link` header, and a next-page link that
+  names another host is refused rather than followed.
 - A plain `http://` `base_url` is accepted (for local and internal instances) but
   validation warns about it unless the host is loopback, because the token would cross
   the network unencrypted. HTTPS uses rustls with certificate verification and no option
@@ -66,13 +70,15 @@ defend against a web view that is already fully compromised, which could read th
 send it back; that would need a native dialog. Edits you make in your own editor are not
 checked: the file is yours.
 
-### Links open only to your GitLab hosts
+### Links open only to your configured hosts
 
 Every URL the app opens, from the popover or the tray menu, goes through one function in
 the Rust shell. It opens only `http` and `https` URLs whose scheme, host and port match a
-configured account's `base_url`, and refuses everything else, including `file:` and
-`javascript:` URLs. The URLs come from GitLab's API, so this is the boundary against a
-hostile or compromised instance.
+configured account's `base_url`, or for a GitHub account its web host (`github.com` for
+`api.github.com`, the server itself for GitHub Enterprise Server), and refuses everything
+else, including look-alike hosts, other ports, `file:` and `javascript:` URLs. The URLs
+come from the provider's API, so this is the boundary against a hostile or compromised
+instance.
 
 ### The web views have almost no capabilities
 
@@ -94,7 +100,8 @@ pipeline view (no token, no HTTP client) and returns a state name.
 
 Recorded test fixtures are put through an allow-list of the fields the engine reads, and
 a test checks every committed fixture against it, because a raw GitLab payload carries
-names, email addresses, commit messages and runner details.
+names, email addresses, commit messages and runner details. Recording from a GitHub
+account is refused until GitHub payloads have an allow-list of their own.
 
 ## Scope
 
@@ -122,7 +129,7 @@ Out of scope:
   is a decision rather than an accident.
 - Anything that needs an attacker who can already write your config file or read your
   keyring.
-- Load on your own GitLab account from a very short poll interval.
+- Load on your own GitLab or GitHub account from a very short poll interval.
 
 ## What bridgewatch sends where
 

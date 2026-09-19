@@ -68,6 +68,84 @@ fn the_example_config_loads_and_says_what_it_looks_like() {
     assert_eq!(c.ui.popover.width, 440);
 }
 
+/// The raw text of `examples/github.toml`, the shipped GitHub example.
+fn github_example_raw() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/github.toml");
+    std::fs::read_to_string(path).expect("examples/github.toml is readable")
+}
+
+/// The GitHub example loads, means what its comments say, earns exactly the one
+/// warning its comment says it does, and survives the editor the way the GitLab
+/// example does: untouched it is the file, and an edit keeps every comment.
+#[test]
+fn the_github_example_loads_says_what_it_looks_like_and_round_trips() {
+    use bridgewatch_core::config::GroupMode;
+
+    let raw = github_example_raw();
+    let loaded = parse(&raw).expect("the GitHub example is valid");
+    let c = &loaded.config;
+
+    let account = &c.accounts["github"];
+    assert_eq!(account.provider, Provider::Github);
+    assert_eq!(account.base_url, "https://api.github.com");
+    assert_eq!(account.api_path, "");
+    assert_eq!(
+        account.token,
+        TokenSource::Keyring {
+            service: "gh:github.com".into(),
+            user: String::new(),
+        },
+        "gh's active-account item has an empty user"
+    );
+
+    let ids: Vec<&str> = c.watches.iter().map(|w| w.id.as_str()).collect();
+    assert_eq!(ids, ["main-push", "audit"]);
+    let push = &c.watches[0];
+    assert_eq!(
+        push.project,
+        ProjectRef::Path("distronode-corporation/bridgewatch".into())
+    );
+    assert_eq!(push.group, GroupMode::Commit);
+    assert_eq!(push.commit_group_window(), Some(90));
+    assert_eq!(push.expected_workflows(), ["ci.yml", "scorecard.yml"]);
+    assert_eq!(push.sources, ["push"]);
+    assert_eq!((push.poll.live_secs, push.poll.idle_secs), (30, 120));
+    assert!(
+        push.workflow.is_none(),
+        "a commit group needs every workflow"
+    );
+    assert!(push.jobs.is_empty(), "the override line is a comment");
+    let audit = &c.watches[1];
+    assert_eq!(audit.group, GroupMode::Run);
+    assert_eq!(audit.workflow.as_deref(), Some("audit.yml"));
+    assert_eq!(audit.role, Role::Secondary);
+
+    let warnings: Vec<&str> = loaded.warnings.iter().map(|d| d.path.as_str()).collect();
+    assert_eq!(
+        warnings,
+        ["watches.0.deploy_markers"],
+        "only the deliberate, commented warning"
+    );
+
+    let editor = ConfigEditor::new(&raw).expect("parses");
+    assert_eq!(editor.to_toml(), raw, "an untouched round trip is the file");
+
+    let mut editor = ConfigEditor::new(&raw).expect("parses");
+    editor
+        .apply(&[Edit::Set {
+            path: "watches.1.poll.live_secs".into(),
+            value: EditValue::Integer(45),
+        }])
+        .expect("the edit applies");
+    let edited = editor.to_toml();
+    for line in raw.lines().filter(|l| l.contains('#')) {
+        assert!(edited.contains(line), "line with a comment lost: {line}");
+    }
+    let reloaded = parse(&edited).expect("the edited file loads");
+    assert_eq!(reloaded.config.watches[1].poll.live_secs, 45);
+    assert_eq!(reloaded.config.watches[0].poll.live_secs, 30);
+}
+
 /// A file with nothing but one account and one watch must load, because every
 /// other key has a default.
 #[test]

@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "accounts": {
-      "description": "GitLab instances to talk to, keyed by the name watches refer to.",
+      "description": "CI instances to talk to, GitLab or GitHub, keyed by the name watches\nrefer to.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/Account"
@@ -67,12 +67,12 @@
       "type": "object",
       "properties": {
         "api_path": {
-          "description": "API prefix. Overridable for proxies that mount the API elsewhere.\nDefaults per provider: `/api/v4`, or empty for GitHub.",
+          "description": "API prefix. Overridable for proxies that mount the API elsewhere.\nDefaults per provider: `/api/v4`, or empty for github.com. GitHub\nEnterprise Server needs `/api/v3`.",
           "type": "string",
           "default": "/api/v4"
         },
         "base_url": {
-          "description": "Instance root, without a trailing slash, e.g. `https://gitlab.com`.\nDefaults per provider: gitlab.com, or `https://api.github.com`.",
+          "description": "Instance root, without a trailing slash, e.g. `https://gitlab.com`.\nDefaults per provider: gitlab.com, or `https://api.github.com`. For\nGitHub Enterprise Server, the server's root with `api_path = \"/api/v3\"`.",
           "type": "string",
           "default": "https://gitlab.com"
         },
@@ -119,7 +119,7 @@
           "const": "PRIVATE-TOKEN"
         },
         {
-          "description": "`Authorization: Bearer <token>`, for OAuth and CI job tokens.",
+          "description": "`Authorization: Bearer <token>`, for GitLab OAuth and CI job tokens, and\nfor every GitHub token.",
           "type": "string",
           "const": "Authorization: Bearer"
         }
@@ -151,16 +151,16 @@
       ]
     },
     "DiveConfig": {
-      "description": "Which trigger jobs to walk into.",
+      "description": "Which trigger jobs to walk into, or on a GitHub commit group, which\nworkflow runs.",
       "type": "object",
       "properties": {
         "bridges": {
-          "description": "Glob over trigger-job names. `\"*\"` dives into all of them; `\"\"` into\nnone, which turns the watch into a cheap one-request-per-tick row.",
+          "description": "Glob over trigger-job names, or workflow names on a GitHub commit\ngroup. `\"*\"` dives into all of them; `\"\"` into none, which turns the\nwatch into a cheap one-request-per-tick row.",
           "type": "string",
           "default": "*"
         },
         "depth": {
-          "description": "How many levels of child pipeline to walk. `1` is the parent's own\nchildren.",
+          "description": "How many levels of child pipeline to walk. `1` is the parent's own\nchildren. GitLab only: GitHub runs do not nest.",
           "type": "integer",
           "format": "uint8",
           "default": 1,
@@ -305,7 +305,7 @@
           "minimum": 0
         },
         "level": {
-          "description": "`error` | `warn` | `info` | `debug` | `trace`. `RUST_LOG` wins when set.",
+          "description": "`error` | `warn` | `info` | `debug` | `trace` | `off`. `RUST_LOG` wins\nwhen set.",
           "type": "string",
           "default": "info"
         }
@@ -364,14 +364,14 @@
       "type": "object",
       "properties": {
         "idle_secs": {
-          "description": "Interval used when everything has settled.",
+          "description": "Interval used when everything has settled. The setup wizard starts a\nGitHub watch at 120.",
           "type": "integer",
           "format": "uint64",
           "default": 60,
           "minimum": 0
         },
         "live_secs": {
-          "description": "Interval used while anything relevant is unsettled.",
+          "description": "Interval used while anything relevant is unsettled. The setup wizard\nstarts a GitHub watch at 30, because a GitHub token gets 5,000\nrequests an hour.",
           "type": "integer",
           "format": "uint64",
           "default": 5,
@@ -430,7 +430,7 @@
           "const": "gitlab"
         },
         {
-          "description": "GitHub Actions. One workflow run is one pipeline, and the watch's\n`workflow` key says which workflow.",
+          "description": "GitHub Actions. A watch's `group` key decides what one row is: one\nworkflow run (`run`, the default, narrowed by `workflow`), or every run\none push started (`commit`).",
           "type": "string",
           "const": "github"
         }
@@ -501,7 +501,7 @@
       "description": "Where a token is read from.\n\nA literal token string is rejected at parse time with an explanatory error:\nbridgewatch never wants a credential sitting in a config file.",
       "oneOf": [
         {
-          "description": "An entry in the OS credential store, addressed exactly as another tool\nwrote it. `user` may be empty: `glab` stores its token with an empty\naccount on the macOS Keychain and an empty `username` attribute on the\nLinux Secret Service.",
+          "description": "An entry in the OS credential store, addressed exactly as another tool\nwrote it. `user` may be empty: `glab` stores its token with an empty\naccount on the macOS Keychain and an empty `username` attribute on the\nLinux Secret Service, and `gh` keeps its active account's token under\n`gh:<host>` the same way.",
           "type": "object",
           "properties": {
             "keyring": {
@@ -652,14 +652,14 @@
           }
         },
         "expect": {
-          "description": "GitHub only, and only with `group = \"commit\"`: workflow FILE names\n(`ci.yml`) that must have a run in every commit group this watch shows.\nOnce a group has settled and its `fan_out_secs` window has passed, an\nexpected workflow with no run in it is a dead bridge, the way a GitLab\ntrigger job that created no child is. Until then it is a pending job.\nIt applies to every group the watch shows, whatever its event, so list\nonly workflows that run on EVERY event in `sources`, and none whose\n`paths` or `branches` filter can legitimately skip a push.",
+          "description": "GitHub only, and only with `group = \"commit\"`: workflow FILE names\n(`ci.yml`, or the whole `.github/workflows/ci.yml` path), not display\nnames, that must have a run in every commit group this watch shows.\nOnce a group has settled and its `fan_out_secs` window has passed, an\nexpected workflow with no run in it is a dead bridge, the way a GitLab\ntrigger job that created no child is. Until then it is a pending job.\nIt applies to every group the watch shows, whatever its event, so list\nonly workflows that run on EVERY event in `sources`, and none whose\n`paths` or `branches` filter can legitimately skip a push.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "fan_out_secs": {
-          "description": "GitHub only, and only with `group = \"commit\"`: runs of one commit and\nevent created within this many seconds of the group's newest run are\none row. Absent is 90.",
+          "description": "GitHub only, and only with `group = \"commit\"`: runs of one commit,\nevent and branch created within this many seconds of the group's\nnewest run are one row. Absent is 90.",
           "type": [
             "integer",
             "null"
@@ -668,7 +668,7 @@
           "minimum": 0
         },
         "group": {
-          "description": "GitHub only: what one row is. `run` (the default) is one workflow run;\n`commit` folds every run of one commit and event into one row, each\nrun appearing as a bridge, so `dive` selects workflow names.",
+          "description": "GitHub only: what one row is. `run` (the default) is one workflow run;\n`commit` folds every run of one push (same commit, event and branch)\ninto one row, each run appearing as a bridge, so `dive` selects\nworkflow names.",
           "$ref": "#/$defs/GroupMode"
         },
         "id": {
@@ -708,7 +708,7 @@
           "default": "downgrade"
         },
         "project": {
-          "description": "Numeric project id, or a `group/path` which is URL-encoded for you.",
+          "description": "GitLab: a numeric project id, or a `group/path` which is URL-encoded\nfor you. GitHub: `owner/repo`, which is the only form GitHub accepts.",
           "$ref": "#/$defs/ProjectRef"
         },
         "ref": {
@@ -735,7 +735,7 @@
           "default": "downgrade"
         },
         "sources": {
-          "description": "Pipeline sources to accept. Empty means all of them.",
+          "description": "Pipeline sources (GitLab) or workflow events (GitHub) to accept. Empty\nmeans all of them.",
           "type": "array",
           "default": [],
           "items": {
@@ -743,7 +743,7 @@
           }
         },
         "workflow": {
-          "description": "GitHub only: the one workflow this watch follows, as its file name\n(`ci.yml`) or its numeric id. Absent or empty is every workflow, and\nthen the watch shows one row per run.",
+          "description": "GitHub only: the one workflow this watch follows, as its file name\n(`ci.yml`) or its numeric id. Absent or empty is every workflow. Leave\nit out with `group = \"commit\"`, which needs every workflow's runs.",
           "type": [
             "string",
             "null"
