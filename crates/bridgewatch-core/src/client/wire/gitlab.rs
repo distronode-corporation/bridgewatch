@@ -1,30 +1,28 @@
-//! The normalised model: one provider-neutral shape the whole engine reads.
+//! GitLab's wire format: exactly the fields bridgewatch decodes, and nothing
+//! else.
 //!
-//! Nothing here is a wire format. Each provider decodes its own responses into
-//! [`crate::client::wire`] and converts them into these types, so the verdict
-//! engine, the cache, the notifier and the view model never learn which API a
-//! pipeline came from. The names are GitLab's vocabulary because that is what
-//! 0.1.0 published and `check --json`, the Rhai hook and every `expected.json`
-//! pin, not because the meanings are GitLab's: a `Bridge` is "a dependent unit
-//! of work reached from this one", which a GitHub workflow run is too.
+//! Every field bridgewatch does not use is dropped, and every field it does use
+//! that GitLab may omit is an [`Option`]. Statuses decode through [`Status`],
+//! which never fails on an unrecognised value. Nothing here is ever
+//! serialised: each type converts into its [`crate::model`] twin and the model
+//! is what the rest of the crate sees.
 //!
-//! Optional fields are optional because a provider may omit them, and statuses
-//! decode through [`Status`], which never fails on an unrecognised value.
-//!
-//! ⚠️ These types are `Serialize` as well as `Deserialize`, and the `Serialize`
-//! half is a contract: the fixture recorder writes them back out as recorded
-//! API responses. A field renamed, reordered or given a `skip_serializing_if`
-//! here changes bytes that are committed to the repository.
+//! ⚠️ The GitLab wire shape and the normalised model are field-for-field the
+//! same today, because the model was grown from this API. That is a fact about
+//! GitLab rather than a rule: the conversions below are the only place allowed
+//! to assume it, so a change on either side stays a compile error here instead
+//! of a silent re-interpretation everywhere.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
+use crate::model;
 use crate::status::Status;
 
 /// A pipeline, as returned by both the list endpoint and `GET /pipelines/{id}`.
 ///
 /// The list row carries fewer fields than the detail object; the extra ones are
 /// optional so a single type serves both.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Pipeline {
     /// Instance-wide pipeline id. This is what every other endpoint keys on.
     pub id: u64,
@@ -52,8 +50,7 @@ pub struct Pipeline {
     /// When the pipeline row was created.
     #[serde(default)]
     pub created_at: Option<String>,
-    /// Last change to the pipeline. The cache uses this to decide whether a
-    /// settled pipeline needs re-fetching.
+    /// Last change to the pipeline.
     #[serde(default)]
     pub updated_at: Option<String>,
     /// When the first job started.
@@ -64,24 +61,29 @@ pub struct Pipeline {
     pub finished_at: Option<String>,
 }
 
-impl Pipeline {
-    /// The seven-character short sha the UI and notifications use.
-    pub fn sha7(&self) -> String {
-        self.sha.chars().take(7).collect()
-    }
-
-    /// The `(status, updated_at)` pair the cache validates a stored snapshot
-    /// against. A settled pipeline whose pair has not moved is not re-fetched.
-    pub fn revision(&self) -> (Status, Option<String>) {
-        (self.status.clone(), self.updated_at.clone())
+impl From<Pipeline> for model::Pipeline {
+    fn from(p: Pipeline) -> Self {
+        Self {
+            id: p.id,
+            iid: p.iid,
+            project_id: p.project_id,
+            sha: p.sha,
+            ref_name: p.ref_name,
+            status: p.status,
+            source: p.source,
+            web_url: p.web_url,
+            created_at: p.created_at,
+            updated_at: p.updated_at,
+            started_at: p.started_at,
+            finished_at: p.finished_at,
+        }
     }
 }
 
 /// A job inside a pipeline.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Job {
-    /// Instance-wide job id. Used as the tie-break ordering when `started_at`
-    /// is null, which it is for every job that never ran.
+    /// Instance-wide job id.
     pub id: u64,
     /// Job name, including the `n/m` suffix GitLab appends to a parallel job.
     pub name: String,
@@ -99,10 +101,8 @@ pub struct Job {
     /// When the job finished.
     #[serde(default)]
     pub finished_at: Option<String>,
-    /// Seconds the job has run, as GitLab computed it: the whole run for a
-    /// finished job, the elapsed time at response time for a running one, and
-    /// null for a job that never started. A float, because GitLab sends
-    /// fractional seconds.
+    /// Seconds the job has run, as GitLab computed it. A float, because GitLab
+    /// sends fractional seconds.
     #[serde(default)]
     pub duration: Option<f64>,
     /// Link to the job in the GitLab UI.
@@ -110,13 +110,19 @@ pub struct Job {
     pub web_url: Option<String>,
 }
 
-impl Job {
-    /// Ordering key for "did this job start before that one".
-    ///
-    /// `started_at` first, job id as the tie-break, because a job that never ran
-    /// has no start time and must still sort deterministically.
-    pub fn order_key(&self) -> (Option<&str>, u64) {
-        (self.started_at.as_deref(), self.id)
+impl From<Job> for model::Job {
+    fn from(j: Job) -> Self {
+        Self {
+            id: j.id,
+            name: j.name,
+            status: j.status,
+            stage: j.stage,
+            allow_failure: j.allow_failure,
+            started_at: j.started_at,
+            finished_at: j.finished_at,
+            duration: j.duration,
+            web_url: j.web_url,
+        }
     }
 }
 
@@ -125,15 +131,13 @@ impl Job {
 ///
 /// `downstream_pipeline` is `None` when the child was never created, which is
 /// the single most interesting failure shape bridgewatch exists to surface.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Bridge {
     /// Instance-wide job id of the trigger job itself.
     pub id: u64,
     /// The trigger job's name, e.g. `trigger:website`.
     pub name: String,
-    /// Status of the trigger job. With `strategy: depend` this mirrors the
-    /// child's status; without it, it goes `success` the moment the child is
-    /// created.
+    /// Status of the trigger job.
     pub status: Status,
     /// The stage the trigger job belongs to.
     #[serde(default)]
@@ -152,11 +156,23 @@ pub struct Bridge {
     pub downstream_pipeline: Option<DownstreamPipeline>,
 }
 
+impl From<Bridge> for model::Bridge {
+    fn from(b: Bridge) -> Self {
+        Self {
+            id: b.id,
+            name: b.name,
+            status: b.status,
+            stage: b.stage,
+            allow_failure: b.allow_failure,
+            started_at: b.started_at,
+            web_url: b.web_url,
+            downstream_pipeline: b.downstream_pipeline.map(Into::into),
+        }
+    }
+}
+
 /// The child pipeline a [`Bridge`] created.
-///
-/// `project_id` matters: a multi-project trigger creates the child in another
-/// project, and its jobs must be fetched from there.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct DownstreamPipeline {
     /// The child pipeline's id.
     pub id: u64,
@@ -176,55 +192,25 @@ pub struct DownstreamPipeline {
     pub web_url: Option<String>,
 }
 
-/// Everything fetched for one pipeline in a single tick: the pipeline row, its
-/// own jobs, its bridges, and the jobs of each child that was dived into.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PipelineDetail {
-    /// The pipeline row this detail was built from.
-    pub pipeline: Pipeline,
-    /// The parent pipeline's own jobs.
-    pub jobs: Vec<Job>,
-    /// The parent pipeline's trigger jobs.
-    pub bridges: Vec<Bridge>,
-    /// Jobs of each dived child, keyed by child pipeline id. A bridge that was
-    /// not dived into has no entry, which is different from having an empty one.
-    pub child_jobs: std::collections::BTreeMap<u64, Vec<Job>>,
-    /// Trigger jobs of each dived child, keyed by child pipeline id.
-    ///
-    /// Only populated when `dive.depth` is greater than 1: at depth 1 a child's
-    /// own bridges are never asked for, so an absent entry means "not looked
-    /// at" rather than "this child triggers nothing".
-    #[serde(default)]
-    pub child_bridges: std::collections::BTreeMap<u64, Vec<Bridge>>,
-}
-
-impl PipelineDetail {
-    /// A detail with no jobs and no bridges, for a pipeline that has not been
-    /// fetched beyond its list row.
-    ///
-    /// ⚠️ Evaluating one of these through the icon rules reports an empty job
-    /// list as "nothing failed". Anything building a bare detail because a
-    /// fetch FAILED must say so with
-    /// [`crate::verdict::DetailSource::Unavailable`].
-    pub fn bare(pipeline: Pipeline) -> Self {
+impl From<DownstreamPipeline> for model::DownstreamPipeline {
+    fn from(d: DownstreamPipeline) -> Self {
         Self {
-            pipeline,
-            jobs: Vec::new(),
-            bridges: Vec::new(),
-            child_jobs: std::collections::BTreeMap::new(),
-            child_bridges: std::collections::BTreeMap::new(),
+            id: d.id,
+            project_id: d.project_id,
+            sha: d.sha,
+            ref_name: d.ref_name,
+            status: d.status,
+            web_url: d.web_url,
         }
     }
 }
 
-/// The authenticated user, from `GET /user`. Used by the setup wizard to name
-/// who a token belongs to.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The authenticated user, from `GET /user`.
+#[derive(Debug, Clone, Deserialize)]
 pub struct User {
     /// Instance-wide user id.
     pub id: u64,
-    /// The login name. A project or group access token's bot user is named
-    /// `project_<id>_bot_<hex>` or `group_<id>_bot_<hex>`.
+    /// The login name.
     pub username: String,
     /// Display name.
     #[serde(default)]
@@ -235,9 +221,20 @@ pub struct User {
     pub bot: bool,
 }
 
+impl From<User> for model::User {
+    fn from(u: User) -> Self {
+        Self {
+            id: u.id,
+            username: u.username,
+            name: u.name,
+            bot: u.bot,
+        }
+    }
+}
+
 /// The token that authenticated a request, from
 /// `GET /personal_access_tokens/self`. Never carries the token value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TokenInfo {
     /// Token id.
     pub id: u64,
@@ -255,8 +252,20 @@ pub struct TokenInfo {
     pub active: Option<bool>,
 }
 
+impl From<TokenInfo> for model::TokenInfo {
+    fn from(t: TokenInfo) -> Self {
+        Self {
+            id: t.id,
+            name: t.name,
+            scopes: t.scopes,
+            expires_at: t.expires_at,
+            active: t.active,
+        }
+    }
+}
+
 /// A project, as `GET /projects` and `GET /projects/{id}` return it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Project {
     /// Numeric project id.
     pub id: u64,
@@ -271,4 +280,16 @@ pub struct Project {
     /// Link to the project.
     #[serde(default)]
     pub web_url: Option<String>,
+}
+
+impl From<Project> for model::Project {
+    fn from(p: Project) -> Self {
+        Self {
+            id: p.id,
+            path_with_namespace: p.path_with_namespace,
+            name: p.name,
+            default_branch: p.default_branch,
+            web_url: p.web_url,
+        }
+    }
 }

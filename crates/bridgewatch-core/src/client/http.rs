@@ -82,6 +82,20 @@ pub struct HttpResponse {
     pub ratelimit_reset: Option<u64>,
     /// `retry-after`, in seconds.
     pub retry_after: Option<u64>,
+    /// `etag`, exactly as received.
+    ///
+    /// ⚠️ Kept byte for byte, weak `W/` prefix included, because the only thing
+    /// it is ever used for is echoing back in `If-None-Match`, and a validator
+    /// the server does not recognise is simply a cache miss it will not report.
+    /// Nothing reads it yet.
+    pub etag: Option<String>,
+    /// `link`, exactly as received: the whole header, all relations, unparsed.
+    ///
+    /// GitHub pages with `Link: <...>; rel="next"` rather than GitLab's
+    /// `x-next-page`, and rewrites `/repos/{owner}/{repo}/` to
+    /// `/repositories/{id}/` in those URLs, so the next page has to be FOLLOWED
+    /// rather than reconstructed. Nothing reads it yet.
+    pub link: Option<String>,
 }
 
 /// Executes HTTP requests. The one seam between the verdict engine and the
@@ -251,6 +265,9 @@ impl Transport for ReqwestTransport {
         let ratelimit_remaining = header("ratelimit-remaining").and_then(|v| v.parse().ok());
         let ratelimit_reset = header("ratelimit-reset").and_then(|v| v.parse().ok());
         let retry_after = header("retry-after").and_then(|v| v.parse().ok());
+        // Taken verbatim: see the fields' docs. An empty header is not a value.
+        let etag = header("etag").filter(|s| !s.is_empty());
+        let link = header("link").filter(|s| !s.is_empty());
 
         let body = response
             .text()
@@ -264,6 +281,8 @@ impl Transport for ReqwestTransport {
             ratelimit_remaining,
             ratelimit_reset,
             retry_after,
+            etag,
+            link,
         })
     }
 }

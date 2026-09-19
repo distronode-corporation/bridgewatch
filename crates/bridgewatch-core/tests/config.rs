@@ -8,8 +8,8 @@ use bridgewatch_core::config::edit::{
     ConfigEditor, Edit, EditValue, quote_path_segment, split_path,
 };
 use bridgewatch_core::config::{
-    self, Config, FailurePolicy, JobOverride, Pattern, ProjectRef, RefMatcher, Role, Severity,
-    TokenSource, WatchRules,
+    self, Config, FailurePolicy, JobOverride, Pattern, ProjectRef, Provider, RefMatcher, Role,
+    Severity, TokenSource, WatchRules,
 };
 
 fn parse(raw: &str) -> Result<config::Loaded, config::ConfigError> {
@@ -1307,4 +1307,164 @@ fn the_example_states_the_jobs_mode() {
         bridgewatch_core::config::JobsMode::All
     );
     assert!(support::example_config_raw().contains("jobs = \"all\""));
+}
+
+// ---------------------------------------------------------------------------
+// Providers
+// ---------------------------------------------------------------------------
+
+/// An account written before `provider` existed is a GitLab account, with
+/// GitLab's two defaults.
+#[test]
+fn an_account_with_no_provider_is_a_gitlab_account() {
+    let loaded = parse(
+        r#"
+        [accounts.gl]
+        token = { env = "TOK" }
+
+        [[watches]]
+        id = "x"
+        account = "gl"
+        project = 1
+        "#,
+    )
+    .expect("a file with no provider key still loads");
+
+    let account = &loaded.config.accounts["gl"];
+    assert_eq!(account.provider, Provider::Gitlab);
+    assert_eq!(account.base_url, "https://gitlab.com");
+    assert_eq!(account.api_path, "/api/v4");
+}
+
+/// Writing the default out changes nothing, which is what makes the key safe to
+/// add to an existing file.
+#[test]
+fn an_explicit_gitlab_provider_means_exactly_the_default() {
+    let loaded = parse(
+        r#"
+        [accounts.gl]
+        provider = "gitlab"
+        token = { env = "TOK" }
+
+        [[watches]]
+        id = "x"
+        account = "gl"
+        project = 1
+        "#,
+    )
+    .expect("an explicit gitlab provider loads");
+
+    let account = &loaded.config.accounts["gl"];
+    assert_eq!(account.provider, Provider::Gitlab);
+    assert_eq!(account.base_url, "https://gitlab.com");
+    assert_eq!(account.api_path, "/api/v4");
+}
+
+/// ⛔ A GitHub account PARSES and is then refused. The value has to reach the
+/// typed config for the diagnostic to be able to name it, and the refusal has
+/// to be an error: there is no GitHub client, so loading the file would give a
+/// watch that silently shows nothing.
+#[test]
+fn a_github_account_parses_and_validation_refuses_it() {
+    let raw = r#"
+[accounts.gh]
+provider = "github"
+token = { env = "TOK" }
+
+[[watches]]
+id = "x"
+account = "gh"
+project = "distronode-corporation/bridgewatch"
+"#;
+    let err = parse(raw).expect_err("GitHub is not implemented yet");
+    let config::ConfigError::Invalid { diagnostics, .. } = err else {
+        panic!("expected Invalid, got {err}");
+    };
+
+    let provider_errors: Vec<&config::Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error && d.path == "accounts.gh.provider")
+        .collect();
+    assert_eq!(provider_errors.len(), 1, "{diagnostics:?}");
+    assert!(
+        provider_errors[0].message.contains("not implemented yet"),
+        "the message says why rather than how: {}",
+        provider_errors[0].message
+    );
+    assert!(
+        provider_errors[0].line_col(raw).is_some(),
+        "the diagnostic points at the provider line"
+    );
+
+    // ⚠ And it is the ONLY error. GitHub's empty `api_path` is right for
+    // github.com, so the api_path rule must not fire a second, misleading one.
+    let paths: Vec<&str> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| d.path.as_str())
+        .collect();
+    assert_eq!(paths, ["accounts.gh.provider"], "{diagnostics:?}");
+}
+
+/// The two defaults that follow the provider. Read off the deserialiser, since
+/// `parse_str` refuses the file before it could hand one back.
+#[test]
+fn a_github_account_defaults_to_the_github_api_root_and_no_api_path() {
+    let config: Config = toml::from_str(
+        r#"
+        [accounts.gh]
+        provider = "github"
+        token = { env = "TOK" }
+        "#,
+    )
+    .expect("the table deserialises; it is validation that refuses it");
+    let account = &config.accounts["gh"];
+    assert_eq!(account.provider, Provider::Github);
+    assert_eq!(account.base_url, "https://api.github.com");
+    assert_eq!(
+        account.api_path, "",
+        "github.com mounts its API on a host, not behind a path prefix"
+    );
+}
+
+/// ⛔ A file that never mentioned `provider` comes back out of the editor
+/// byte-identical, and an unrelated edit does not add the key. A default that
+/// materialised as a written key would rewrite every existing user's
+/// configuration the first time they changed anything in the settings window.
+#[test]
+fn an_existing_config_round_trips_without_gaining_a_provider_line() {
+    // A file as it was written before the key existed, comments and all.
+    let raw = r#"# bridgewatch, as it was configured in 0.1.0.
+[accounts.gitlab]
+base_url = "https://gitlab.com"
+token    = { keyring = { service = "glab:gitlab.com:token", user = "" } }
+
+[[watches]]
+id      = "main-push"
+account = "gitlab"
+project = 82468124
+ref     = "main"
+deploy_markers = ["deploy:origins"]
+"#;
+    let editor = ConfigEditor::new(raw).expect("an old file parses");
+    assert_eq!(editor.to_toml(), raw, "an untouched round trip is the file");
+
+    let mut edited = ConfigEditor::new(raw).expect("an old file parses");
+    edited
+        .apply(&[Edit::Set {
+            path: "log.keep_requests".into(),
+            value: EditValue::Integer(25),
+        }])
+        .expect("an unrelated edit applies");
+    let text = edited.to_toml();
+    assert!(
+        !text.contains("provider"),
+        "editing one key must not write a provider line: {text}"
+    );
+    let loaded = parse(&text).expect("and the result still loads");
+    assert_eq!(
+        loaded.config.accounts["gitlab"].provider,
+        Provider::Gitlab,
+        "an absent key is the GitLab account it always was"
+    );
 }

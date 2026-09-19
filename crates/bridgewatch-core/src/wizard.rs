@@ -24,7 +24,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::client::{ClientError, GitLabClient, ListQuery};
+use crate::client::{CiClient, ClientError, ListQuery};
 use crate::config::edit::{ConfigEditor, Edit, EditError, EditValue, quote_path_segment};
 use crate::config::{
     self, Config, Diagnostic, KNOWN_PIPELINE_SOURCES, Pattern, ProjectRef, RefMatcher, Role,
@@ -283,7 +283,7 @@ pub fn classify_token(user: &User, token_self_answered: bool) -> TokenKind {
 /// `GET /user` must succeed; its failure is the answer (a 401 is a bad token).
 /// `GET /personal_access_tokens/self` is best effort: it supplies scopes and
 /// expiry where the instance and the credential support it.
-pub async fn test_connection(client: &GitLabClient) -> Result<Identity, WizardError> {
+pub async fn test_connection(client: &dyn CiClient) -> Result<Identity, WizardError> {
     let user = client
         .current_user()
         .await
@@ -517,7 +517,7 @@ pub const PROJECT_PAGES: u32 = 3;
 /// account whose listing is refused gets the same "type it" answer rather than
 /// an error, because typing an id still works for it.
 pub async fn list_projects(
-    client: &GitLabClient,
+    client: &dyn CiClient,
     token: &TokenKind,
     search: Option<&str>,
 ) -> Result<ProjectListing, WizardError> {
@@ -606,7 +606,7 @@ pub struct ResolvedProject {
 
 /// Step 2: resolve a typed id, path or URL to a real project.
 pub async fn resolve_project(
-    client: &GitLabClient,
+    client: &dyn CiClient,
     id_or_path: &str,
 ) -> Result<ResolvedProject, WizardError> {
     let project = parse_project_input(id_or_path)?;
@@ -765,7 +765,7 @@ fn representative(rows: &[Pipeline]) -> Option<&Pipeline> {
 /// Step 4: suggest deploy markers from the latest pipeline on `ref_name`,
 /// reading its jobs and, through its bridges, every child pipeline's jobs.
 pub async fn suggest_deploy_markers(
-    client: &GitLabClient,
+    client: &dyn CiClient,
     project: &ProjectRef,
     ref_name: &str,
 ) -> Result<MarkerSuggestions, WizardError> {

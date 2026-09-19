@@ -12,11 +12,11 @@ mod support;
 
 use std::sync::{Arc, Mutex};
 
-use bridgewatch_core::client::http::HttpRequest;
-use bridgewatch_core::client::{ClientError, GitLabClient, ListQuery, RequestRing};
-use bridgewatch_core::config::{Account, AuthHeader, ProjectRef};
+use bridgewatch_core::client::http::{HttpRequest, Transport};
+use bridgewatch_core::client::{CiClient, ClientError, GitLabClient, ListQuery, RequestRing};
+use bridgewatch_core::config::{Account, AuthHeader, ProjectRef, Provider};
 use bridgewatch_core::status::Status;
-use bridgewatch_core::token::Secret;
+use bridgewatch_core::token::{Secret, TokenError};
 use support::{Canned, client_with};
 
 /// An exact ref and a single source are pushed to the API; the ordering is by
@@ -644,5 +644,173 @@ async fn a_redirect_is_an_error_and_the_token_does_not_travel() {
     assert!(
         followed.is_empty(),
         "the redirect target was contacted, so the token travelled: {followed:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The provider seam
+// ---------------------------------------------------------------------------
+
+/// The factory is the only place a provider becomes a client, and everything
+/// above it holds the trait object.
+#[tokio::test]
+async fn the_factory_builds_a_gitlab_client_behind_the_trait() {
+    let transport = Canned::new(vec![(200, "[]".into(), None)]);
+    let client = bridgewatch_core::client::client_for(
+        &Account::default(),
+        &Secret::new("glpat-SECRET"),
+        transport.clone(),
+        RequestRing::new(4),
+    )
+    .expect("gitlab is the provider this build has");
+
+    // Through `dyn CiClient`, which is what the poller holds.
+    let rows = CiClient::list_pipelines(
+        client.as_ref(),
+        &ProjectRef::Id(7),
+        &ListQuery::exact("main", None, 5),
+    )
+    .await
+    .expect("the scripted empty page");
+    assert!(rows.is_empty());
+    assert_eq!(
+        transport.paths(),
+        ["/projects/7/pipelines?ref=main&order_by=id&sort=desc&per_page=5"],
+        "the trait object reaches the same request the concrete client makes"
+    );
+    assert_eq!(client.ring().len(), 1, "and records into the same ring");
+}
+
+/// ⛔ An account naming a provider this build has no client for is REFUSED.
+/// Falling through to a GitLab client pointed at `https://api.github.com` would
+/// send `/api/v4/projects/...` to GitHub and present a pile of 404s as a wrong
+/// project id.
+#[tokio::test]
+async fn the_factory_refuses_a_provider_it_has_no_client_for() {
+    let account = Account {
+        provider: Provider::Github,
+        ..Account::default()
+    };
+    let transport = Canned::new(vec![(200, "[]".into(), None)]);
+    let error = bridgewatch_core::client::client_for(
+        &account,
+        &Secret::new("gho_SECRET"),
+        transport.clone(),
+        RequestRing::new(4),
+    )
+    .expect_err("there is no GitHub client yet");
+
+    assert!(
+        matches!(
+            error,
+            ClientError::UnsupportedProvider { provider: "github" }
+        ),
+        "{error:?}"
+    );
+    assert!(
+        error.is_fatal(),
+        "retrying a provider that does not exist never helps"
+    );
+    assert!(
+        transport.paths().is_empty(),
+        "and nothing was sent anywhere"
+    );
+}
+
+/// ⚠ `etag` and `link` are captured for the conditional-request and
+/// `Link`-pagination work GitHub needs, and are kept EXACTLY as received: the
+/// weak `W/` prefix is part of the validator, and GitHub rewrites
+/// `/repos/{owner}/{repo}/` to `/repositories/{id}/` in its `Link` URLs, so a
+/// next page has to be followed rather than rebuilt. Nothing reads them yet,
+/// which is precisely when a transport is easiest to get quietly wrong.
+#[tokio::test]
+async fn a_response_keeps_the_etag_and_link_headers_verbatim() {
+    let (base, _seen) = tiny_server(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: application/json\r\n\
+         ETag: W/\"686897696a7c876b7e\"\r\n\
+         Link: <https://api.example/repositories/1/actions/runs?page=2>; rel=\"next\", \
+         <https://api.example/repositories/1/actions/runs?page=9>; rel=\"last\"\r\n\
+         Content-Length: 2\r\n\r\n[]",
+    );
+    let transport =
+        bridgewatch_core::client::ReqwestTransport::new(std::time::Duration::from_secs(5))
+            .expect("a transport builds");
+
+    let response = transport
+        .execute(HttpRequest {
+            method: "GET",
+            url: format!("{base}/anything"),
+            path: "/anything".into(),
+            headers: Vec::new(),
+        })
+        .await
+        .expect("the loopback server answers");
+
+    assert_eq!(response.etag.as_deref(), Some("W/\"686897696a7c876b7e\""));
+    let link = response.link.expect("the whole header, unparsed");
+    assert!(link.contains("rel=\"next\""), "{link}");
+    assert!(
+        link.contains("rel=\"last\""),
+        "every relation survives, not just the first: {link}"
+    );
+    assert_eq!(
+        response.next_page, None,
+        "and GitLab's x-next-page is still its own field"
+    );
+}
+
+/// A provider that answers one variable and nothing else, so a poller can be
+/// built without reading a real credential.
+struct OneVariable;
+
+impl bridgewatch_core::token::TokenProvider for OneVariable {
+    fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        Err(TokenError::NoEntry {
+            service: service.into(),
+            user: user.into(),
+        })
+    }
+    fn keyring_set(&self, _service: &str, _user: &str, _secret: &str) -> Result<(), TokenError> {
+        Ok(())
+    }
+    fn keyring_delete(&self, _service: &str, _user: &str) -> Result<(), TokenError> {
+        Ok(())
+    }
+    fn env(&self, _name: &str) -> Option<String> {
+        Some("token-from-a-test".to_string())
+    }
+    fn run(&self, _argv: &[String]) -> Result<String, TokenError> {
+        Err(TokenError::Empty)
+    }
+}
+
+/// ⛔ The poller refuses to build rather than approximating. `validate` already
+/// rejects the file, so this is the second line of the same defence: anything
+/// reaching `from_config` with a provider that has no client gets an error, not
+/// a GitLab client aimed at somebody else's API.
+#[test]
+fn the_poller_refuses_to_build_a_client_for_an_unimplemented_provider() {
+    let config: bridgewatch_core::Config = toml::from_str(
+        r#"
+        [accounts.gh]
+        provider = "github"
+        token = { env = "TOK" }
+
+        [[watches]]
+        id = "x"
+        account = "gh"
+        project = "distronode-corporation/bridgewatch"
+        "#,
+    )
+    .expect("the table deserialises; it is validation that refuses it");
+
+    let error = bridgewatch_core::poll::Poller::from_config(&config, &OneVariable)
+        .err()
+        .map(|e| e.to_string())
+        .expect("no GitHub client exists");
+    assert!(
+        error.contains("not supported"),
+        "the failure says what is wrong: {error}"
     );
 }

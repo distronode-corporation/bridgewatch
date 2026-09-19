@@ -75,22 +75,22 @@ The core **produces** notifications; delivering them is the shell's job.
 
 ### Offline mode
 
-`Poller::with_clients` takes ready-made `GitLabClient`s, so the same poller runs
+`Poller::with_clients` takes ready-made `CiClient`s, so the same poller runs
 against a recorded fixture directory with no token and no network. This is what
 `bridgewatch check --fixture <dir>` does:
 
 ```rust,no_run
-use bridgewatch_core::client::{FixtureTransport, GitLabClient, RequestRing};
+use bridgewatch_core::client::{CiClient, FixtureTransport, GitLabClient, RequestRing};
 use bridgewatch_core::token::Secret;
 use std::{collections::BTreeMap, sync::Arc};
 
 # fn example(config: &bridgewatch_core::Config) -> Result<(), Box<dyn std::error::Error>> {
 let transport = Arc::new(FixtureTransport::load("tests/fixtures/ca41ab28-deployed-with-failure")?);
 let ring = RequestRing::new(config.log.keep_requests);
-let mut clients = BTreeMap::new();
+let mut clients: BTreeMap<String, Arc<dyn CiClient>> = BTreeMap::new();
 for (name, account) in &config.accounts {
     clients.insert(name.clone(),
-        GitLabClient::new(account, &Secret::new("fixture"), transport.clone(), ring.clone()));
+        Arc::new(GitLabClient::new(account, &Secret::new("fixture"), transport.clone(), ring.clone())));
 }
 let poller = bridgewatch_core::poll::Poller::with_clients(config, clients, ring)?;
 # let _ = poller;

@@ -28,7 +28,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::http::{HttpRequest, HttpResponse, Transport};
-use super::{ClientError, GitLabClient};
+use super::wire::gitlab as wire;
+use super::{CiClient, ClientError};
 use crate::config::ProjectRef;
 use crate::model::Pipeline;
 
@@ -157,16 +158,27 @@ impl Transport for FixtureTransport {
             ratelimit_remaining: Some(1999),
             ratelimit_reset: None,
             retry_after: None,
+            // A file on disk has no validator and no paging header. Answering
+            // with one would invite a conditional-request path to believe a
+            // fixture round trip proved something about a live 304.
+            etag: None,
+            link: None,
         })
     }
 }
 
+/// Decode a recorded `list.json` through GitLab's own decoder.
+///
+/// ⚠️ A fixture directory holds GitLab wire bytes, so it is read with the wire
+/// types and converted, exactly as the client does with a live response. The
+/// normalised model is what comes back, because that is what the callers of
+/// [`FixtureTransport::list`] want.
 fn parse_list(raw: &str) -> Result<Vec<Pipeline>, serde_json::Error> {
     // `list.json` may hold either the list page or a single pipeline object,
     // because recording one pipeline by id is the common case.
-    match serde_json::from_str::<Vec<Pipeline>>(raw) {
-        Ok(v) => Ok(v),
-        Err(_) => serde_json::from_str::<Pipeline>(raw).map(|p| vec![p]),
+    match serde_json::from_str::<Vec<wire::Pipeline>>(raw) {
+        Ok(v) => Ok(v.into_iter().map(Into::into).collect()),
+        Err(_) => serde_json::from_str::<wire::Pipeline>(raw).map(|p| vec![p.into()]),
     }
 }
 
@@ -404,8 +416,12 @@ pub struct Recorded {
 /// This is the same walk `scripts/record-fixture.sh` does with `glab`, through
 /// the client instead, so it works without `glab` installed and exercises the
 /// pagination the tests then rely on.
+///
+/// ⚠️ The directory layout it writes is GitLab's (`list.json`, `bridges.json`,
+/// `child-<id>.json`), so this takes a [`CiClient`] for the calls but is not
+/// yet provider-neutral in what it produces.
 pub async fn record(
-    client: &GitLabClient,
+    client: &dyn CiClient,
     project: &ProjectRef,
     pipeline_id: u64,
     out: &Path,

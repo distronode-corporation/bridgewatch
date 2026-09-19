@@ -78,6 +78,17 @@ export interface RegistryEntry {
 export const REGISTRY: RegistryEntry[] = [
   // --- Accounts ----------------------------------------------------------
   {
+    path: "accounts.*.provider",
+    tab: "accounts",
+    control: "select",
+    label: "Provider",
+    options: ["gitlab", "github"],
+    // The value parses and the configuration is then REFUSED, which is the
+    // honest answer while there is no GitHub client: silently ignoring it would
+    // leave a watch showing nothing with no explanation.
+    hint: "GitHub is not supported yet; choosing it makes the file invalid.",
+  },
+  {
     path: "accounts.*.base_url",
     tab: "accounts",
     control: "text",

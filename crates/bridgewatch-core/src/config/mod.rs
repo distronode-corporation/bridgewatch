@@ -433,6 +433,18 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
 
     for (name, account) in &config.accounts {
         let base = format!("accounts.{name}");
+        // ⛔ An ERROR, not a warning, and it is deliberate that the file will
+        // not load. The alternative is a watch that silently shows nothing, or
+        // worse, a GitLab client aimed at GitHub's API answering 404 for every
+        // project. The parser accepts the value so the diagnostic can name it;
+        // the phase that adds the client deletes these four lines.
+        if account.provider == Provider::Github {
+            out.push(Diagnostic::error(
+                format!("{base}.provider"),
+                "GitHub support is not implemented yet: this build can only talk to GitLab. \
+                 Remove the account, or set provider = \"gitlab\"",
+            ));
+        }
         if account.base_url.trim().is_empty() {
             out.push(Diagnostic::error(
                 format!("{base}.base_url"),
@@ -468,7 +480,13 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
                 "base_url ends with a slash; it is joined to api_path verbatim",
             ));
         }
-        if !account.api_path.starts_with('/') {
+        // ⚠️ An EMPTY api_path is right for github.com, whose paths are
+        // `/repos/...` on an `api.` host with no prefix at all; only GitHub
+        // Enterprise Server inserts one (`/api/v3`). Empty is still wrong for
+        // GitLab, where the prefix is what selects the API.
+        let api_path_ok = account.api_path.starts_with('/')
+            || (account.provider == Provider::Github && account.api_path.is_empty());
+        if !api_path_ok {
             out.push(Diagnostic::error(
                 format!("{base}.api_path"),
                 "api_path must start with a slash",

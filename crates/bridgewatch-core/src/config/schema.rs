@@ -46,14 +46,81 @@ impl Config {
 // Accounts
 // ---------------------------------------------------------------------------
 
-/// One GitLab instance and the credential used against it.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Which CI provider an account talks to.
+///
+/// ⛔ The default is `gitlab` and must stay that way: every configuration file
+/// written before this key existed has no `provider` line, and adding one is
+/// not something bridgewatch may do to a user's file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    /// GitLab CI, the provider bridgewatch was built for.
+    #[default]
+    Gitlab,
+    /// GitHub Actions. ⚠️ Accepted by the parser and refused by validation:
+    /// there is no GitHub client yet, so a configuration naming one is an
+    /// error rather than a silent no-op.
+    Github,
+}
+
+impl Provider {
+    /// The config spelling, `gitlab` or `github`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Provider::Gitlab => "gitlab",
+            Provider::Github => "github",
+        }
+    }
+
+    /// The instance root an account of this provider talks to when the file
+    /// does not say.
+    pub fn default_base_url(&self) -> String {
+        match self {
+            Provider::Gitlab => "https://gitlab.com".to_string(),
+            Provider::Github => "https://api.github.com".to_string(),
+        }
+    }
+
+    /// The API prefix an account of this provider uses when the file does not
+    /// say.
+    ///
+    /// ⚠️ GitHub's is EMPTY: its paths start `/repos/...` on an `api.` host,
+    /// and only GitHub Enterprise Server inserts a prefix (`/api/v3`). That is
+    /// why `base_url` and `api_path` stay two keys, since a hostname swap
+    /// covers one enterprise shape and not the other.
+    pub fn default_api_path(&self) -> String {
+        match self {
+            Provider::Gitlab => "/api/v4".to_string(),
+            Provider::Github => String::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One instance and the credential used against it.
+//
+// ⛔ `Deserialize` is hand-written (see the impl below), because `base_url` and
+// `api_path` default to something DIFFERENT per provider and a serde field
+// default cannot see a sibling field. Said in a plain comment rather than a doc
+// one: the doc comment becomes the key's description in the JSON Schema, which
+// is what the settings pane shows a user.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Account {
+    /// Which CI provider this account talks to. GitHub is not supported yet.
+    #[serde(default)]
+    pub provider: Provider,
     /// Instance root, without a trailing slash, e.g. `https://gitlab.com`.
+    /// Defaults per provider: gitlab.com, or `https://api.github.com`.
     #[serde(default = "default_base_url")]
     pub base_url: String,
     /// API prefix. Overridable for proxies that mount the API elsewhere.
+    /// Defaults per provider: `/api/v4`, or empty for GitHub.
     #[serde(default = "default_api_path")]
     pub api_path: String,
     /// Where the token comes from. Never the token itself.
@@ -72,9 +139,11 @@ pub struct Account {
 
 impl Default for Account {
     fn default() -> Self {
+        let provider = Provider::default();
         Self {
-            base_url: default_base_url(),
-            api_path: default_api_path(),
+            base_url: provider.default_base_url(),
+            api_path: provider.default_api_path(),
+            provider,
             token: TokenSource::default(),
             header: AuthHeader::default(),
             timeout_secs: default_timeout_secs(),
@@ -83,11 +152,59 @@ impl Default for Account {
     }
 }
 
+/// Read an account, filling the two provider-dependent defaults afterwards.
+///
+/// ⛔ A serde field default is a function of nothing: it cannot look at
+/// `provider`, which is why this is written out rather than derived. An
+/// explicitly written `base_url` or `api_path` is never touched, so nothing a
+/// user typed is reinterpreted because of a key somewhere else in the table.
+///
+/// The inner representation carries `deny_unknown_fields` and the same field
+/// names in the same order, so the "unknown field, expected one of ..." message
+/// `parse_lenient` keys on is the one serde would have produced anyway.
+impl<'de> Deserialize<'de> for Account {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct AccountRepr {
+            #[serde(default)]
+            provider: Provider,
+            #[serde(default)]
+            base_url: Option<String>,
+            #[serde(default)]
+            api_path: Option<String>,
+            #[serde(default)]
+            token: TokenSource,
+            #[serde(default)]
+            header: AuthHeader,
+            #[serde(default = "default_timeout_secs")]
+            timeout_secs: u64,
+            #[serde(default)]
+            rate_limit_backoff: RateLimitBackoff,
+        }
+
+        let repr = AccountRepr::deserialize(d)?;
+        Ok(Account {
+            base_url: repr
+                .base_url
+                .unwrap_or_else(|| repr.provider.default_base_url()),
+            api_path: repr
+                .api_path
+                .unwrap_or_else(|| repr.provider.default_api_path()),
+            provider: repr.provider,
+            token: repr.token,
+            header: repr.header,
+            timeout_secs: repr.timeout_secs,
+            rate_limit_backoff: repr.rate_limit_backoff,
+        })
+    }
+}
+
 fn default_base_url() -> String {
-    "https://gitlab.com".to_string()
+    Provider::Gitlab.default_base_url()
 }
 fn default_api_path() -> String {
-    "/api/v4".to_string()
+    Provider::Gitlab.default_api_path()
 }
 fn default_timeout_secs() -> u64 {
     15

@@ -12,7 +12,7 @@ pub use cache::{CacheEntry, PipelineCache};
 pub use planner::{PipelinePlan, Plan};
 pub use policy::{MAX_RETRY_AFTER, POLL_NOW_MIN_GAP, PollNow, PollPolicy};
 
-use crate::client::{ClientError, GitLabClient, ListQuery, RequestRing};
+use crate::client::{CiClient, ClientError, ListQuery, RequestRing};
 use crate::config::{Config, JobsMode, ProjectRef, Role, Watch, WatchRules};
 use crate::model::{Bridge, Pipeline, PipelineDetail};
 use crate::notify::{Notification, NotifyLedger, notifications_for};
@@ -55,7 +55,7 @@ struct WatchState {
 /// pre-made clients ([`Poller::with_clients`]), which is what lets the tests and
 /// the offline demo drive it against recorded fixtures.
 pub struct Poller {
-    clients: BTreeMap<String, GitLabClient>,
+    clients: BTreeMap<String, Arc<dyn CiClient>>,
     watches: Vec<WatchState>,
     script: Option<Arc<VerdictScript>>,
     ring: RequestRing,
@@ -73,7 +73,7 @@ impl Poller {
     /// account name.
     pub fn with_clients(
         config: &Config,
-        clients: BTreeMap<String, GitLabClient>,
+        clients: BTreeMap<String, Arc<dyn CiClient>>,
         ring: RequestRing,
     ) -> Result<Self, crate::config::ConfigError> {
         let mut watches = Vec::new();
@@ -137,10 +137,13 @@ impl Poller {
                 account.timeout_secs,
             ))
             .map_err(PollerError::Client)?;
-            clients.insert(
-                name.clone(),
-                GitLabClient::new(account, &token, Arc::new(transport), ring.clone()),
-            );
+            // ⛔ Through the factory, never by naming a client type: an account
+            // whose provider has no client yet fails HERE, loudly, rather than
+            // being handed a GitLab client pointed at somebody else's API.
+            let client =
+                crate::client::client_for(account, &token, Arc::new(transport), ring.clone())
+                    .map_err(PollerError::Client)?;
+            clients.insert(name.clone(), client);
         }
         Self::with_clients(config, clients, ring).map_err(PollerError::Config)
     }
@@ -205,7 +208,7 @@ impl Poller {
                 continue;
             }
 
-            let view = poll_watch(client, state, self.script.as_deref()).await;
+            let view = poll_watch(client.as_ref(), state, self.script.as_deref()).await;
             if let Some(e) = &view.error {
                 errors.push(format!("{}: {e}", state.watch.id));
             }
@@ -324,7 +327,7 @@ pub enum PollerError {
 
 /// Poll one watch: list, plan, fetch, evaluate.
 async fn poll_watch(
-    client: &GitLabClient,
+    client: &dyn CiClient,
     state: &mut WatchState,
     script: Option<&VerdictScript>,
 ) -> WatchView {
@@ -449,7 +452,7 @@ struct FetchedDetail {
 /// walked (its `/bridges`) plus one per pipeline it reaches, which is why it is
 /// opt-in rather than the default.
 async fn fetch_detail(
-    client: &GitLabClient,
+    client: &dyn CiClient,
     project: &ProjectRef,
     row: &Pipeline,
     state: &mut WatchState,

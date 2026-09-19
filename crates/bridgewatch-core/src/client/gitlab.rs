@@ -5,13 +5,18 @@
 //! `/personal_access_tokens/self`, `/projects` and `/projects/{project}`.
 //! Pagination follows `x-next-page`, which is the only paging header GitLab
 //! guarantees for these collections.
+//!
+//! Every response is decoded into [`super::wire::gitlab`] and converted into
+//! [`crate::model`] before it leaves this module: GitLab's JSON is a detail of
+//! this file, and [`CiClient`] is what everything above it holds.
 
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
 
-use super::ClientError;
 use super::http::{HttpRequest, RequestLog, RequestRing, Transport};
+use super::wire::gitlab as wire;
+use super::{CiClient, ClientError};
 use crate::config::{Account, ProjectRef};
 use crate::model::{Bridge, Job, Pipeline, Project, TokenInfo, User};
 use crate::token::Secret;
@@ -138,7 +143,9 @@ impl GitLabClient {
             project.url_segment(),
             query.to_query()
         );
-        self.get_json(&path).await
+        self.get_json::<Vec<wire::Pipeline>>(&path)
+            .await
+            .map(normalise)
     }
 
     /// `GET /projects/{project}/pipelines/{id}`.
@@ -148,7 +155,7 @@ impl GitLabClient {
         id: u64,
     ) -> Result<Pipeline, ClientError> {
         let path = format!("/projects/{}/pipelines/{id}", project.url_segment());
-        self.get_json(&path).await
+        self.get_json::<wire::Pipeline>(&path).await.map(Into::into)
     }
 
     /// `GET /projects/{project}/pipelines/{id}/jobs`, all pages.
@@ -158,7 +165,7 @@ impl GitLabClient {
         id: u64,
     ) -> Result<Vec<Job>, ClientError> {
         let base = format!("/projects/{}/pipelines/{id}/jobs", project.url_segment());
-        self.get_paginated(&base).await
+        self.get_paginated::<wire::Job>(&base).await.map(normalise)
     }
 
     /// `GET /projects/{project}/pipelines/{id}/bridges`, all pages.
@@ -168,7 +175,9 @@ impl GitLabClient {
         id: u64,
     ) -> Result<Vec<Bridge>, ClientError> {
         let base = format!("/projects/{}/pipelines/{id}/bridges", project.url_segment());
-        self.get_paginated(&base).await
+        self.get_paginated::<wire::Bridge>(&base)
+            .await
+            .map(normalise)
     }
 
     /// The jobs of a child pipeline, which may live in another project.
@@ -186,14 +195,16 @@ impl GitLabClient {
 
     /// `GET /user`: who the token authenticates as.
     pub async fn current_user(&self) -> Result<User, ClientError> {
-        self.get_json("/user").await
+        self.get_json::<wire::User>("/user").await.map(Into::into)
     }
 
     /// `GET /personal_access_tokens/self`: the token's own name, scopes and
     /// expiry. Older instances and non-PAT credentials (OAuth, job tokens)
     /// answer 401/403/404, which the wizard treats as "kind unknown".
     pub async fn token_self(&self) -> Result<TokenInfo, ClientError> {
-        self.get_json("/personal_access_tokens/self").await
+        self.get_json::<wire::TokenInfo>("/personal_access_tokens/self")
+            .await
+            .map(Into::into)
     }
 
     /// `GET /projects?membership=true`, most recently active first, following
@@ -213,14 +224,17 @@ impl GitLabClient {
         if let Some(s) = search.map(str::trim).filter(|s| !s.is_empty()) {
             query.push_str(&format!("&search={}", urlencoding::encode(s)));
         }
-        self.get_paginated_capped(&format!("/projects?{query}&"), max_pages.max(1))
-            .await
+        let (projects, truncated) = self
+            .get_paginated_capped::<wire::Project>(&format!("/projects?{query}&"), max_pages.max(1))
+            .await?;
+        Ok((normalise(projects), truncated))
     }
 
     /// `GET /projects/{project}`.
     pub async fn project(&self, project: &ProjectRef) -> Result<Project, ClientError> {
-        self.get_json(&format!("/projects/{}", project.url_segment()))
+        self.get_json::<wire::Project>(&format!("/projects/{}", project.url_segment()))
             .await
+            .map(Into::into)
     }
 
     /// Follow `x-next-page` from `prefix` (which ends in `?` or `&`) for at
@@ -338,6 +352,76 @@ impl GitLabClient {
                 Err(e)
             }
         }
+    }
+}
+
+/// Convert a page of decoded wire objects into the normalised model.
+fn normalise<W, M: From<W>>(items: Vec<W>) -> Vec<M> {
+    items.into_iter().map(Into::into).collect()
+}
+
+/// The provider-neutral surface, delegating to the inherent methods above.
+///
+/// ⚠️ The inherent methods are kept rather than moved into this impl, so that
+/// code holding a concrete `GitLabClient` (the fixture recorder, the tests, the
+/// setup wizard's own construction path) does not need the trait in scope. They
+/// are the same call either way; nothing here decides anything.
+#[async_trait::async_trait]
+impl CiClient for GitLabClient {
+    fn ring(&self) -> &RequestRing {
+        GitLabClient::ring(self)
+    }
+
+    async fn list_pipelines(
+        &self,
+        project: &ProjectRef,
+        query: &ListQuery,
+    ) -> Result<Vec<Pipeline>, ClientError> {
+        GitLabClient::list_pipelines(self, project, query).await
+    }
+
+    async fn get_pipeline(&self, project: &ProjectRef, id: u64) -> Result<Pipeline, ClientError> {
+        GitLabClient::get_pipeline(self, project, id).await
+    }
+
+    async fn pipeline_jobs(&self, project: &ProjectRef, id: u64) -> Result<Vec<Job>, ClientError> {
+        GitLabClient::pipeline_jobs(self, project, id).await
+    }
+
+    async fn pipeline_bridges(
+        &self,
+        project: &ProjectRef,
+        id: u64,
+    ) -> Result<Vec<Bridge>, ClientError> {
+        GitLabClient::pipeline_bridges(self, project, id).await
+    }
+
+    async fn child_jobs(
+        &self,
+        child_project: &ProjectRef,
+        child_id: u64,
+    ) -> Result<Vec<Job>, ClientError> {
+        GitLabClient::child_jobs(self, child_project, child_id).await
+    }
+
+    async fn current_user(&self) -> Result<User, ClientError> {
+        GitLabClient::current_user(self).await
+    }
+
+    async fn token_self(&self) -> Result<TokenInfo, ClientError> {
+        GitLabClient::token_self(self).await
+    }
+
+    async fn list_projects(
+        &self,
+        search: Option<&str>,
+        max_pages: u32,
+    ) -> Result<(Vec<Project>, bool), ClientError> {
+        GitLabClient::list_projects(self, search, max_pages).await
+    }
+
+    async fn project(&self, project: &ProjectRef) -> Result<Project, ClientError> {
+        GitLabClient::project(self, project).await
     }
 }
 

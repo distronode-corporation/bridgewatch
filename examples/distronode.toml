@@ -5,6 +5,7 @@
 # settings pane. `bridgewatch config schema` prints the JSON Schema.
 
 [accounts.gitlab]                      # any number of accounts; self-managed instances welcome
+provider = "gitlab"                    # "gitlab" (the default, and what an older file means) | "github", which is not implemented yet
 base_url = "https://gitlab.com"
 api_path = "/api/v4"                   # overridable for proxies
 token    = { keyring = { service = "glab:gitlab.com:token", user = "" } }

@@ -63,16 +63,16 @@
   "additionalProperties": false,
   "$defs": {
     "Account": {
-      "description": "One GitLab instance and the credential used against it.",
+      "description": "One instance and the credential used against it.",
       "type": "object",
       "properties": {
         "api_path": {
-          "description": "API prefix. Overridable for proxies that mount the API elsewhere.",
+          "description": "API prefix. Overridable for proxies that mount the API elsewhere.\nDefaults per provider: `/api/v4`, or empty for GitHub.",
           "type": "string",
           "default": "/api/v4"
         },
         "base_url": {
-          "description": "Instance root, without a trailing slash, e.g. `https://gitlab.com`.",
+          "description": "Instance root, without a trailing slash, e.g. `https://gitlab.com`.\nDefaults per provider: gitlab.com, or `https://api.github.com`.",
           "type": "string",
           "default": "https://gitlab.com"
         },
@@ -80,6 +80,11 @@
           "description": "Which header carries the token.",
           "$ref": "#/$defs/AuthHeader",
           "default": "PRIVATE-TOKEN"
+        },
+        "provider": {
+          "description": "Which CI provider this account talks to. GitHub is not supported yet.",
+          "$ref": "#/$defs/Provider",
+          "default": "gitlab"
         },
         "rate_limit_backoff": {
           "description": "How far the poll interval is allowed to back off after rate limiting.",
@@ -398,6 +403,21 @@
         {
           "description": "`group/subgroup/project`, URL-encoded before use.",
           "type": "string"
+        }
+      ]
+    },
+    "Provider": {
+      "description": "Which CI provider an account talks to.\n\n⛔ The default is `gitlab` and must stay that way: every configuration file\nwritten before this key existed has no `provider` line, and adding one is\nnot something bridgewatch may do to a user's file.",
+      "oneOf": [
+        {
+          "description": "GitLab CI, the provider bridgewatch was built for.",
+          "type": "string",
+          "const": "gitlab"
+        },
+        {
+          "description": "GitHub Actions. ⚠️ Accepted by the parser and refused by validation:\nthere is no GitHub client yet, so a configuration naming one is an\nerror rather than a silent no-op.",
+          "type": "string",
+          "const": "github"
         }
       ]
     },

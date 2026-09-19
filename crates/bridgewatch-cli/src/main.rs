@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use bridgewatch_core::client::fixture::ScrubMode;
-use bridgewatch_core::client::{FixtureTransport, GitLabClient, RequestRing, ReqwestTransport};
+use bridgewatch_core::client::{
+    FixtureTransport, GitLabClient, RequestRing, ReqwestTransport, client_for,
+};
 use bridgewatch_core::config::{self, Config, ProjectRef};
 use bridgewatch_core::notify::NotifyLedger;
 use bridgewatch_core::poll::Poller;
@@ -597,18 +599,18 @@ fn build_poller(config: &Config, fixture: Option<&PathBuf>) -> Result<Poller> {
             );
             let mut clients = std::collections::BTreeMap::new();
             for (name, account) in &config.accounts {
-                clients.insert(
-                    name.clone(),
-                    // A fixture serves recorded bytes; the token is never sent
-                    // anywhere, and resolving a real one would prompt for a
-                    // keychain unlock to answer a question from a file.
-                    GitLabClient::new(
-                        account,
-                        &Secret::new("fixture"),
-                        transport.clone(),
-                        ring.clone(),
-                    ),
-                );
+                // A fixture serves recorded bytes; the token is never sent
+                // anywhere, and resolving a real one would prompt for a
+                // keychain unlock to answer a question from a file. The
+                // provider still decides which client reads them.
+                let client = client_for(
+                    account,
+                    &Secret::new("fixture"),
+                    transport.clone(),
+                    ring.clone(),
+                )
+                .with_context(|| format!("cannot build a client for account {name:?}"))?;
+                clients.insert(name.clone(), client);
             }
             Poller::with_clients(config, clients, ring).context("cannot build poller")
         }

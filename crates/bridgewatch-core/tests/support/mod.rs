@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bridgewatch_core::client::{ClientError, FixtureTransport, GitLabClient, RequestRing};
+use bridgewatch_core::client::{
+    CiClient, ClientError, FixtureTransport, GitLabClient, RequestRing,
+};
 use bridgewatch_core::config::edit::{ConfigEditor, Edit};
 use bridgewatch_core::config::{self, Config};
 use bridgewatch_core::poll::Poller;
@@ -217,6 +219,8 @@ impl bridgewatch_core::client::Transport for Canned {
             ratelimit_remaining: Some(1999),
             ratelimit_reset: Some(1789669380),
             retry_after: None,
+            etag: None,
+            link: None,
         })
     }
 }
@@ -308,16 +312,16 @@ pub fn config_with(edits: &[Edit]) -> Config {
 pub fn fixture_poller(config: &Config, dir: &Path) -> (Poller, Arc<FixtureTransport>) {
     let transport = Arc::new(FixtureTransport::load(dir).expect("fixture loads"));
     let ring = RequestRing::new(config.log.keep_requests.max(50));
-    let mut clients = BTreeMap::new();
+    let mut clients: BTreeMap<String, Arc<dyn CiClient>> = BTreeMap::new();
     for (name, account) in &config.accounts {
         clients.insert(
             name.clone(),
-            GitLabClient::new(
+            Arc::new(GitLabClient::new(
                 account,
                 &Secret::new("fixture-token"),
                 transport.clone(),
                 ring.clone(),
-            ),
+            )),
         );
     }
     (
@@ -424,16 +428,16 @@ impl bridgewatch_core::client::Transport for ScriptedTransport {
 /// A poller wired to a transport the test controls.
 pub fn poller_with_transport(config: &Config, transport: Arc<ScriptedTransport>) -> Poller {
     let ring = RequestRing::new(config.log.keep_requests.max(50));
-    let mut clients = BTreeMap::new();
+    let mut clients: BTreeMap<String, Arc<dyn CiClient>> = BTreeMap::new();
     for (name, account) in &config.accounts {
         clients.insert(
             name.clone(),
-            GitLabClient::new(
+            Arc::new(GitLabClient::new(
                 account,
                 &Secret::new("fixture-token"),
                 transport.clone(),
                 ring.clone(),
-            ),
+            )),
         );
     }
     Poller::with_clients(config, clients, ring).expect("poller builds")

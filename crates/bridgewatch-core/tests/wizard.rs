@@ -85,6 +85,8 @@ impl Transport for Routed {
             ratelimit_remaining: None,
             ratelimit_reset: None,
             retry_after: None,
+            etag: None,
+            link: None,
         })
     }
 }
