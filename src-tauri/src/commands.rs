@@ -288,9 +288,24 @@ pub fn reload_from_disk(app: &AppHandle, force: bool) {
         }
     };
 
-    if let Some(config) = state.config() {
+    let running = state.config();
+    if let Some(config) = &running {
         crate::logging::apply_config_level(&config.log.level);
     }
+    // ⛔ The line the startup one cannot be: on a FIRST run there is no file, so
+    // no level is applied, so `[log].level = "info"` in the file the wizard is
+    // about to write cannot show the startup line: it was filtered before the
+    // file existed. This runs after the level is applied and after the wizard's
+    // save, which is what makes a first run say anything at all. A reload that
+    // did not load reports that, rather than the counts of the configuration
+    // still running.
+    tracing::info!(
+        "{}",
+        crate::logging::config_line(
+            &format!("reloaded {}", path.display()),
+            if changed { running.as_ref() } else { None },
+        )
+    );
     let _ = app.emit(CONFIG_CHANGED_EVENT, ());
 
     if changed {

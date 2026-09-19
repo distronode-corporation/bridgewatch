@@ -978,3 +978,46 @@ fn a_failure_that_never_started_is_in_the_marker_s_scope_not_after_it() {
          somewhere or the deploy reads as clean"
     );
 }
+
+/// ⛔ The tray rule and the SELECTION rule are two different questions, and the
+/// CLI used to ask the wrong one. `icon_from_watches` folds primary watches
+/// only, which is what keeps an hourly schedule that is red by design out of
+/// the tray; `icon_from_selection` answers "how are the watches I named", where
+/// a selection holding no primary watch has to be answered from all of them or
+/// a verdict that was read perfectly well comes back as `unknown`.
+#[tokio::test]
+async fn a_selection_with_no_primary_watch_is_answered_from_all_of_it() {
+    let config = support::config_with(&[]);
+    let dir = support::fixtures_dir().join("mixed-primary-green-secondary-red");
+    let (mut poller, _) = support::fixture_poller(&config, &dir);
+    let watches = poller.tick().await.snapshot.watches;
+
+    let by_id = |id: &str| {
+        watches
+            .iter()
+            .filter(|w| w.id == id)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    // The tray: a green push wins, because the red schedule is rows only.
+    assert_eq!(
+        Snapshot::icon_from_watches(&watches).as_str(),
+        "deployed",
+        "the whole reason the secondary role exists"
+    );
+    // Naming the schedule makes it the subject, and it is red.
+    assert_eq!(
+        Snapshot::icon_from_selection(&by_id("hourly")).as_str(),
+        "failed"
+    );
+    // Naming it ALONGSIDE a primary does not let it outvote the primary.
+    assert_eq!(Snapshot::icon_from_selection(&watches).as_str(), "deployed");
+    // A watch that matched nothing has no verdict, and "could not see" must
+    // stay distinguishable from "saw green".
+    assert_eq!(
+        Snapshot::icon_from_selection(&by_id("preflights")).as_str(),
+        "unknown"
+    );
+    assert_eq!(Snapshot::icon_from_selection(&[]).as_str(), "unknown");
+}

@@ -18,9 +18,27 @@ body line with a bracket.
 - The job view links a bridge to the trigger job itself, beside the existing link to the
   child pipeline it created. They are different pages in GitLab and either can be the one
   that explains a verdict. A bridge with no URL shows no link.
+- On macOS the tray tooltip names the current state, for example "bridgewatch: deployed".
+  Linux has no tray tooltip, and its tray still reports the binary name as its title over
+  D-Bus: the only lever Tauri 2 offers there draws text in the panel beside the icon.
+
+### Changed
+
+- API responses are fetched gzip-compressed. A 20-row pipelines list drops from 7550 bytes
+  to 1480, and an installed build was measured at about 70 MB an hour while a pipeline is
+  live, which matters on a metered connection.
+- `[log].level = "info"`, the default, now says something. One line each time a
+  configuration is loaded or reloaded, naming the file, its account and watch counts and
+  the log level actually in force, and one line for every watch whose verdict changes.
+  `debug` adds per-tick and per-request detail, never a token. The configuration line now
+  survives a first run, where the setup wizard writes the file after startup.
 
 ### Fixed
 
+- `check --watch` and `watch --watch` now answer for the watches you name. Naming only
+  secondary watches printed `icon: unknown` and exited 4 over a verdict that had been read
+  perfectly well, so a failed schedule never exited 1. Without `--watch`, and in the tray,
+  nothing changes: primary watches alone decide.
 - The `bridgewatch` CLI now follows the logging rule the app and the README already
   described: `[log].level` applies to bridgewatch's own crates and leaves everything else
   at `warn`, and an empty `RUST_LOG` counts as unset instead of silencing the run. A

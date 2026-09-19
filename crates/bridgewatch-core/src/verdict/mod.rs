@@ -208,6 +208,20 @@ pub struct WatchView {
     pub jobs: JobsMode,
 }
 
+impl WatchView {
+    /// The state this watch's rows imply, whatever its role.
+    ///
+    /// The same rule the poller applies to a primary watch (the newest
+    /// pipeline **id**, not the one that finished most recently), answered for
+    /// a secondary watch too, whose [`Self::icon_state`] is deliberately
+    /// `None` because it must never reach the tray. `None` here means this
+    /// watch produced no verdict at all: nothing matched its filter, or the
+    /// list request failed with nothing cached.
+    pub fn row_state(&self) -> Option<IconState> {
+        self.rows.iter().max_by_key(|r| r.id).map(|r| r.state)
+    }
+}
+
 /// Everything the GUI needs to draw one frame.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -236,11 +250,39 @@ impl Snapshot {
     }
 
     /// The tray state implied by the primary watches: worst news wins.
+    ///
+    /// ⛔ Secondary watches are rows only and never appear here. That is the
+    /// whole point of the role: an hourly schedule that is red by design must
+    /// not colour the tray. [`Self::icon_from_selection`] is the other
+    /// question, and only the CLI asks it.
     pub fn icon_from_watches(watches: &[WatchView]) -> IconState {
         watches
             .iter()
             .filter(|w| w.role.is_primary())
             .filter_map(|w| w.icon_state)
+            .min_by_key(|s| s.severity())
+            .unwrap_or(IconState::Unknown)
+    }
+
+    /// The state implied by watches the user named EXPLICITLY, as
+    /// `bridgewatch check --watch <id>` does: worst news wins, same severity
+    /// order.
+    ///
+    /// ⛔ Naming a watch makes it the subject of the question, so a selection
+    /// holding no primary watch is answered from all of them rather than from
+    /// nothing. Folding primaries only (the tray rule) meant
+    /// `check --watch hourly` reported `unknown` and exit 4 ("could not see")
+    /// for a schedule whose verdict had been read perfectly well, and a
+    /// failed schedule never reached exit 1. A selection that still holds a
+    /// primary watch keeps the tray rule unchanged: a secondary watch cannot
+    /// outvote a primary one just by being asked for alongside it.
+    pub fn icon_from_selection(watches: &[WatchView]) -> IconState {
+        if watches.iter().any(|w| w.role.is_primary()) {
+            return Self::icon_from_watches(watches);
+        }
+        watches
+            .iter()
+            .filter_map(WatchView::row_state)
             .min_by_key(|s| s.severity())
             .unwrap_or(IconState::Unknown)
     }

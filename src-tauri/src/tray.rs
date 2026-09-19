@@ -18,6 +18,27 @@ use crate::windows;
 /// the same icon again to swap its image every tick.
 pub const TRAY_ID: &str = "bridgewatch";
 
+/// The tooltip's product name, on the platforms that have a tooltip.
+///
+/// ⛔ `TrayIconBuilder::title` is NOT the way to name the tray, on either
+/// desktop we ship. Read at the versions in Cargo.lock (tauri 2.11.5
+/// `src/tray/mod.rs`, tray-icon 0.24.2): the macOS backend implements it as
+/// `NSStatusBarButton::setTitle` (`platform_impl/macos/mod.rs`) and the GTK
+/// backend as `AppIndicator::set_label` (`platform_impl/gtk/mod.rs`). Both draw
+/// the string as TEXT beside the icon, in the menu bar and in the panel, and
+/// bridgewatch's presence there is an icon and nothing else.
+///
+/// ⚠ So the Linux tray still reports the binary name, `bridgewatch-app`, as
+/// its StatusNotifierItem `Title` (seen over D-Bus and in shells that show it).
+/// That property defaults to `g_get_application_name()`; `libappindicator`
+/// exposes `set_title` and tray-icon never calls it, so it cannot be set
+/// through Tauri 2. The route that would work is `glib::set_application_name`
+/// before Tauri starts, which means a direct dependency on the archived
+/// gtk-rs 0.18 `glib`. Not taken for a string most desktops never display.
+/// `tooltip` is documented "**Linux:** Unsupported", so Linux gets neither.
+#[cfg(not(target_os = "linux"))]
+const TRAY_LABEL: &str = "bridgewatch";
+
 /// The "Launch at login" checkbox.
 ///
 /// ⛔ `TrayIcon` has no `menu()` getter in Tauri 2 — only `set_menu` — so the
@@ -157,7 +178,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         // Without this macOS opens the menu on a left click too, and the
         // popover can never be toggled.
         .show_menu_on_left_click(false)
-        .tooltip("bridgewatch")
         .on_menu_event(move |app, event| on_menu(app, event.id().as_ref()))
         .on_tray_icon_event(|tray, event| {
             // This must run for EVERY event, not just clicks: it is how the
@@ -173,6 +193,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                 windows::toggle_popover(tray.app_handle());
             }
         });
+
+    // See [`TRAY_LABEL`]: a tooltip where the platform has one, and never a
+    // title, which both desktops draw as text beside the icon.
+    #[cfg(not(target_os = "linux"))]
+    {
+        builder = builder.tooltip(TRAY_LABEL);
+    }
 
     builder = builder
         .icon(initial.image)

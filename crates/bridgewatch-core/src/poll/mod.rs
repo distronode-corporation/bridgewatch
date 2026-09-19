@@ -209,6 +209,7 @@ impl Poller {
             if let Some(e) = &view.error {
                 errors.push(format!("{}: {e}", state.watch.id));
             }
+            log_transition(&state.watch.id, state.last_view.as_ref(), &view);
             notifications.extend(notifications_for(&state.watch, &view, &mut self.ledger));
             state.last_view = Some(view.clone());
             views.push(view);
@@ -237,6 +238,18 @@ impl Poller {
             .min()
             .unwrap_or(std::time::Duration::from_secs(60));
 
+        // Per tick, so `debug` and not `info`: at the live interval this is a
+        // line every few seconds.
+        tracing::debug!(
+            icon = %snapshot.icon_state,
+            watches = snapshot.watches.len(),
+            rows = snapshot.watches.iter().map(|w| w.rows.len()).sum::<usize>(),
+            errors = snapshot.errors.len(),
+            live = any_live,
+            next_secs = next_interval.as_secs(),
+            "tick complete"
+        );
+
         let _ = self.sender.send(snapshot.clone());
 
         Tick {
@@ -262,6 +275,37 @@ impl Poller {
             tokio::time::sleep(tick.next_interval).await;
         }
     }
+}
+
+/// Log a watch whose verdict moved, at `info`.
+///
+/// This is the level's whole purpose: `info` is "what a person debugging a
+/// wrong tray needs, at human frequency", and a verdict changing is the only
+/// thing that happens at human frequency. Everything per-tick and per-request
+/// is `debug`.
+///
+/// ⚠ The transition is taken from the ROWS ([`WatchView::row_state`]) rather
+/// than from `icon_state`, so a secondary watch is logged too. Its verdict
+/// never reaches the tray, but it is on screen in the popover, and "the hourly
+/// schedule went red" is exactly the line somebody is looking for.
+/// The first tick reports `-> <state>`: a watch that has just started has no
+/// previous verdict, and saying so beats inventing `unknown` as one.
+fn log_transition(id: &str, previous: Option<&WatchView>, current: &WatchView) {
+    let before = previous.and_then(WatchView::row_state);
+    let after = current.row_state();
+    if before == after {
+        return;
+    }
+    let name = |s: Option<crate::verdict::IconState>| {
+        s.map(|s| s.as_str().to_string())
+            .unwrap_or_else(|| "-".to_string())
+    };
+    tracing::info!(
+        watch = id,
+        from = name(before),
+        to = name(after),
+        "watch verdict changed"
+    );
 }
 
 /// Why a poller could not be built.

@@ -855,6 +855,32 @@ pub fn log_directive(rust_log: Option<&str>, level: Option<&str>, crates: &[&str
     }
 }
 
+/// The one `info` line a shell logs when it has read a configuration.
+///
+/// `head` says WHICH read this was ("using /path/config.toml", "reloaded
+/// /path/config.toml"), and the rest is what somebody debugging "why is my tray
+/// wrong" needs before anything else: how much the file describes, and how loud
+/// the program will now be.
+///
+/// ⚠ The directive is part of the line on purpose. `[log].level` is read from
+/// the very file being reported, but a non-empty `RUST_LOG` beats it (see
+/// [`log_directive`]), and a leftover `export RUST_LOG=` in a shell profile is
+/// otherwise invisible: the level asked for and the level in force disagree and
+/// nothing says so.
+///
+/// Lives here for the same reason [`log_directive`] does: the CLI and the app
+/// both say it, neither can see the other, and two copies would drift.
+pub fn describe_load(head: &str, config: Option<&Config>, directive: &str) -> String {
+    match config {
+        Some(c) => format!(
+            "{head}: {} watch(es), {} account(s), logging {directive}",
+            c.watches.len(),
+            c.account_count()
+        ),
+        None => format!("{head}: the file does not load, nothing is watched"),
+    }
+}
+
 /// Does a `re:` pattern pin either end of the name?
 ///
 /// Deliberately crude: it answers "did the author think about anchoring", not

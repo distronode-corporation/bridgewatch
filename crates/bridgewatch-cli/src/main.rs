@@ -427,14 +427,33 @@ const OWN_CRATES: &[&str] = &[env!("CARGO_CRATE_NAME"), "bridgewatch_core"];
 /// `export RUST_LOG=` in a shell profile) beat the config and silenced the
 /// program. `config::log_directive` is now the single answer for both; the
 /// other caller is `logging::directive` in `src-tauri/src/logging.rs`.
-fn init_tracing(level: &str) {
+/// Returns the directive it installed, so the config-loaded line can quote it.
+fn init_tracing(level: &str) -> String {
+    let directive = tracing_filter(std::env::var("RUST_LOG").ok().as_deref(), level);
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new(tracing_filter(
-            std::env::var("RUST_LOG").ok().as_deref(),
-            level,
-        )))
+        .with_env_filter(tracing_subscriber::EnvFilter::new(&directive))
         .with_writer(std::io::stderr)
         .try_init();
+    directive
+}
+
+/// Install tracing from the loaded file, then log the one `info` line that says
+/// what was read.
+///
+/// ⛔ In this order, and not the other way round: the subscriber is what decides
+/// whether the line is printed at all, so a line logged before it is installed
+/// is simply lost. `info` is the level for "a person is debugging why the
+/// verdict is wrong", and which file answered is the first thing they need.
+fn start_logging(loaded: &config::Loaded) {
+    let directive = init_tracing(&loaded.config.log.level);
+    tracing::info!(
+        "{}",
+        config::describe_load(
+            &format!("using {}", loaded.path.display()),
+            Some(&loaded.config),
+            &directive
+        )
+    );
 }
 
 /// The filter directive [`init_tracing`] installs, separated out so it can be
@@ -591,12 +610,13 @@ fn build_poller(config: &Config, fixture: Option<&PathBuf>) -> Result<Poller> {
 
 async fn check(config_args: &ConfigArgs, args: CheckArgs) -> Outcome {
     let loaded = load(config_args)?;
-    init_tracing(&loaded.config.log.level);
+    start_logging(&loaded);
     let mut config = loaded.config;
     filter_watches(&mut config, &args.watches)?;
 
     let mut poller = build_poller(&config, args.fixture.as_ref())?;
-    let tick = poller.tick().await;
+    let mut tick = poller.tick().await;
+    apply_selection_state(&mut tick.snapshot, &args.watches);
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&tick.snapshot)?);
@@ -604,6 +624,22 @@ async fn check(config_args: &ConfigArgs, args: CheckArgs) -> Outcome {
         print!("{}", render::snapshot(&tick.snapshot));
     }
     Ok(exit_code(&tick.snapshot))
+}
+
+/// Re-answer a snapshot's `icon_state` for an explicit `--watch` selection.
+///
+/// ⛔ The poller computes `icon_state` as the TRAY does, from primary watches
+/// alone, which is right for the app and wrong the moment a person names a
+/// watch on the command line: `check --watch <a secondary watch>` printed
+/// `icon: unknown` and exited 4 over a verdict it had read perfectly well, so a
+/// failed schedule never reached exit 1. Rewritten in ONE place, on the
+/// snapshot itself, so the printed `icon:` line, `--json`'s `icon_state` and
+/// the exit code cannot disagree: all three read this field. With no `--watch`
+/// the snapshot is left exactly as the poller built it.
+fn apply_selection_state(snapshot: &mut Snapshot, selected: &[String]) {
+    if !selected.is_empty() {
+        snapshot.icon_state = Snapshot::icon_from_selection(&snapshot.watches);
+    }
 }
 
 /// The verdict code for a snapshot.
@@ -626,7 +662,7 @@ fn exit_code(snapshot: &Snapshot) -> i32 {
 
 async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
     let loaded = load(config_args)?;
-    init_tracing(&loaded.config.log.level);
+    start_logging(&loaded);
     let mut config = loaded.config;
     filter_watches(&mut config, &args.watches)?;
 
@@ -645,7 +681,8 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
     let limit = args.ticks;
 
     loop {
-        let tick = poller.tick().await;
+        let mut tick = poller.tick().await;
+        apply_selection_state(&mut tick.snapshot, &args.watches);
         ticks += 1;
 
         let line = if args.json {
@@ -689,7 +726,7 @@ async fn fixture(config_args: &ConfigArgs, action: FixtureAction) -> Outcome {
     let out = out.unwrap_or_else(|| PathBuf::from(pipeline_id.to_string()));
 
     let loaded = load(config_args)?;
-    init_tracing(&loaded.config.log.level);
+    start_logging(&loaded);
     let config = loaded.config;
 
     let account_name = match account {

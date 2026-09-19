@@ -27,7 +27,18 @@ globset = "0.4.20"
 hex = "0.4.3"
 keyring = "4.2.0"
 minijinja = "2.24.0"
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "http2", "charset", "system-proxy"] }
+# ⚠ `gzip` is not decoration: without it reqwest sends no `accept-encoding` and
+# every GitLab response arrives uncompressed. Measured against gitlab.com, a
+# 20-row pipelines list is 7550 bytes plain and 1480 gzipped, and a live
+# pipeline polled at the fast interval costs roughly 70 MB an hour, which is
+# the user's data allowance on a phone hotspot. `brotli` is deliberately NOT
+# enabled: gitlab.com serves it, but it beat gzip by about 2% on the same
+# bodies, and it would pull brotli, brotli-decompressor and the two alloc shims
+# into the ENGINE's graph for that. They are already in Cargo.lock, but only as
+# build-time dependencies of tauri-utils and tauri-codegen, so today the CLI
+# binary carries no brotli decoder at all and enabling this would be the change
+# that puts one there.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "http2", "charset", "system-proxy", "gzip"] }
 rhai = { version = "1.26.1", features = ["sync", "serde", "no_custom_syntax"] }
 schemars = "1.2.2"
 toml = "1.1.6"
@@ -38,3 +49,7 @@ urlencoding = "2.1.3"
 regex = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
 async-trait = "0.1.90"
+# Test-only: a scoped subscriber, so the tests can assert what each log LEVEL
+# carries (and that a request line never carries the token) without installing
+# anything globally.
+tracing-subscriber = "0.3.23"

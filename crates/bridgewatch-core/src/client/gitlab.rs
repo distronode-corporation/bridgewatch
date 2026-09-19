@@ -287,6 +287,20 @@ impl GitLabClient {
         match result {
             Ok(response) => {
                 let error = status_error(response.status, path, response.retry_after);
+                // ⛔ `path` is logged whole, query and all, and that is safe by
+                // CONSTRUCTION rather than by filtering: the credential travels
+                // only in a header (see the module docs on `client::http`), and
+                // every path here is built from a fixed template with its one
+                // variable percent-encoded. Redacting a query parameter that
+                // cannot exist would suggest that one could.
+                tracing::debug!(
+                    method = "GET",
+                    path,
+                    status = response.status,
+                    bytes = response.body.len(),
+                    ms,
+                    "request"
+                );
                 self.ring.record(RequestLog {
                     method: "GET".into(),
                     path: path.to_string(),
@@ -309,6 +323,7 @@ impl GitLabClient {
                 Ok((value, response.next_page.and_then(|p| p.parse().ok())))
             }
             Err(e) => {
+                tracing::debug!(method = "GET", path, error = %e, ms, "request failed");
                 self.ring.record(RequestLog {
                     method: "GET".into(),
                     path: path.to_string(),

@@ -359,6 +359,36 @@ fn debug_never_prints_the_credential_header() {
     assert!(rendered.contains("/projects/1"), "the rest is still useful");
 }
 
+/// ⛔ The debug LOG is the other place a credential could escape, and unlike
+/// the request ring it is a stream of free text that people paste into issues.
+/// `[log].level = "debug"` prints one line per request: the method, the path,
+/// the status, the size and the time, and nothing whatever about the header it
+/// was sent with. Asserted for both credential spellings, because only one of
+/// them has the word "token" in its name.
+#[test]
+fn the_request_debug_line_never_carries_the_token() {
+    let runtime = support::runtime();
+    for header in [AuthHeader::PrivateToken, AuthHeader::AuthorizationBearer] {
+        let transport = Scripted::new(vec![(200, "[]".into(), None)]);
+        let (client, _) = client_with(transport, header);
+        let (result, log) = support::with_log(tracing::Level::DEBUG, || {
+            runtime.block_on(client.list_pipelines(&ProjectRef::Id(1), &ListQuery::scan(10)))
+        });
+        result.expect("the scripted response is a success");
+
+        assert!(!log.contains("glpat-SECRET"), "{log}");
+        assert!(!log.to_ascii_lowercase().contains("bearer"), "{log}");
+        assert!(
+            log.contains("path=\"/projects/1/pipelines"),
+            "the path is what makes the line worth printing: {log}"
+        );
+        assert!(
+            log.contains("status=200") && log.contains("bytes=2"),
+            "{log}"
+        );
+    }
+}
+
 /// A `Secret` cannot be printed by accident.
 #[test]
 fn a_secret_redacts_itself() {
