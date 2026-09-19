@@ -86,6 +86,7 @@ describe("settings registry / config schema parity", () => {
     check("watches.*.notify.click", "ClickTarget");
     check("accounts.*.header", "AuthHeader");
     check("ui.jobs", "JobsMode");
+    check("watches.*.group", "GroupMode");
 
   });
 });
@@ -151,9 +152,9 @@ describe("provider applicability", () => {
   it("is data on the entry, and every provider-specific key says why in one line", () => {
     const marked = REGISTRY.filter((e) => e.provider);
     expect(marked.map((e) => e.path).sort()).toEqual([
-      "watches.*.dive.bridges",
       "watches.*.dive.depth",
-      "watches.*.dive.exclude",
+      "watches.*.fan_out_secs",
+      "watches.*.group",
       "watches.*.workflow",
     ]);
     for (const e of marked) expect(e.providerNote, e.path).toMatch(/^Ignored on a (GitLab|GitHub) account: /);
@@ -167,6 +168,13 @@ describe("provider applicability", () => {
     const depth = entry("watches.*.dive.depth");
     expect(inapplicableNote(depth, "github")).toMatch(/no nested runs/);
     expect(inapplicableNote(depth, "gitlab")).toBeNull();
+    // The commit group's two keys are GitHub's.
+    expect(inapplicableNote(entry("watches.*.group"), "gitlab")).toMatch(/already is the whole commit/);
+    expect(inapplicableNote(entry("watches.*.fan_out_secs"), "gitlab")).toMatch(/commit group/);
+    expect(inapplicableNote(entry("watches.*.group"), "github")).toBeNull();
+    // ...and dive selects workflow names on a commit group, so it is dimmed for neither.
+    expect(inapplicableNote(entry("watches.*.dive.bridges"), "github")).toBeNull();
+    expect(inapplicableNote(entry("watches.*.dive.exclude"), "github")).toBeNull();
     // A key both providers use is never dimmed.
     expect(inapplicableNote(entry("watches.*.ref"), "github")).toBeNull();
     expect(inapplicableNote(entry("watches.*.ref"), "gitlab")).toBeNull();

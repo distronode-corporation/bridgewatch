@@ -452,6 +452,18 @@ pub struct Watch {
     /// then the watch shows one row per run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
+    /// GitHub only: what one row is. `run` (the default) is one workflow run;
+    /// `commit` folds every run of one commit and event into one row, each
+    /// run appearing as a bridge, so `dive` selects workflow names.
+    // Skipped when it is the default, like `workflow`: a watch the settings
+    // window or the wizard writes back must not gain a line nobody asked for.
+    #[serde(default, skip_serializing_if = "GroupMode::is_run")]
+    pub group: GroupMode,
+    /// GitHub only, and only with `group = "commit"`: runs of one commit and
+    /// event created within this many seconds of the group's newest run are
+    /// one row. Absent is 90.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fan_out_secs: Option<u64>,
     /// Pipeline sources to accept. Empty means all of them.
     #[serde(default)]
     pub sources: Vec<String>,
@@ -495,6 +507,56 @@ impl Watch {
     /// otherwise the global `ui.jobs`.
     pub fn effective_jobs(&self, ui: &UiConfig) -> JobsMode {
         self.show.jobs.unwrap_or(ui.jobs)
+    }
+
+    /// The commit-group window this watch asks for, in seconds, or `None` when
+    /// one row is one run.
+    ///
+    /// `fan_out_secs` without `group = "commit"` is inert (validation says
+    /// so), which is why the mode decides here and not the key's presence.
+    pub fn commit_group_window(&self) -> Option<u64> {
+        match self.group {
+            GroupMode::Run => None,
+            GroupMode::Commit => Some(self.fan_out_secs.unwrap_or(DEFAULT_FAN_OUT_SECS)),
+        }
+    }
+}
+
+/// The commit-group window when `fan_out_secs` is absent.
+///
+/// Measured on real pushes, the several runs one push starts are created in the
+/// SAME second; the window only has to absorb GitHub's own dispatch jitter.
+/// Ninety seconds is generous for that and still far short of the gap that
+/// matters on the other side: two `schedule` runs on an unchanged branch head
+/// are an hour or a day apart, and they must stay two rows. A run that lands
+/// later than this (a slow `workflow_dispatch`, a re-push of the same commit)
+/// starts a row of its own, which is the safe way to be wrong.
+pub const DEFAULT_FAN_OUT_SECS: u64 = 90;
+
+/// What one row of a GitHub watch is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupMode {
+    /// One workflow run is one row.
+    #[default]
+    Run,
+    /// Every run of one commit and event, created within `fan_out_secs` of the
+    /// newest, is one row, and each run is one of its bridges.
+    Commit,
+}
+
+impl GroupMode {
+    /// True for the default, [`GroupMode::Run`].
+    pub fn is_run(&self) -> bool {
+        matches!(self, GroupMode::Run)
+    }
+
+    /// The config spelling, `run` or `commit`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GroupMode::Run => "run",
+            GroupMode::Commit => "commit",
+        }
     }
 }
 

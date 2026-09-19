@@ -44,13 +44,21 @@ pub struct JobsResponse {
 /// One workflow run: GitHub's nearest thing to a pipeline.
 ///
 /// ⚠️ There is no parent above it. One push produces one run per workflow, with
-/// no field on any of them pointing at the others; folding those into a single
-/// row is the commit group, which this build does not do yet, so one run is one
-/// [`model::Pipeline`].
+/// no field on any of them pointing at the others. By default one run is one
+/// [`model::Pipeline`]; a watch with `group = "commit"` folds a commit's runs
+/// into one, in `client::github::group`, which is the one other reader of this
+/// type.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkflowRun {
     /// Repository-wide run id. Every other endpoint keys on this.
     pub id: u64,
+    /// The WORKFLOW's name (`CI`, `Scorecard`), from its YAML `name:` or its
+    /// file path when it has none. Read only by the commit group, where each
+    /// run becomes a bridge and this is the bridge's name, i.e. what
+    /// `dive.bridges`, `dive.exclude` and `[watches.jobs]` match. It names a
+    /// file in the repository, not a person, so it is inside the allow-list.
+    #[serde(default)]
+    pub name: Option<String>,
     /// The per-workflow run number, the `#42` GitHub's UI shows.
     #[serde(default)]
     pub run_number: Option<u64>,

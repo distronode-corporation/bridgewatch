@@ -372,7 +372,7 @@ async fn poll_watch(
         let Some(row) = selected.iter().find(|r| r.id == pipeline_plan.id) else {
             continue;
         };
-        match fetch_detail(client, &project, row, state).await {
+        match fetch_detail(client, &project, row, &query, state).await {
             Ok(fetched) => {
                 for e in &fetched.errors {
                     // ⛔ A failed child request used to be logged at `debug` and
@@ -455,10 +455,12 @@ async fn fetch_detail(
     client: &dyn CiClient,
     project: &ProjectRef,
     row: &Pipeline,
+    query: &ListQuery,
     state: &mut WatchState,
 ) -> Result<FetchedDetail, ClientError> {
-    let jobs = client.pipeline_jobs(project, row.id).await?;
-    let bridges = client.pipeline_bridges(project, row.id).await?;
+    // Through the row and its query rather than the id: see
+    // `CiClient::listed_detail`. GitLab's answer is the same two requests.
+    let (jobs, bridges) = client.listed_detail(project, row, query).await?;
 
     // Pipelines whose status has not moved keep their cached jobs; only the ones
     // the planner names are fetched again.
@@ -600,10 +602,13 @@ pub fn list_query(watch: &Watch, rules: &WatchRules) -> ListQuery {
         },
         None => ListQuery::scan(per_page.max(30)),
     };
-    // GitLab ignores it; GitHub asks that workflow's own endpoint. Carried on
-    // the query rather than read from the watch inside a client, so that the
-    // clients keep taking one request description and nothing provider-shaped.
-    query.for_workflow(watch.workflow.as_deref())
+    // GitLab ignores both; GitHub asks that workflow's own endpoint, and folds
+    // a commit's runs into one row. Carried on the query rather than read from
+    // the watch inside a client, so that the clients keep taking one request
+    // description and nothing provider-shaped.
+    query
+        .for_workflow(watch.workflow.as_deref())
+        .in_commit_groups(watch.commit_group_window())
 }
 
 /// Filter and trim the list rows a watch should show.

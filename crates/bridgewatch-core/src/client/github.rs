@@ -20,9 +20,19 @@
 //!
 //! ⛔ [`CiClient::pipeline_bridges`] therefore answers with an empty list and
 //! issues no request, which is a real answer rather than a gap: a run's jobs are
-//! all in one list, reusable workflows included. Folding the several runs of one
-//! push into a synthetic parent whose bridges are those runs is the commit
-//! group, and it arrives with the configuration that switches it on.
+//! all in one list, reusable workflows included.
+//!
+//! # The commit group
+//!
+//! A watch with `group = "commit"` asks for the other shape: every run one
+//! commit and event started, folded into ONE synthetic pipeline whose bridges
+//! are those runs. The folding, its key and its window live in [`group`]. The
+//! list request is the same one; the group's own jobs are empty and cost
+//! nothing, its bridges come from what the list returned, and a run's jobs are
+//! fetched through [`CiClient::child_jobs`] only when `dive` selects it. Which
+//! shape a row is cannot be read off its id (a group's id is its newest run's),
+//! so the poller asks through [`CiClient::listed_detail`], which carries the
+//! query that listed it.
 //!
 //! # What this module has to be careful about
 //!
@@ -41,7 +51,9 @@
 //! Every response is decoded into [`super::wire::github`] and converted into
 //! [`crate::model`] before it leaves this module.
 
-use std::sync::Arc;
+mod group;
+
+use std::sync::{Arc, Mutex};
 
 use serde::de::DeserializeOwned;
 
@@ -89,6 +101,8 @@ pub struct GitHubClient {
     header_value: String,
     transport: Arc<dyn Transport>,
     ring: RequestRing,
+    /// The commit groups the last grouped list presented. See [`group::Memo`].
+    groups: Arc<Mutex<group::Memo>>,
 }
 
 impl std::fmt::Debug for GitHubClient {
@@ -118,6 +132,7 @@ impl GitHubClient {
             header_value: account.header.header_value(token.expose()),
             transport,
             ring,
+            groups: Arc::new(Mutex::new(group::Memo::default())),
         }
     }
 
@@ -133,39 +148,30 @@ impl GitHubClient {
     /// `source` cannot do. ⚠️ [`ListQuery::order_by`] is ignored: GitHub always
     /// returns newest first and offers no ordering parameter, which is the
     /// ordering both of `order_by`'s values were asking for anyway.
+    ///
+    /// With [`ListQuery::commit_group`] set the rows are commit groups rather
+    /// than runs, folded from this same page (see [`group`]), and the groups
+    /// are remembered so the row's bridges cost no second request.
     pub async fn list_pipelines(
         &self,
         project: &ProjectRef,
         query: &ListQuery,
     ) -> Result<Vec<Pipeline>, ClientError> {
         let repo = repo_segment(project)?;
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(r) = &query.ref_name {
-            parts.push(format!("branch={}", urlencoding::encode(r)));
-        }
-        if let Some(s) = &query.source {
-            parts.push(format!("event={}", urlencoding::encode(s)));
-        }
-        // Drops the `pull_requests` array, which is never read and was 45
-        // entries on one sampled run.
-        parts.push("exclude_pull_requests=true".to_string());
-        parts.push(format!("per_page={}", query.per_page.clamp(1, 100)));
-        parts.push("page=1".to_string());
-        let path = match query
-            .workflow
-            .as_deref()
-            .map(str::trim)
-            .filter(|w| !w.is_empty())
-        {
-            Some(workflow) => format!(
-                "/repos/{repo}/actions/workflows/{}/runs?{}",
-                urlencoding::encode(workflow),
-                parts.join("&")
-            ),
-            None => format!("/repos/{repo}/actions/runs?{}", parts.join("&")),
-        };
+        let path = list_path(&repo, query);
         let (page, _) = self.get_json::<wire::RunsResponse>(&path).await?;
-        Ok(page.workflow_runs.into_iter().map(Into::into).collect())
+        let Some(window) = query.commit_group else {
+            return Ok(page.workflow_runs.into_iter().map(Into::into).collect());
+        };
+        let page_full = page.workflow_runs.len() >= query.per_page.clamp(1, 100) as usize;
+        let groups = group::fold(
+            page.workflow_runs,
+            window,
+            &|sha| self.commit_url(&repo, sha),
+            page_full,
+        );
+        self.memo().replace(&path, window, &groups);
+        Ok(groups.into_iter().map(|g| g.pipeline).collect())
     }
 
     /// `GET /repos/{owner}/{repo}/actions/runs/{id}`.
@@ -301,6 +307,82 @@ impl GitHubClient {
         let path = format!("/repos/{}", repo_segment(project)?);
         let (repo, _) = self.get_json::<wire::Repository>(&path).await?;
         Ok(repo.into())
+    }
+
+    /// The bridges of a commit-group row: one per run in the group.
+    ///
+    /// Answered from what the list that produced the row returned, which is the
+    /// normal case and costs nothing. A row this client did not just list (the
+    /// memo is a cache of a response, not a source of truth) is answered by
+    /// asking for that commit's runs by `head_sha` and folding them the same
+    /// way, one request, rather than by guessing.
+    async fn group_bridges(
+        &self,
+        project: &ProjectRef,
+        row: &Pipeline,
+        query: &ListQuery,
+        window: u64,
+    ) -> Result<Vec<Bridge>, ClientError> {
+        let repo = repo_segment(project)?;
+        let listed = list_path(&repo, query);
+        if let Some(bridges) = self.memo().bridges(&listed, window, row.id) {
+            return Ok(bridges);
+        }
+
+        let mut parts: Vec<String> = Vec::new();
+        if !row.ref_name.is_empty() {
+            parts.push(format!("branch={}", urlencoding::encode(&row.ref_name)));
+        }
+        if let Some(event) = &row.source {
+            parts.push(format!("event={}", urlencoding::encode(event)));
+        }
+        parts.push(format!("head_sha={}", urlencoding::encode(&row.sha)));
+        parts.push("exclude_pull_requests=true".to_string());
+        parts.push("per_page=100".to_string());
+        parts.push("page=1".to_string());
+        let path = runs_path(&repo, query.workflow.as_deref(), &parts);
+        let (page, _) = self.get_json::<wire::RunsResponse>(&path).await?;
+        let page_full = page.workflow_runs.len() >= 100;
+        let groups = group::fold(
+            page.workflow_runs,
+            window,
+            &|sha| self.commit_url(&repo, sha),
+            page_full,
+        );
+        // The group that IS this row, else the one holding its run: a run that
+        // joined since the row was listed moves the group's id to its own.
+        let found = groups.iter().find(|g| g.pipeline.id == row.id).or_else(|| {
+            groups
+                .iter()
+                .find(|g| g.bridges.iter().any(|b| b.id == row.id))
+        });
+        let Some(found) = found else {
+            return Err(ClientError::NotFound {
+                path: format!("{path} (no commit group holds run {})", row.id),
+            });
+        };
+        // Filed under the row's own id and its own list, so the children the
+        // poller asks for next are recognised as runs this client handed out.
+        let mut memo = self.memo();
+        let mut filed = found.clone();
+        filed.pipeline.id = row.id;
+        memo.insert(&listed, window, &filed);
+        Ok(found.bridges.clone())
+    }
+
+    /// GitHub's page for one commit's checks.
+    fn commit_url(&self, repo: &str, sha: &str) -> String {
+        format!(
+            "{}/{repo}/commit/{}/checks",
+            group::web_origin(&self.base_url),
+            urlencoding::encode(sha)
+        )
+    }
+
+    /// The group memo, whatever a panicking holder left in it: it is a cache,
+    /// and the worst a half-written slot does is cost a re-list.
+    fn memo(&self) -> std::sync::MutexGuard<'_, group::Memo> {
+        self.groups.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Follow `Link: rel="next"` from `first`, which already carries its query,
@@ -441,6 +523,39 @@ impl GitHubClient {
     }
 }
 
+/// The path of the runs listing a query asks for.
+///
+/// One function because the commit group keys what it remembers on this exact
+/// string: the row's bridges are looked up under the path of the list that
+/// produced the row, so the two must be spelled identically.
+fn list_path(repo: &str, query: &ListQuery) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(r) = &query.ref_name {
+        parts.push(format!("branch={}", urlencoding::encode(r)));
+    }
+    if let Some(s) = &query.source {
+        parts.push(format!("event={}", urlencoding::encode(s)));
+    }
+    // Drops the `pull_requests` array, which is never read and was 45
+    // entries on one sampled run.
+    parts.push("exclude_pull_requests=true".to_string());
+    parts.push(format!("per_page={}", query.per_page.clamp(1, 100)));
+    parts.push("page=1".to_string());
+    runs_path(repo, query.workflow.as_deref(), &parts)
+}
+
+/// `/repos/{repo}/actions/runs?...`, or one workflow's own runs.
+fn runs_path(repo: &str, workflow: Option<&str>, parts: &[String]) -> String {
+    match workflow.map(str::trim).filter(|w| !w.is_empty()) {
+        Some(workflow) => format!(
+            "/repos/{repo}/actions/workflows/{}/runs?{}",
+            urlencoding::encode(workflow),
+            parts.join("&")
+        ),
+        None => format!("/repos/{repo}/actions/runs?{}", parts.join("&")),
+    }
+}
+
 /// What a caller may need from the response beyond its body.
 struct ResponseMeta {
     link: Option<String>,
@@ -538,8 +653,9 @@ impl CiClient for GitHubClient {
         GitHubClient::pipeline_jobs(self, project, id).await
     }
 
-    /// Empty, and no request: a workflow run has no trigger jobs. See the
-    /// module documentation on the commit group.
+    /// Empty, and no request: a workflow run has no trigger jobs. A commit
+    /// group's bridges are answered by [`CiClient::listed_detail`], which knows
+    /// the row is a group; an id alone does not.
     async fn pipeline_bridges(
         &self,
         _project: &ProjectRef,
@@ -548,15 +664,53 @@ impl CiClient for GitHubClient {
         Ok(Vec::new())
     }
 
-    /// Empty, and no request. Children are reached through bridges, and there
-    /// are none, so nothing can ask for this; answering with an error would
-    /// make a future caller's mistake look like an outage.
+    /// One run per row: its jobs, and no bridges, which costs no request.
+    /// A commit group: no jobs of its own, and its runs as bridges.
+    ///
+    /// ⛔ The group's EMPTY job list is a real answer, and the poller stores it
+    /// as fetched (`DetailSource::Fetched`), so the verdict engine reads "the
+    /// parent has no failing jobs" rather than "nothing is known". The group's
+    /// state comes from its bridges, which always number at least one.
+    async fn listed_detail(
+        &self,
+        project: &ProjectRef,
+        row: &Pipeline,
+        query: &ListQuery,
+    ) -> Result<(Vec<Job>, Vec<Bridge>), ClientError> {
+        match query.commit_group {
+            None => {
+                let jobs = GitHubClient::pipeline_jobs(self, project, row.id).await?;
+                Ok((jobs, Vec::new()))
+            }
+            Some(window) => {
+                let bridges = self.group_bridges(project, row, query, window).await?;
+                Ok((Vec::new(), bridges))
+            }
+        }
+    }
+
+    /// A run's jobs, for a run a commit group handed out as a bridge; empty
+    /// and no request for anything else.
+    ///
+    /// The membership check is what keeps a one-run-per-row watch exactly as
+    /// it was (it has no bridges, so nothing asks), and it means this client
+    /// only ever fetches jobs for a run it presented itself.
     async fn child_jobs(
         &self,
-        _child_project: &ProjectRef,
-        _child_id: u64,
+        child_project: &ProjectRef,
+        child_id: u64,
     ) -> Result<Vec<Job>, ClientError> {
-        Ok(Vec::new())
+        let presented = match child_project {
+            ProjectRef::Path(_) => {
+                let prefix = format!("/repos/{}/", repo_segment(child_project)?);
+                self.memo().presents(&prefix, child_id)
+            }
+            ProjectRef::Id(_) => false,
+        };
+        if !presented {
+            return Ok(Vec::new());
+        }
+        GitHubClient::pipeline_jobs(self, child_project, child_id).await
     }
 
     async fn current_user(&self) -> Result<User, ClientError> {

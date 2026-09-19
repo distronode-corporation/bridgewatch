@@ -49,6 +49,14 @@ pub struct ListQuery {
     /// a GitLab project has no such subdivision, and the request it builds is
     /// unchanged whatever this holds.
     pub workflow: Option<String>,
+    /// GitHub's commit group: fold the runs of one commit and event created
+    /// within this many seconds of the newest into one pipeline. `None` is one
+    /// run per pipeline.
+    ///
+    /// ⚠️ On the shared query for the same reason as [`Self::workflow`], and
+    /// **GitLab ignores it** for the same reason too: a GitLab pipeline already
+    /// is the whole commit, and its requests are unchanged whatever this holds.
+    pub commit_group: Option<u64>,
 }
 
 impl ListQuery {
@@ -60,6 +68,7 @@ impl ListQuery {
             per_page,
             order_by: "id",
             workflow: None,
+            commit_group: None,
         }
     }
 
@@ -72,6 +81,7 @@ impl ListQuery {
             per_page,
             order_by: "updated_at",
             workflow: None,
+            commit_group: None,
         }
     }
 
@@ -82,6 +92,13 @@ impl ListQuery {
             .map(str::trim)
             .filter(|w| !w.is_empty())
             .map(str::to_string);
+        self
+    }
+
+    /// The same query, folded into commit groups of `window` seconds, or one
+    /// run per pipeline when `None`.
+    pub fn in_commit_groups(mut self, window: Option<u64>) -> Self {
+        self.commit_group = window;
         self
     }
 

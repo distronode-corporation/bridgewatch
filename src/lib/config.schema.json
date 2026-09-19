@@ -206,6 +206,21 @@
         }
       ]
     },
+    "GroupMode": {
+      "description": "What one row of a GitHub watch is.",
+      "oneOf": [
+        {
+          "description": "One workflow run is one row.",
+          "type": "string",
+          "const": "run"
+        },
+        {
+          "description": "Every run of one commit and event, created within `fan_out_secs` of the\nnewest, is one row, and each run is one of its bridges.",
+          "type": "string",
+          "const": "commit"
+        }
+      ]
+    },
     "IconConfig": {
       "description": "Tray icon appearance.",
       "type": "object",
@@ -635,6 +650,19 @@
             "exclude": [],
             "only_when": null
           }
+        },
+        "fan_out_secs": {
+          "description": "GitHub only, and only with `group = \"commit\"`: runs of one commit and\nevent created within this many seconds of the group's newest run are\none row. Absent is 90.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "group": {
+          "description": "GitHub only: what one row is. `run` (the default) is one workflow run;\n`commit` folds every run of one commit and event into one row, each\nrun appearing as a bridge, so `dive` selects workflow names.",
+          "$ref": "#/$defs/GroupMode"
         },
         "id": {
           "description": "Stable identifier, used in notifications, `--watch` and the GUI.",

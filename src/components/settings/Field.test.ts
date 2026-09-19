@@ -124,6 +124,14 @@ describe("Field, after the core has answered", () => {
     expect(h.input().value).toBe("5");
   });
 
+  it("removes an optional number whose entry says absence is its default", () => {
+    // `fan_out_secs` is absent-means-90; every other number keeps its value.
+    expect(entry("watches.*.fan_out_secs").emptyMeans).toBe("unset");
+    const h = render("watches.*.fan_out_secs", 120);
+    change(h.input(), "");
+    expect(h.edits).toEqual([[{ op: "unset", path: "watches.0.fan_out_secs" }]]);
+  });
+
   it("restores a list textarea the core would not take", async () => {
     const h = render("watches.*.deploy_markers", ["deploy:origins"]);
     change(h.textarea(), "deploy:origins\ndeploy:cdn_seo");

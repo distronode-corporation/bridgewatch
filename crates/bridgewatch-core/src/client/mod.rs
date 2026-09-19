@@ -61,6 +61,29 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
         id: u64,
     ) -> Result<Vec<Bridge>, ClientError>;
 
+    /// A LISTED pipeline's own jobs and its bridges: what the poller fetches
+    /// for every row it refreshes.
+    ///
+    /// The default is [`Self::pipeline_jobs`] then [`Self::pipeline_bridges`],
+    /// in that order, which is GitLab's answer and exactly the two requests the
+    /// poller made before this method existed.
+    ///
+    /// ⛔ It takes the row and the query that listed it, not an id, because a
+    /// provider may SYNTHESISE rows. GitHub's commit group is one: a group's id
+    /// is its newest run's id, so an id alone cannot say whether the caller
+    /// means that run (whose jobs are real) or the group (which has none of its
+    /// own and whose bridges are its runs). The query can.
+    async fn listed_detail(
+        &self,
+        project: &ProjectRef,
+        row: &Pipeline,
+        _query: &ListQuery,
+    ) -> Result<(Vec<Job>, Vec<Bridge>), ClientError> {
+        let jobs = self.pipeline_jobs(project, row.id).await?;
+        let bridges = self.pipeline_bridges(project, row.id).await?;
+        Ok((jobs, bridges))
+    }
+
     /// The jobs of a child pipeline, which may live in another project.
     async fn child_jobs(
         &self,

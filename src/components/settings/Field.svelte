@@ -82,6 +82,13 @@
     const element = control(event);
     const raw = element.value;
     const n = Number(raw);
+    // An optional number whose absence IS a value (`fan_out_secs`, absent is
+    // 90) says so in the registry, and clearing it removes the key. Every other
+    // number has a default that a blank must not silently reinstate.
+    if (raw.trim() === "" && entry.emptyMeans === "unset") {
+      void settle(element, [unset(path)]);
+      return;
+    }
     if (raw === "" || !Number.isFinite(n)) {
       // Nothing is written, so the file has not changed: show what it says
       // rather than leaving a number the core has never seen.

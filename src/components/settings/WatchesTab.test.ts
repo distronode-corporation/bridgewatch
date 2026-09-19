@@ -144,19 +144,27 @@ describe("WatchesTab, keys for the other provider", () => {
     // be visible to be cleared.
     expect(input.disabled).toBe(false);
     expect(input.value).toBe("ci.yml");
+    // So are the commit group's two keys.
+    for (const label of ["One row is", "Commit window (s)"]) {
+      expect(row(label).dataset.inapplicable, label).toBe("true");
+      expect(row(label).querySelector("input, select, button")?.hasAttribute("disabled"), label).toBe(false);
+    }
     // A dive key is GitLab's and is left alone here.
     expect(row("Dive depth").dataset.inapplicable).toBeUndefined();
   });
 
-  it("dims the dive keys on a GitHub watch and not its workflow", () => {
+  it("dims dive depth on a GitHub watch, and not its workflow, its group or its dive selection", () => {
     renderMixed();
     host.querySelectorAll<HTMLButtonElement>("header button.disclosure")[1].click();
     flushSync();
-    expect(row("Workflow").dataset.inapplicable).toBeUndefined();
-    for (const label of ["Dive into bridges", "Dive exclusions", "Dive depth"]) {
-      expect(row(label).dataset.inapplicable, label).toBe("true");
-      expect(row(label).querySelector("input, textarea")?.hasAttribute("disabled"), label).toBe(false);
+    for (const label of ["Workflow", "One row is", "Commit window (s)"]) {
+      expect(row(label).dataset.inapplicable, label).toBeUndefined();
     }
-    expect(row("Dive only when").dataset.inapplicable).toBeUndefined();
+    expect(row("Dive depth").dataset.inapplicable).toBe("true");
+    expect(row("Dive depth").querySelector("input")?.hasAttribute("disabled")).toBe(false);
+    // On a commit group each run is a bridge, so these select workflow names.
+    for (const label of ["Dive into bridges", "Dive exclusions", "Dive only when"]) {
+      expect(row(label).dataset.inapplicable, label).toBeUndefined();
+    }
   });
 });

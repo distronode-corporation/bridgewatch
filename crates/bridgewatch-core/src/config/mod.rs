@@ -733,17 +733,65 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
             // defaults to `"*"` and an explicit `"*"` cannot be told from the
             // default once the file is parsed, so warning on it would put a
             // line under every GitHub watch ever written, including the ones
-            // that never mentioned dive at all.
-            if !watch.dive.exclude.is_empty()
-                || (watch.dive.bridges != DiveConfig::default().bridges
-                    && !watch.dive.bridges.is_empty())
+            // that never mentioned dive at all. Under `group = "commit"` each
+            // run is a bridge and `dive` selects workflow names, so there is
+            // nothing to say.
+            if watch.group.is_run()
+                && (!watch.dive.exclude.is_empty()
+                    || (watch.dive.bridges != DiveConfig::default().bridges
+                        && !watch.dive.bridges.is_empty()))
             {
                 out.push(Diagnostic::warning(
                     format!("{base}.dive"),
                     "dive selects trigger jobs to walk into, and this watch has none to \
                      select: one workflow run is one row, and a run's jobs are all in one \
-                     list, a called workflow's included. The key starts selecting when a \
-                     watch folds a commit's several runs into one row",
+                     list, a called workflow's included. Set group = \"commit\" to fold a \
+                     commit's several runs into one row, where dive selects workflow names",
+                ));
+            }
+            if watch.group.is_run() && watch.fan_out_secs.is_some() {
+                out.push(Diagnostic::warning(
+                    format!("{base}.fan_out_secs"),
+                    "fan_out_secs is the commit group's window and this watch shows one row \
+                     per run, so it is ignored; set group = \"commit\" for it to apply",
+                ));
+            }
+            // A warning rather than an error: the watch works, it just cannot
+            // group anything, because the list it groups holds one workflow's
+            // runs and one commit starts at most one run of a workflow.
+            if !watch.group.is_run()
+                && watch
+                    .workflow
+                    .as_deref()
+                    .is_some_and(|w| !w.trim().is_empty())
+            {
+                out.push(Diagnostic::warning(
+                    format!("{base}.workflow"),
+                    "group = \"commit\" folds the runs of every workflow on one commit into \
+                     one row, and workflow limits the watch to a single workflow, so every \
+                     row will hold one run; remove workflow to see the whole commit",
+                ));
+            }
+        }
+
+        // Both are inert on GitLab, where a pipeline already is the whole
+        // commit. Warnings for the same reason `workflow` is one: moving a
+        // watch between accounts must not make the file unloadable. `group`
+        // is said only when it asks for something, since an explicit
+        // `group = "run"` is indistinguishable from the default once parsed.
+        if provider == Some(Provider::Gitlab) {
+            if !watch.group.is_run() {
+                out.push(Diagnostic::warning(
+                    format!("{base}.group"),
+                    "group folds a commit's GitHub Actions runs into one row and is ignored \
+                     on a GitLab account, where one pipeline already is the commit",
+                ));
+            }
+            if watch.fan_out_secs.is_some() {
+                out.push(Diagnostic::warning(
+                    format!("{base}.fan_out_secs"),
+                    "fan_out_secs is the window of a GitHub commit group and is ignored on \
+                     a GitLab account",
                 ));
             }
         }

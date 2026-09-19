@@ -73,6 +73,10 @@ export interface RegistryEntry {
    * What clearing the control writes. Defaults to `unset`, which is right for
    * every key whose default is absence; say `empty` where the empty string is
    * itself a value the user can mean.
+   *
+   * ⚠ A `number` control is the exception: cleared, it writes NOTHING unless
+   * its entry says `unset` explicitly, because most numbers have a default a
+   * blank field must not reinstate by removing the key.
    */
   emptyMeans?: EmptyMeans;
   /**
@@ -171,6 +175,28 @@ export const REGISTRY: RegistryEntry[] = [
     providerNote: "Ignored on a GitLab account: a GitLab project has no workflows to choose between.",
   },
   {
+    path: "watches.*.group",
+    tab: "watches",
+    control: "select",
+    label: "One row is",
+    options: ["run", "commit"],
+    hint: 'GitHub only: "run" is one workflow run; "commit" folds a push\'s runs into one row, each run a bridge.',
+    provider: "github",
+    providerNote: "Ignored on a GitLab account: one GitLab pipeline already is the whole commit.",
+  },
+  {
+    path: "watches.*.fan_out_secs",
+    tab: "watches",
+    control: "number",
+    label: "Commit window (s)",
+    hint: 'With "commit": runs of one commit this close to its newest are one row. Empty is 90.',
+    // Stated rather than defaulted: a NUMBER control writes nothing when
+    // cleared unless its entry opts in, and absence is this key's default.
+    emptyMeans: "unset",
+    provider: "github",
+    providerNote: "Ignored on a GitLab account: it is the window of a GitHub commit group.",
+  },
+  {
     path: "watches.*.sources",
     tab: "watches",
     control: "list",
@@ -209,21 +235,21 @@ export const REGISTRY: RegistryEntry[] = [
     tab: "watches",
     control: "text",
     label: "Dive into bridges",
-    hint: 'Glob over trigger-job names. "*" is all of them, "" is none.',
+    hint: 'Glob over trigger-job names, or workflow names on a GitHub commit group. "*" is all, "" is none.',
     // ⛔ The default is `"*"`. Removing the key to mean "none" would turn the
     // dive back on for every bridge, which is what the hint promises it stops.
     emptyMeans: "empty",
-    // The same three keys `config::validate` warns about on a github watch.
-    provider: "gitlab",
-    providerNote: "Ignored on a GitHub account: a workflow run has no bridges to dive into yet.",
+    // ⚠ Not marked for one provider: on GitHub it selects workflows under
+    // `group = "commit"` and is inert under `run`, which `config::validate`
+    // says in a warning. Applicability here is per provider, and dimming it on
+    // every GitHub watch would be wrong for exactly the watches that use it.
   },
   {
     path: "watches.*.dive.exclude",
     tab: "watches",
     control: "list",
     label: "Dive exclusions",
-    provider: "gitlab",
-    providerNote: "Ignored on a GitHub account: a workflow run has no bridges to dive into yet.",
+    hint: "Names to skip even when the glob matches: trigger jobs, or workflows on a GitHub commit group.",
   },
   {
     path: "watches.*.dive.depth",
