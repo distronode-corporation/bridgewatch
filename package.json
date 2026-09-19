@@ -1,6 +1,6 @@
 {
   "name": "bridgewatch",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Bridge-aware tray monitor for GitLab CI and GitHub Actions: the Svelte 5 frontend of the Tauri shell.",
   "license": "Apache-2.0",
   "private": true,

@@ -18,12 +18,13 @@ bug bounty; what you get is credit in the changelog entry for the fix, if you wa
 
 ## Supported versions
 
-bridgewatch is pre-1.0. Only the latest 0.x release is supported. Fixes go into a new
-release rather than being backported.
+Only the latest release is supported. Fixes go into a new release rather than being
+backported.
 
 | Version | Supported |
 | --- | --- |
-| Latest 0.x release | Yes |
+| Latest 1.x release | Yes |
+| 0.x | No |
 | Anything older | No |
 
 ## Security model

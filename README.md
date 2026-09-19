@@ -269,7 +269,7 @@ entry that `workflow` rules out, and about `expect` with an empty `sources`.
 | --- | --- |
 | macOS 10.15 or newer, Apple Silicon and Intel | Supported. Release builds are signed and notarised, see below. |
 | Linux x86_64, glibc 2.35 or newer (Ubuntu 22.04 or newer, and equivalents) | Supported. |
-| Windows | Not targeted in 0.1. |
+| Windows | Not targeted. |
 
 Linux release builds are made on Ubuntu 22.04. glibc is forward-compatible but not
 backward-compatible, so that is the floor: the `.deb` and `.AppImage` run on 22.04 and
@@ -294,7 +294,7 @@ Each `.dmg` is single-architecture; pick the one for your Mac. Every asset carri
 GitHub build provenance attestation:
 
 ```
-gh attestation verify bridgewatch_0.1.0_amd64.deb --repo distronode-corporation/bridgewatch
+gh attestation verify bridgewatch_1.0.0_amd64.deb --repo distronode-corporation/bridgewatch
 ```
 
 The release assets contain the GUI only. The `bridgewatch` CLI is built from source,
@@ -316,7 +316,7 @@ The second command should end with `source=Notarized Developer ID`.
 ### Linux: .deb
 
 ```
-sudo apt install ./bridgewatch_0.1.0_amd64.deb
+sudo apt install ./bridgewatch_1.0.0_amd64.deb
 ```
 
 The package depends on `libsecret-tools`, because bridgewatch runs `secret-tool` to read a
@@ -326,8 +326,8 @@ stores its active account's (see [Tokens](#tokens)).
 ### Linux: AppImage
 
 ```
-chmod +x bridgewatch_0.1.0_amd64.AppImage
-./bridgewatch_0.1.0_amd64.AppImage
+chmod +x bridgewatch_1.0.0_amd64.AppImage
+./bridgewatch_1.0.0_amd64.AppImage
 ```
 
 An AppImage declares no dependencies. If you reuse glab's or gh's token, install
@@ -579,7 +579,7 @@ Accounts of both providers can sit in one file:
 | `notify.deployed`, `notify.blocking_failure`, `notify.finished` | Notify on these events [true]. |
 | `notify.started`, `notify.gate_opened` | Notify on these events [false]. |
 | `notify.title`, `notify.body` | MiniJinja templates over the pipeline view (`watch.id`, `sha7`, `state`, `failures`, `warnings`, `gates`, `ref`, `source`, `url`, ...). |
-| `notify.click` | `first_failure_or_pipeline`, `pipeline`, `marker_job` or `none`. Computed, but desktop notifications cannot open a URL in 0.1, see [Limitations](#limitations). |
+| `notify.click` | `first_failure_or_pipeline`, `pipeline`, `marker_job` or `none`. Computed, but desktop notifications cannot open a URL yet, see [Limitations](#limitations). |
 
 **`[icon]`**:
 
@@ -708,7 +708,7 @@ stops a hostile or compromised instance from making the app open an arbitrary pa
 ## CLI
 
 The CLI runs the same core as the GUI, so anything the icon knows it can print: in a
-shell prompt, a status bar or a script. It is not in the release assets in 0.1; build it
+shell prompt, a status bar or a script. It is not in the release assets; build it
 with Rust 1.88 or newer, from a clone of this repository:
 
 ```
@@ -837,7 +837,7 @@ Bundles land in `target/release/bundle/` at the repository root. For development
   page without `workflow` holds every workflow's runs, so it covers less time.
 - **Notifications cannot be clicked through on desktop.** The Tauri notification plugin
   passes only title, body, icon and sound to macOS and Linux, so `notify.click` has no
-  effect in 0.1. The popover row carries the same link.
+  effect yet. The popover row carries the same link.
 - **No poll on wake from sleep.** The first data after resume can be up to one interval
   stale; opening the popover polls at once.
 - **Windows is not targeted.** Nothing is tested there, the keyring code least of all.

@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "bridgewatch-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bridgewatch-core",
  "notify",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "bridgewatch-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bridgewatch-core",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "bridgewatch-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",

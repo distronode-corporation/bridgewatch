@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/bridgewatch-core", "crates/bridgewatch-cli", "src-tauri"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 # ⛔ NOT 1.85, WHICH IS WHAT EDITION 2024 ALONE WOULD IMPLY. Two independent
 # things put the floor at 1.88, and neither is visible in this file:
@@ -25,7 +25,7 @@ repository = "https://github.com/distronode-corporation/bridgewatch"
 authors = ["Distronode Corporation"]
 
 [workspace.dependencies]
-bridgewatch-core = { path = "crates/bridgewatch-core", version = "0.1.0" }
+bridgewatch-core = { path = "crates/bridgewatch-core", version = "1.0.0" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.20"
