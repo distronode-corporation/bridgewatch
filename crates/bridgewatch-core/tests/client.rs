@@ -289,6 +289,7 @@ fn debug_never_prints_the_credential_header() {
         url: "https://gitlab.example/api/v4/projects/1".into(),
         path: "/projects/1".into(),
         headers: vec![("PRIVATE-TOKEN".into(), "glpat-SECRET".into())],
+        body: None,
     };
     let rendered = format!("{request:?} {request:#?}");
     assert!(!rendered.contains("glpat-SECRET"), "{rendered}");
@@ -746,6 +747,7 @@ async fn a_response_keeps_the_etag_and_link_headers_verbatim() {
             url: format!("{base}/anything"),
             path: "/anything".into(),
             headers: Vec::new(),
+            body: None,
         })
         .await
         .expect("the loopback server answers");
@@ -765,6 +767,7 @@ async fn a_response_keeps_the_etag_and_link_headers_verbatim() {
 
 /// A provider that answers one variable and nothing else, so a poller can be
 /// built without reading a real credential.
+#[derive(Clone)]
 struct OneVariable;
 
 impl bridgewatch_core::token::TokenProvider for OneVariable {

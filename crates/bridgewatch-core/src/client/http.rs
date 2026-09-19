@@ -35,7 +35,8 @@ pub const REDACTED: &str = "<redacted>";
 /// [`REDACTED`].
 #[derive(Clone)]
 pub struct HttpRequest {
-    /// HTTP method. bridgewatch only ever issues `GET`.
+    /// HTTP method: `GET` for every API call, `POST` only for the OAuth
+    /// device-flow and token endpoints ([`crate::oauth`]).
     pub method: &'static str,
     /// Fully-qualified URL.
     pub url: String,
@@ -45,6 +46,12 @@ pub struct HttpRequest {
     /// Headers to send, credentials included. Never recorded: [`RequestLog`]
     /// has no field for them, and `Debug` prints [`REDACTED`] for every value.
     pub headers: Vec<(String, String)>,
+    /// A form-encoded body, sent with a `POST`. `None` for every `GET`.
+    ///
+    /// ⛔ The OAuth token endpoints carry the device code and the refresh token
+    /// HERE, which is why `Debug` never prints it and why no log line or
+    /// [`RequestLog`] field reads it.
+    pub body: Option<String>,
 }
 
 impl std::fmt::Debug for HttpRequest {
@@ -63,6 +70,7 @@ impl std::fmt::Debug for HttpRequest {
                     .map(|(name, _)| (name.as_str(), REDACTED))
                     .collect::<Vec<_>>(),
             )
+            .field("body", &self.body.as_ref().map(|_| REDACTED))
             .finish()
     }
 }
@@ -260,7 +268,15 @@ impl ReqwestTransport {
 #[async_trait::async_trait]
 impl Transport for ReqwestTransport {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ClientError> {
-        let mut builder = self.client.get(&request.url);
+        // Only the OAuth endpoints post, and they post a form; everything
+        // else is a GET exactly as before.
+        let mut builder = match request.method {
+            "POST" => self
+                .client
+                .post(&request.url)
+                .body(request.body.clone().unwrap_or_default()),
+            _ => self.client.get(&request.url),
+        };
         for (name, value) in &request.headers {
             builder = builder.header(name.as_str(), value.as_str());
         }

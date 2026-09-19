@@ -67,6 +67,13 @@ const shell = {
 
 vi.mock("./lib/ipc", () => ({
   inTauri: () => true,
+  // Sign-in is not what these tests are about: this build offers it nowhere
+  // (no client id is built in), so the token field shows the four sources.
+  oauthApi: () => ({
+    availability: () =>
+      Promise.resolve({ available: false, builtin: false, needs_client_id: false, host: "gitlab.com", install_url: null }),
+    status: () => Promise.resolve(null),
+  }),
   getConfigJson: () => Promise.resolve({ config: shell.config, job_order: [[], []] }),
   readConfigText: () => Promise.resolve(shell.text),
   getStatus: () => Promise.resolve(shell.status),

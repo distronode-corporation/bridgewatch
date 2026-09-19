@@ -6,8 +6,10 @@
   import { Badge } from "$lib/components/ui/badge/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
   import FieldMessage from "./FieldMessage.svelte";
+  import DeviceSignIn from "../DeviceSignIn.svelte";
   import type { CliTokenDetection, Identity, Provider } from "./api";
-  import { cliName, type Draft, type StepErrors, type TokenMode } from "./model";
+  import { baseUrlOf, cliName, type Draft, type StepErrors, type TokenMode } from "./model";
+  import { providerName, type OAuthApi, type OAuthAvailability, type SignedIn } from "../../lib/oauth";
 
   interface Props {
     draft: Draft;
@@ -22,6 +24,14 @@
     onInstanceChange: () => void;
     /** The provider radio changed. */
     onProviderChange: (provider: Provider) => void;
+    /** Sign-in commands; absent (a test, a browser) means no sign-in is offered. */
+    oauth?: OAuthApi;
+    /** Whether sign-in is offered for this instance and client id. */
+    availability?: OAuthAvailability | null;
+    /** A sign-in finished. */
+    onSignedIn?: (signed: SignedIn) => void;
+    /** The typed client id changed. */
+    onClientIdChange?: () => void;
   }
 
   let {
@@ -34,7 +44,17 @@
     onTest,
     onInstanceChange,
     onProviderChange,
+    oauth,
+    availability = null,
+    onSignedIn,
+    onClientIdChange,
   }: Props = $props();
+
+  /** "Sign in with ..." is offered when a client id exists, built in or typed, or is already chosen. */
+  const offerSignIn = $derived(!!oauth && (availability?.available === true || draft.tokenMode === "oauth"));
+  const signInName = $derived(`Sign in with ${providerName(draft.provider)}`);
+  /** The own-application box starts open where only a typed client id will do, or one is typed. */
+  const clientIdOpen = $derived(draft.oauthClientId.trim() !== "" || availability?.needs_client_id === true);
 
   const github = $derived(draft.provider === "github");
   const cliTool = $derived(cliName(draft.provider));
@@ -176,6 +196,27 @@
   <fieldset class="flex flex-col gap-2" aria-describedby="wizard-token-needs wizard-token-msg">
     <legend class="mb-1 text-sm font-medium">Token</legend>
     <p id="wizard-token-needs" class="text-muted-foreground text-xs" data-slot="token-needs">{needs}</p>
+    {#if offerSignIn}
+      <!-- First, and the recommended way: nothing to create, copy or paste
+           but a short code, and the tokens renew themselves. -->
+      <label class="flex items-start gap-2 text-sm">
+        <input
+          type="radio"
+          name="token-mode"
+          value="oauth"
+          class="accent-primary mt-0.5"
+          checked={draft.tokenMode === "oauth"}
+          onchange={() => selectMode("oauth")}
+        />
+        <span class="flex flex-col">
+          <span class="flex items-center gap-2">{signInName} <Badge variant="secondary">Recommended</Badge></span>
+          <span class="text-muted-foreground text-xs"
+            >Approve bridgewatch in your browser with a short code. The sign-in is kept in the system keychain and
+            renews itself.</span
+          >
+        </span>
+      </label>
+    {/if}
     {#each modes as mode (mode.value)}
       {#if mode.value !== "cli" || cliFound}
         <label class="flex items-start gap-2 text-sm">
@@ -196,7 +237,29 @@
     {/each}
 
     <div class="pl-6">
-      {#if draft.tokenMode === "paste"}
+      {#if draft.tokenMode === "oauth" && oauth}
+        {#if draft.oauthLogin}
+          <p class="m-0 text-sm" data-slot="oauth-signed-in">
+            Signed in as <span class="font-mono">@{draft.oauthLogin}</span>.
+          </p>
+        {:else if draft.oauthStored}
+          <p class="text-muted-foreground m-0 text-xs" data-slot="oauth-stored">
+            This account is already signed in. Sign in again only to replace it.
+          </p>
+        {/if}
+        <DeviceSignIn
+          api={oauth}
+          request={() => ({
+            account: (draft.oauthAccount ?? draft.account).trim() || draft.account.trim(),
+            provider: draft.provider,
+            base_url: baseUrlOf(draft),
+            client_id: draft.oauthClientId.trim() || null,
+          })}
+          label={draft.oauthLogin || draft.oauthStored ? "Sign in again" : signInName}
+          disabled={!draft.account.trim()}
+          onsignedin={(signed) => onSignedIn?.(signed)}
+        />
+      {:else if draft.tokenMode === "paste"}
         <Label for="wizard-secret" class="sr-only">Access token</Label>
         <Input
           id="wizard-secret"
@@ -236,6 +299,33 @@
       {/if}
       <FieldMessage id="wizard-token-msg" message={errors.token} />
     </div>
+    {#if oauth}
+      <details class="text-xs" open={clientIdOpen} data-slot="oauth-own-app">
+        <summary class="text-muted-foreground cursor-pointer">Sign in with an OAuth application of your own</summary>
+        <div class="flex flex-col gap-1 pt-1.5 pl-4">
+          <Label for="wizard-oauth-client-id" class="text-xs">Client id</Label>
+          <Input
+            id="wizard-oauth-client-id"
+            name="oauth_client_id"
+            class="w-72 font-mono"
+            spellcheck={false}
+            autocomplete="off"
+            placeholder={availability?.builtin ? "empty: bridgewatch's own" : "client id"}
+            bind:value={draft.oauthClientId}
+            oninput={() => onClientIdChange?.()}
+          />
+          <span class="text-muted-foreground" data-slot="oauth-client-id-hint">
+            {#if github}
+              A GitHub App on {availability?.host ?? "your server"} with "Enable Device Flow" ticked. A client id is not a
+              secret; there is no client secret.
+            {:else}
+              An application on {availability?.host ?? "your instance"} that is not confidential, with the read_api scope.
+              Needs GitLab 17.9 or later.
+            {/if}
+          </span>
+        </div>
+      </details>
+    {/if}
   </fieldset>
 
   <div class="flex flex-col gap-1">

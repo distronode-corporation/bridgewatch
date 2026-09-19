@@ -1000,3 +1000,70 @@ fn fixture_record_refuses_a_github_account_before_touching_a_token() {
     assert!(!err.contains("token"), "the resolver was reached: {err}");
     assert!(!dir.0.join("1").exists(), "a fixture directory was created");
 }
+
+// ---------------------------------------------------------------------------
+// auth: only the paths that end before any request or keychain read. A whole
+// sign-in, against a script and a store in memory, is in `src/auth.rs`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn auth_status_with_no_signing_in_account_says_so_and_exits_zero() {
+    let dir = TempDir::new("auth-none");
+    let config = dir.write("config.toml", MINIMAL);
+    let out = run(bin().arg("--config").arg(&config).args(["auth", "status"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("No account signs in"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn auth_on_an_unknown_account_is_a_usage_error_and_on_a_token_account_a_config_one() {
+    let dir = TempDir::new("auth-names");
+    let config = dir.write("config.toml", MINIMAL);
+    let out = run(bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["auth", "login", "--account", "nope"]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("no account \"nope\""),
+        "{}",
+        stderr(&out)
+    );
+
+    let out =
+        run(bin()
+            .arg("--config")
+            .arg(&config)
+            .args(["auth", "status", "--account", "gitlab"]));
+    assert_eq!(code(&out), 78, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("token = { oauth = true }"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// A self-managed GitLab that signs in without a client id of its own cannot
+/// load, so `auth login` stops at the configuration, before any request.
+#[test]
+fn auth_login_without_a_client_id_stops_at_the_configuration() {
+    let dir = TempDir::new("auth-client-id");
+    let config = dir.write(
+        "config.toml",
+        "[accounts.lab]\nbase_url = \"https://gitlab.example.com\"\ntoken = { oauth = true }\n",
+    );
+    let out = run(bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["auth", "login", "--account", "lab"]));
+    assert_eq!(code(&out), 78, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("that server's own application"),
+        "{}",
+        stderr(&out)
+    );
+}

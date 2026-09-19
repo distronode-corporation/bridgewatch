@@ -35,10 +35,12 @@ export function stepTitle(step: StepInfo, provider: Provider): string {
 }
 
 /**
- * Where the token comes from. `cli` is the provider's own CLI keyring item:
- * glab's for GitLab, gh's for GitHub (its radio carries the CLI's name).
+ * Where the token comes from. `oauth` is "Sign in with GitHub/GitLab" (the
+ * device flow; the shell stores the tokens). `cli` is the provider's own CLI
+ * keyring item: glab's for GitLab, gh's for GitHub (its radio carries the
+ * CLI's name).
  */
-export type TokenMode = "cli" | "paste" | "env" | "command";
+export type TokenMode = "oauth" | "cli" | "paste" | "env" | "command";
 
 /** The CLI whose keyring item the `cli` token mode reads. */
 export function cliName(provider: Provider): "glab" | "gh" {
@@ -173,6 +175,14 @@ export interface Draft {
   ownStored: boolean;
   envVar: string;
   commandText: string;
+  /** Sign in: a client id of the user's own; empty is the host's built-in application. */
+  oauthClientId: string;
+  /** Sign in: who signed in on this page, once they have. */
+  oauthLogin: string | null;
+  /** Sign in: the account name the sign-in was stored under, which the save moves if it changed. */
+  oauthAccount: string | null;
+  /** Re-running on a config that already signs in: the stored sign-in is kept unless replaced. */
+  oauthStored: boolean;
 
   /** The chosen project. `ref` is what gets written: the id once resolved. */
   project: { ref: ProjectRef; path: string; default_branch: string | null } | null;
@@ -211,6 +221,10 @@ export function emptyDraft(provider: Provider = "gitlab"): Draft {
     ownStored: false,
     envVar: "",
     commandText: "",
+    oauthClientId: "",
+    oauthLogin: null,
+    oauthAccount: null,
+    oauthStored: false,
     project: null,
     projectInput: "",
     refName: "main",
@@ -244,6 +258,12 @@ export function switchProvider(draft: Draft, provider: Provider): void {
   draft.selfManagedUrl = "";
   draft.cliSource = null;
   if (draft.tokenMode === "cli") draft.tokenMode = "paste";
+  // A sign-in belongs to the provider it was made with.
+  if (draft.tokenMode === "oauth") draft.tokenMode = "paste";
+  draft.oauthClientId = "";
+  draft.oauthLogin = null;
+  draft.oauthAccount = null;
+  draft.oauthStored = false;
   if (!draft.accountEdited) draft.account = provider;
   draft.project = null;
   draft.projectInput = "";
@@ -286,6 +306,11 @@ export function draftFromAnswers(answers: Partial<WizardAnswers>): Draft {
     } else if ("keyring" in token) {
       draft.tokenMode = "cli";
       draft.cliSource = token;
+    } else if ("oauth" in token) {
+      draft.tokenMode = "oauth";
+      draft.oauthStored = true;
+      draft.oauthAccount = answers.account ?? null;
+      if (typeof token.oauth === "object" && token.oauth !== null) draft.oauthClientId = token.oauth.client_id;
     } else {
       draft.tokenMode = "paste";
       draft.ownStored = token.own;
@@ -411,6 +436,10 @@ export function formatCommand(argv: readonly string[]): string {
 
 export function tokenSourceOf(draft: Draft): TokenSource {
   switch (draft.tokenMode) {
+    case "oauth": {
+      const clientId = draft.oauthClientId.trim();
+      return clientId ? { oauth: { client_id: clientId } } : { oauth: true };
+    }
     case "cli":
       return draft.cliSource ?? { own: true };
     case "env":
@@ -473,6 +502,10 @@ export function validateStep(step: StepId, draft: Draft): StepErrors {
         else if (!hostOf(url)) errors.base_url = `"${url}" is not an instance URL; use e.g. ${example}.`;
       }
       switch (draft.tokenMode) {
+        case "oauth":
+          if (!draft.oauthLogin && !draft.oauthStored)
+            errors.token = `Sign in with ${github ? "GitHub" : "GitLab"} first, or choose another source.`;
+          break;
         case "cli":
           if (!draft.cliSource)
             errors.token = `${cliName(draft.provider)}'s token was not found for this instance; choose another source.`;

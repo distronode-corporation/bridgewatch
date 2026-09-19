@@ -346,6 +346,7 @@ impl GitLabClient {
             url,
             path: path.to_string(),
             headers: vec![(self.header_name.to_string(), self.header_value.clone())],
+            body: None,
         };
 
         let started = std::time::Instant::now();

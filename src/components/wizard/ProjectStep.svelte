@@ -21,10 +21,25 @@
     onResolve: () => void;
     /** Search the listing again. */
     onSearch: (term: string) => void;
+    /**
+     * Signed in to GitHub through the app: its token sees only repositories
+     * where the app is installed, so say so and offer the install page.
+     */
+    appInstall?: { url: string | null; open: () => void } | null;
   }
 
-  let { draft = $bindable(), errors, listing, loading, loadError, resolving, onPick, onResolve, onSearch }: Props =
-    $props();
+  let {
+    draft = $bindable(),
+    errors,
+    listing,
+    loading,
+    loadError,
+    resolving,
+    onPick,
+    onResolve,
+    onSearch,
+    appInstall = null,
+  }: Props = $props();
 
   let search = $state("");
   const projects = $derived(listing?.mode === "projects" ? listing.projects : []);
@@ -119,6 +134,21 @@
     </div>
     <FieldMessage id="wizard-project-msg" message={errors.project} />
   </div>
+
+  {#if appInstall}
+    <!-- A GitHub App's user token reaches a repository only where the app is
+         installed, so a repository the user can open in a browser is a 404
+         here until it is. Nothing in the 404 says so; this does. -->
+    <p class="text-muted-foreground m-0 text-xs" data-slot="install-app">
+      Signed in through the bridgewatch GitHub App, which sees only repositories on accounts it is installed on. A
+      repository missing here, or not found, usually means the app is not installed on its owner yet.
+      {#if appInstall.url}
+        <Button variant="link" size="sm" class="h-auto p-0 text-xs" onclick={appInstall.open} data-action="install-app"
+          >Install the app</Button
+        >
+      {/if}
+    </p>
+  {/if}
 
   {#if draft.project}
     <p class="text-sm" data-slot="chosen-project">

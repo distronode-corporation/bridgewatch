@@ -502,6 +502,7 @@ impl GitHubClient {
                 ("Accept".to_string(), ACCEPT.to_string()),
                 ("X-GitHub-Api-Version".to_string(), API_VERSION.to_string()),
             ],
+            body: None,
         };
 
         let started = std::time::Instant::now();

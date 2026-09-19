@@ -12,6 +12,7 @@ pub mod fixture;
 pub mod github;
 pub mod gitlab;
 pub mod http;
+pub mod script;
 pub mod wire;
 
 use std::sync::Arc;
@@ -21,6 +22,7 @@ pub use fixture::FixtureTransport;
 pub use github::GitHubClient;
 pub use gitlab::{GitLabClient, ListQuery};
 pub use http::{HttpRequest, HttpResponse, RequestLog, RequestRing, ReqwestTransport, Transport};
+pub use script::ScriptTransport;
 
 use crate::config::{Account, ProjectRef, Provider};
 use crate::model::{Bridge, Job, Pipeline, Project, TokenInfo, User};
@@ -275,6 +277,38 @@ pub enum ClientError {
         /// What cannot be done, and what to write instead.
         message: String,
     },
+    /// An account that signs in (`token = { oauth = .. }`) has no usable
+    /// sign-in: never signed in, or its refresh was refused. Nothing is sent
+    /// until the user signs in again, and the message says where.
+    #[error("{}", sign_in_again_message(.account, .provider, *.never_signed_in))]
+    SignInAgain {
+        /// The `[accounts.*]` key.
+        account: String,
+        /// Which provider to sign in to.
+        provider: Provider,
+        /// True when nothing was ever stored, rather than a sign-in that ran
+        /// out.
+        never_signed_in: bool,
+    },
+}
+
+/// The sentence [`ClientError::SignInAgain`] displays: what happened and the
+/// two places to fix it. Plain words, because it is shown in the popover as it
+/// stands.
+fn sign_in_again_message(account: &str, provider: &Provider, never_signed_in: bool) -> String {
+    let name = match provider {
+        Provider::Gitlab => "GitLab",
+        Provider::Github => "GitHub",
+    };
+    let what = if never_signed_in {
+        format!("account \"{account}\" is not signed in to {name}")
+    } else {
+        format!("the {name} sign-in of account \"{account}\" has expired or was revoked")
+    };
+    format!(
+        "{what}: sign in again in Settings (Accounts, Token source), or run \
+         bridgewatch auth login --account {account}"
+    )
 }
 
 impl ClientError {
@@ -282,7 +316,9 @@ impl ClientError {
     pub fn is_fatal(&self) -> bool {
         matches!(
             self,
-            ClientError::Auth { .. } | ClientError::Unsupported { .. }
+            ClientError::Auth { .. }
+                | ClientError::Unsupported { .. }
+                | ClientError::SignInAgain { .. }
         )
     }
 

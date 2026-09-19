@@ -15,16 +15,21 @@
 
   import { Wizard } from "./components/wizard";
   import type { WizardAnswers, WizardApi } from "./components/wizard/api";
-  import { getConfigJson, inTauri, wizardApi, wizardInitial } from "./lib/ipc";
+  import { getConfigJson, inTauri, oauthApi, wizardApi, wizardInitial } from "./lib/ipc";
+  import type { OAuthApi } from "./lib/oauth";
 
   interface Props {
     /** Injected by the tests; the shell's commands otherwise. */
     api?: WizardApi;
+    /** Injected by the tests; the shell's sign-in commands otherwise (none outside Tauri). */
+    oauth?: OAuthApi;
     onfinish?: () => void;
     onskip?: () => void;
   }
 
-  let { api, onfinish, onskip }: Props = $props();
+  let { api, oauth, onfinish, onskip }: Props = $props();
+
+  const shellOAuth = $derived(oauth ?? (inTauri() ? oauthApi() : undefined));
 
   // `undefined` until the configuration has been read: the wizard seeds its
   // draft ONCE, so mounting it before the answers arrive would lose them.
@@ -47,6 +52,6 @@
 
 <main class="bg-background text-foreground h-screen overflow-y-auto p-4 text-[13px]">
   {#if initial !== undefined}
-    <Wizard api={shellApi} {initial} onFinish={() => onfinish?.()} onSkip={() => onskip?.()} />
+    <Wizard api={shellApi} oauth={shellOAuth} {initial} onFinish={() => onfinish?.()} onSkip={() => onskip?.()} />
   {/if}
 </main>

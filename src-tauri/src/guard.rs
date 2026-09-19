@@ -99,7 +99,9 @@ pub fn sensitive_changes(old: Option<&Config>, new: &Config) -> Vec<String> {
                 "the credential-store entry \"{service}\" (user \"{user}\")"
             )),
             TokenSource::Env(var) => Some(format!("the environment variable {var}")),
-            TokenSource::Command(_) | TokenSource::Own(_) => None,
+            // A sign-in is bound to its host when it is stored and is never
+            // sent anywhere else (`oauth::session`), so it exports nothing.
+            TokenSource::Command(_) | TokenSource::Own(_) | TokenSource::Oauth(_) => None,
         };
         let known_host =
             old.is_some_and(|o| o.accounts.values().any(|a| origin(&a.base_url) == now));

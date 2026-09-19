@@ -1,7 +1,8 @@
 import { flushSync, mount, unmount, type ComponentProps } from "svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { reactive } from "../../lib/__tests__/props.svelte";
+import type { OAuthApi, SignInStatus } from "../../lib/oauth";
 import type { Edit } from "../../lib/types";
 import TokenField from "./TokenField.svelte";
 
@@ -112,7 +113,7 @@ describe("TokenField, the path it writes to", () => {
 });
 
 describe("TokenField, switching variant", () => {
-  it("unsets the other three variants and never the token table itself", () => {
+  it("unsets the other variants and never the token table itself", () => {
     // ⛔ `unset accounts.x.token` followed by a set is what moved the key: a
     // table `toml_edit` has never seen is APPENDED, so `token` sank below
     // `timeout_secs` and the backoff block every time the source changed.
@@ -127,6 +128,9 @@ describe("TokenField, switching variant", () => {
         { op: "unset", path: "accounts.work.token.keyring" },
         { op: "unset", path: "accounts.work.token.command" },
         { op: "unset", path: "accounts.work.token.own" },
+        // A fifth variant since sign-in: switching away from it must remove it
+        // too, or the file names two sources and refuses to load.
+        { op: "unset", path: "accounts.work.token.oauth" },
         { op: "set", path: "accounts.work.token.env", value: { string: "T" } },
       ],
     ]);
@@ -141,6 +145,7 @@ describe("TokenField, switching variant", () => {
       "accounts.work.token.env",
       "accounts.work.token.command",
       "accounts.work.token.own",
+      "accounts.work.token.oauth",
       "accounts.work.token.keyring.service",
       "accounts.work.token.keyring.user",
     ]);
@@ -270,5 +275,165 @@ describe("TokenField, the provider's CLI preset", () => {
   it("speaks GitHub in the placeholders of a GitHub account", () => {
     renderFor("github", "https://api.github.com", { own: true });
     expect(host.querySelector<HTMLInputElement>('input[type="password"]')?.placeholder).toContain("github_pat_");
+  });
+});
+
+describe("TokenField, sign in", () => {
+  type Fake = { [K in keyof Required<OAuthApi>]: Mock };
+  function fake(available: boolean, status: SignInStatus | null = null): Fake {
+    return {
+      availability: vi.fn(async (_p: string, _b: string, clientId?: string | null) => ({
+        available: available || !!clientId,
+        builtin: available,
+        needs_client_id: false,
+        host: "github.com",
+        install_url: available ? "https://github.com/apps/bridgewatch-ci/installations/new" : null,
+      })),
+      start: vi.fn(async () => ({
+        id: "f1",
+        user_code: "WDJB-MJHT",
+        verification_uri: "https://github.com/login/device",
+        expires_in: 900,
+        host: "github.com",
+      })),
+      wait: vi.fn(async () => ({ login: "octocat", scopes: [], expires_at: null })),
+      cancel: vi.fn(async () => {}),
+      openVerification: vi.fn(async () => {}),
+      openInstall: vi.fn(async () => {}),
+      status: vi.fn(async () => status),
+      signOut: vi.fn(async () => {}),
+      copy: vi.fn(async () => true),
+      onProgress: vi.fn(async () => () => {}),
+    };
+  }
+
+  async function settle() {
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+      flushSync();
+    }
+  }
+
+  async function renderWith(oauth: Fake, value: unknown, baseUrl = "") {
+    host = document.createElement("div");
+    document.body.append(host);
+    const edits: Edit[][] = [];
+    const props = reactive({
+      account: "gh",
+      value,
+      provider: "github",
+      baseUrl,
+      oauth,
+      onedit: (e: Edit[]) => {
+        edits.push(e);
+        return Promise.resolve();
+      },
+    }) as ComponentProps<typeof TokenField>;
+    component = mount(TokenField, { target: host, props });
+    await settle();
+    return edits;
+  }
+
+  const labels = () => [...host.querySelectorAll('[role="radiogroup"] label')].map((l) => l.textContent?.trim());
+  const pick = async (kind: string) => {
+    const radio = host.querySelector<HTMLInputElement>(`input[type=radio][value="${kind}"]`)!;
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+  };
+  const press = async (selector: string) => {
+    host.querySelector<HTMLButtonElement>(selector)!.click();
+    await settle();
+  };
+
+  const SIGNED_IN: SignInStatus = {
+    login: "octocat",
+    expires_at: 1_800_000_000,
+    refresh_expires_at: null,
+    scopes: [],
+    obtained_at: 1_700_000_000,
+    can_refresh: true,
+  };
+
+  it("is not offered where it cannot work, so the four sources read as before", async () => {
+    const oauth = fake(false);
+    await renderWith(oauth, KEYRING);
+    expect(labels()).toEqual(["gh / OS keyring", "Environment variable", "Command", "bridgewatch's own entry"]);
+    // Asked about the account's real instance: the provider default when the file has no base_url.
+    expect(oauth.availability).toHaveBeenLastCalledWith("github", "https://api.github.com", null);
+  });
+
+  it("is offered first where it can, and writes oauth = true for the built-in application", async () => {
+    const edits = await renderWith(fake(true), { own: true });
+    expect(labels()[0]).toBe("Sign in with GitHub");
+    await pick("oauth");
+    await press("button.apply");
+    expect(edits).toEqual([
+      [
+        { op: "unset", path: "accounts.gh.token.keyring" },
+        { op: "unset", path: "accounts.gh.token.env" },
+        { op: "unset", path: "accounts.gh.token.command" },
+        { op: "unset", path: "accounts.gh.token.own" },
+        { op: "unset", path: "accounts.gh.token.oauth" },
+        { op: "set", path: "accounts.gh.token.oauth", value: { boolean: true } },
+      ],
+    ]);
+  });
+
+  it("writes a typed client id as oauth = { client_id }", async () => {
+    const edits = await renderWith(fake(false), { oauth: { client_id: "Iv23liOLD" } }, "https://ghe.acme.com");
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="OAuth client id"]')!;
+    expect(input.value).toBe("Iv23liOLD");
+    input.value = "Iv23liNEW";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    await press("button.apply");
+    expect(edits[0].at(-1)).toEqual({
+      op: "set",
+      path: "accounts.gh.token.oauth.client_id",
+      value: { string: "Iv23liNEW" },
+    });
+  });
+
+  it("signs in with the device flow and then shows who", async () => {
+    const oauth = fake(true);
+    await renderWith(oauth, { oauth: true });
+    expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("Not signed in");
+    oauth.status.mockResolvedValue(SIGNED_IN);
+    await press('[data-action="oauth-sign-in"]');
+    expect(oauth.start).toHaveBeenCalledWith({
+      account: "gh",
+      provider: "github",
+      base_url: "https://api.github.com",
+      client_id: null,
+    });
+    expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("@octocat");
+    expect(host.textContent).toContain("Signed in as @octocat.");
+  });
+
+  it("shows the stored sign-in, signs out, and links the app's install page", async () => {
+    const oauth = fake(true, SIGNED_IN);
+    await renderWith(oauth, { oauth: true });
+    expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("@octocat");
+    expect(host.querySelector('[data-action="oauth-sign-in"]')?.textContent?.trim()).toBe("Sign in again");
+    await press('[data-slot="install-app"] button');
+    expect(oauth.openInstall).toHaveBeenCalledWith("github", "https://api.github.com");
+    await press("button.sign-out");
+    expect(oauth.signOut).toHaveBeenCalledWith("gh");
+    expect(host.textContent).toContain("Signed out.");
+    expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("Not signed in");
+  });
+
+  it("switching away from a sign-in removes it from the file", async () => {
+    const edits = await renderWith(fake(true), { oauth: true });
+    await pick("env");
+    host.querySelector<HTMLInputElement>('input[placeholder^="BRIDGEWATCH_TOKEN"]')!.value = "GH";
+    host
+      .querySelector<HTMLInputElement>('input[placeholder^="BRIDGEWATCH_TOKEN"]')!
+      .dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    await press("button.apply");
+    expect(edits[0]).toContainEqual({ op: "unset", path: "accounts.gh.token.oauth" });
+    expect(edits[0]).toContainEqual({ op: "set", path: "accounts.gh.token.env", value: { string: "GH" } });
   });
 });

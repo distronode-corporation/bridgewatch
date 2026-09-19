@@ -1289,6 +1289,20 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
             }
             String::new()
         }
+        TokenSource::Oauth(source) => {
+            let account = crate::config::Account {
+                base_url: answers.base_url.trim().to_string(),
+                ..crate::config::Account::for_provider(answers.provider)
+            };
+            if let Err(e) = crate::oauth::client_id_for(
+                &account,
+                source,
+                &crate::oauth::BuiltinClients::shipped(),
+            ) {
+                issue(Account, "token", e.to_string());
+            }
+            source.client_id.clone().unwrap_or_default()
+        }
     };
     if let Some(prefix) = find_token_prefix_for(answers.provider, &token_text) {
         issue(
@@ -1476,6 +1490,10 @@ fn token_edits(prefix: &str, token: &TokenSource) -> Vec<Edit> {
         TokenSource::Env(v) => edits.push(set("env", s(v))),
         TokenSource::Command(argv) => edits.push(set("command", strings(argv))),
         TokenSource::Own(b) => edits.push(set("own", EditValue::Boolean(*b))),
+        TokenSource::Oauth(source) => match &source.client_id {
+            Some(id) => edits.push(set("oauth.client_id", s(id))),
+            None => edits.push(set("oauth", EditValue::Boolean(true))),
+        },
     }
     edits
 }

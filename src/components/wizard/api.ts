@@ -33,12 +33,14 @@ export interface StepIssue {
   message: string;
 }
 
-/** `TokenSource`, externally tagged. Never a token. The wizard only ever sends `{ own: true }`. */
+/** `TokenSource`, externally tagged. Never a token. */
 export type TokenSource =
   | { keyring: { service: string; user: string } }
   | { env: string }
   | { command: string[] }
-  | { own: boolean };
+  | { own: boolean }
+  /** Sign in: `true` for the built-in application, or a client id of the user's own. */
+  | { oauth: true | { client_id: string } };
 
 /** `ProjectRef`, untagged: a numeric id or a `group/project` (GitHub: `owner/repo`) path. */
 export type ProjectRef = number | string;
@@ -210,6 +212,8 @@ export interface Connection {
   secret?: string;
   /** The id of a `ConfirmRequest` the user accepted (running a command source). */
   confirm?: string;
+  /** The account name a sign-in is stored under, for `{ oauth: .. }`. */
+  account?: string;
 }
 
 /**
@@ -262,7 +266,10 @@ export interface WizardApi {
    * Write it. `secret` is the pasted token for `{ own: true }`; `confirm` the
    * id of a ConfirmRequest the user accepted. May answer with `confirm` set.
    */
-  save(answers: WizardAnswers, options: { secret?: string; confirm?: string }): Promise<WizardSaveResult>;
+  save(
+    answers: WizardAnswers,
+    options: { secret?: string; confirm?: string; oauthAccount?: string },
+  ): Promise<WizardSaveResult>;
   /** "I'll edit config.toml": leave the wizard, writing nothing. */
   skip(): Promise<void>;
 }

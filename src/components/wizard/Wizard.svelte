@@ -12,6 +12,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Stepper } from "$lib/components/ui/stepper/index.js";
   import type { DiagnosticView } from "../../lib/types";
+  import type { OAuthApi, OAuthAvailability, SignedIn } from "../../lib/oauth";
   import AccountStep from "./AccountStep.svelte";
   import ProjectStep from "./ProjectStep.svelte";
   import WatchStep from "./WatchStep.svelte";
@@ -65,9 +66,11 @@
     onFinish?: (result: { path?: string }) => void;
     /** Called after `api.skip()` resolved: nothing was written. */
     onSkip?: () => void;
+    /** Sign-in commands. Absent: "Sign in with ..." is not offered. */
+    oauth?: OAuthApi;
   }
 
-  let { api, initial = null, onFinish, onSkip }: Props = $props();
+  let { api, initial = null, onFinish, onSkip, oauth }: Props = $props();
 
   // The draft is seeded once; later changes to `initial` do not reset a form in progress.
   const seed = (): Draft => (initial ? draftFromAnswers(initial) : emptyDraft());
@@ -86,6 +89,7 @@
       baseUrlOf(draft),
       tokenSourceOf(draft),
       draft.tokenMode === "paste" ? draft.secret : null,
+      draft.tokenMode === "oauth" ? [draft.oauthLogin, draft.oauthAccount] : null,
     ]),
   );
 
@@ -97,8 +101,39 @@
         ? { provider: "github", base_url: baseUrlOf(draft), token: tokenSourceOf(draft) }
         : { base_url: baseUrlOf(draft), token: tokenSourceOf(draft) };
     if (draft.tokenMode === "paste" && draft.secret.trim()) conn.secret = draft.secret.trim();
+    // The sign-in is found by the account name it was stored under.
+    if (draft.tokenMode === "oauth") conn.account = (draft.oauthAccount ?? draft.account).trim();
     if (confirm) conn.confirm = confirm;
     return conn;
+  }
+
+  // --- step 1: sign in with GitHub / GitLab ---------------------------------
+  let availability = $state<OAuthAvailability | null>(null);
+  let availabilitySeq = 0;
+  /** The instance the sign-in on this page was made against. */
+  let signedInBase: string | null = null;
+
+  async function refreshAvailability() {
+    if (!oauth) return;
+    const seq = ++availabilitySeq;
+    const provider = draft.provider;
+    try {
+      const answer = await oauth.availability(provider, baseUrlOf(draft), draft.oauthClientId.trim() || null);
+      if (seq !== availabilitySeq) return;
+      availability = answer;
+      // Recommended means chosen, on a fresh start where nothing else has been.
+      if (answer.builtin && freshStart && draft.tokenMode === "paste" && !draft.secret) draft.tokenMode = "oauth";
+    } catch {
+      if (seq === availabilitySeq) availability = null;
+    }
+  }
+
+  function signedIn(signed: SignedIn) {
+    draft.oauthLogin = signed.login ?? "(unknown)";
+    draft.oauthAccount = draft.account.trim();
+    draft.oauthStored = false;
+    signedInBase = baseUrlOf(draft);
+    delete errors.token;
   }
 
   // --- confirmation dialog -------------------------------------------------
@@ -182,7 +217,13 @@
 
   function instanceChanged() {
     if (!draft.accountEdited) draft.account = suggestAccountName(baseUrlOf(draft), draft.provider);
+    // A sign-in belongs to the instance it was made on.
+    if (signedInBase !== null && signedInBase !== baseUrlOf(draft)) {
+      draft.oauthLogin = null;
+      signedInBase = null;
+    }
     void detect();
+    void refreshAvailability();
   }
 
   function providerChanged(provider: Provider) {
@@ -196,11 +237,15 @@
     suggestions = null;
     suggestionsKey = null;
     delete errors.project;
+    signedInBase = null;
+    availability = null;
     void detect();
+    void refreshAvailability();
   }
 
   onMount(() => {
     void detect();
+    void refreshAvailability();
   });
 
   let identity = $state<Identity | null>(null);
@@ -368,6 +413,8 @@
         return `The token is read from $${draft.envVar.trim()} when bridgewatch starts.`;
       case "command":
         return `The token is read by running: ${formatCommand(parseCommand(draft.commandText))}`;
+      case "oauth":
+        return `The sign-in is kept in the system keychain for "${draft.account.trim()}" and renews itself; this file only says to sign in.`;
       default:
         return null;
     }
@@ -381,12 +428,18 @@
     saving = true;
     const answers = answersOf(draft);
     const secret = draft.tokenMode === "paste" && draft.secret.trim() ? draft.secret.trim() : undefined;
+    // Only a sign-in made under another name is reported, so every other save
+    // carries exactly the options it always did.
+    const moved =
+      draft.tokenMode === "oauth" && draft.oauthAccount && draft.oauthAccount !== answers.account
+        ? { oauthAccount: draft.oauthAccount }
+        : {};
     try {
-      let result = await api.save(answers, { secret });
+      let result = await api.save(answers, { secret, ...moved });
       if (result.confirm) {
         const command = draft.tokenMode === "command" ? parseCommand(draft.commandText) : null;
         if (!(await askConfirm("Save with these changes?", result.confirm.changes, command, "Save"))) return;
-        result = await api.save(answers, { secret, confirm: result.confirm.id });
+        result = await api.save(answers, { secret, confirm: result.confirm.id, ...moved });
       }
       if (result.issues && result.issues.length > 0) return void jumpToIssues(result.issues);
       if (result.ok && !result.confirm) {
@@ -525,6 +578,10 @@
           onTest={() => void testConnection()}
           onInstanceChange={instanceChanged}
           onProviderChange={providerChanged}
+          {oauth}
+          {availability}
+          onSignedIn={signedIn}
+          onClientIdChange={() => void refreshAvailability()}
         />
       {:else if step.id === "project"}
         <ProjectStep
@@ -537,6 +594,9 @@
           onPick={pick}
           onResolve={() => void resolve()}
           onSearch={(term) => void loadListing(term)}
+          appInstall={oauth && draft.provider === "github" && draft.tokenMode === "oauth"
+            ? { url: availability?.install_url ?? null, open: () => void oauth.openInstall(draft.provider, baseUrlOf(draft)) }
+            : null}
         />
       {:else if step.id === "watch"}
         <WatchStep bind:draft {errors} />

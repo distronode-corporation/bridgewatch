@@ -43,6 +43,10 @@ struct WatchState {
     /// account reads as GitLab, the default; that watch shows an error anyway.
     provider: Provider,
     last_bridges: HashMap<u64, Vec<Bridge>>,
+    /// What to add to a "not found" on this watch's list request, when its
+    /// account signs in through a GitHub App (see `oauth::not_found_hint`).
+    /// `None` for every other account, whose errors read as they always have.
+    not_found_hint: Option<String>,
     /// The last view this watch produced.
     ///
     /// ⛔ It is what a failed list request falls back to. Returning no rows
@@ -97,6 +101,9 @@ impl Poller {
                     .get(&watch.account)
                     .map(|a| a.provider)
                     .unwrap_or_default(),
+                not_found_hint: config.accounts.get(&watch.account).and_then(|a| {
+                    crate::oauth::not_found_hint(a, &crate::oauth::BuiltinClients::shipped())
+                }),
                 watch: watch.clone(),
                 cache: PipelineCache::new(),
                 last_bridges: HashMap::new(),
@@ -132,25 +139,56 @@ impl Poller {
 
     /// Build a poller from a configuration, resolving each account's token and
     /// creating a real HTTP transport for it.
-    pub fn from_config(
-        config: &Config,
-        provider: &dyn crate::token::TokenProvider,
-    ) -> Result<Self, PollerError> {
+    ///
+    /// ⚠️ An account that signs in (`token = { oauth = .. }`) resolves nothing
+    /// here: its client is built on an [`crate::oauth::OAuthTransport`], which
+    /// reads the stored sign-in on the first request and keeps it fresh. So an
+    /// account that is not signed in yet is an error on ITS watches ("sign in
+    /// again") and does not stop the other accounts polling. The credential
+    /// store is kept for the life of the poller, for the refreshes, which is
+    /// why `provider` is taken by a clonable value.
+    pub fn from_config<P>(config: &Config, provider: &P) -> Result<Self, PollerError>
+    where
+        P: crate::token::TokenProvider + Clone + 'static,
+    {
         let ring = RequestRing::new(config.log.keep_requests);
         let mut clients = BTreeMap::new();
+        let store: Arc<dyn crate::token::TokenProvider> = Arc::new(provider.clone());
         for (name, account) in &config.accounts {
-            let token = crate::token::resolve(&account.token, name, provider)
-                .map_err(|e| PollerError::Token(name.clone(), e))?;
-            let transport = crate::client::ReqwestTransport::new(std::time::Duration::from_secs(
-                account.timeout_secs,
-            ))
-            .map_err(PollerError::Client)?;
+            let transport: Arc<dyn crate::client::Transport> = Arc::new(
+                crate::client::ReqwestTransport::new(std::time::Duration::from_secs(
+                    account.timeout_secs,
+                ))
+                .map_err(PollerError::Client)?,
+            );
             // ⛔ Through the factory, never by naming a client type: an account
             // whose provider has no client yet fails HERE, loudly, rather than
             // being handed a GitLab client pointed at somebody else's API.
-            let client =
-                crate::client::client_for(account, &token, Arc::new(transport), ring.clone())
-                    .map_err(PollerError::Client)?;
+            let client = match &account.token {
+                crate::config::TokenSource::Oauth(source) => {
+                    let transport = crate::oauth::transport_for(
+                        name,
+                        account,
+                        source,
+                        &crate::oauth::BuiltinClients::shipped(),
+                        transport,
+                        store.clone(),
+                    )
+                    .map_err(|e| PollerError::SignIn(name.clone(), e))?;
+                    crate::client::client_for(
+                        &crate::oauth::bearer_account(account),
+                        &crate::token::Secret::new(""),
+                        transport,
+                        ring.clone(),
+                    )
+                }
+                source => {
+                    let token = crate::token::resolve(source, name, provider)
+                        .map_err(|e| PollerError::Token(name.clone(), e))?;
+                    crate::client::client_for(account, &token, transport, ring.clone())
+                }
+            }
+            .map_err(PollerError::Client)?;
             clients.insert(name.clone(), client);
         }
         Self::with_clients(config, clients, ring).map_err(PollerError::Config)
@@ -326,6 +364,9 @@ pub enum PollerError {
     /// An account's token could not be resolved.
     #[error("account {0}: {1}")]
     Token(String, #[source] crate::token::TokenError),
+    /// An account that signs in names no application to sign in through.
+    #[error("account {0}: {1}")]
+    SignIn(String, #[source] crate::oauth::OAuthError),
     /// A transport could not be created.
     #[error(transparent)]
     Client(#[from] ClientError),
@@ -347,13 +388,17 @@ async fn poll_watch(
         Ok(rows) => rows,
         Err(e) => {
             state.policy.on_error(&e);
+            let message = match (&e, &state.not_found_hint) {
+                (ClientError::NotFound { .. }, Some(hint)) => format!("{e}. {hint}"),
+                _ => e.to_string(),
+            };
             // Keep the last frame rather than blanking the watch. The cache is
             // intact, so the only thing this tick learned is that one request
             // did not arrive, and the honest way to say that is an error
             // alongside the rows — not `unknown` where a verdict already exists.
             return match &state.last_view {
                 Some(previous) => WatchView {
-                    error: Some(e.to_string()),
+                    error: Some(message),
                     ..previous.clone()
                 },
                 None => WatchView {
@@ -361,7 +406,7 @@ async fn poll_watch(
                     role: state.watch.role,
                     icon_state: None,
                     rows: Vec::new(),
-                    error: Some(e.to_string()),
+                    error: Some(message),
                     jobs: state.jobs_mode,
                     provider: state.provider,
                 },

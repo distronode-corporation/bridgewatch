@@ -145,6 +145,12 @@ pub enum TokenError {
     /// The configuration selected no source at all.
     #[error("no token source configured for account {0:?}")]
     NotConfigured(String),
+    /// The account signs in, and nothing is stored for it.
+    #[error(
+        "account {0:?} is not signed in: sign in from Settings, or run \
+         bridgewatch auth login --account {0}"
+    )]
+    NotSignedIn(String),
     /// The credential carries a `go-keyring-*` envelope that would not decode.
     #[error(
         "the credential is wrapped in a {envelope:?} envelope that will not decode: {message}. \
@@ -605,6 +611,20 @@ pub fn resolve(
             SystemTokenProvider::OWN_USER,
         )?,
         TokenSource::Own(false) => return Err(TokenError::NotConfigured(account.to_string())),
+        // The access token as it was last stored, possibly expired. What
+        // POLLS goes through `oauth::OAuthTransport`, which refreshes it; this
+        // path serves a caller that wants one value now and can say "sign in
+        // again" when it is refused.
+        TokenSource::Oauth(_) => match crate::oauth::store::load(account, provider) {
+            Ok(Some(set)) => set.access_token.expose().to_string(),
+            Ok(None) => return Err(TokenError::NotSignedIn(account.to_string())),
+            Err(e) => {
+                return Err(TokenError::Store {
+                    service: crate::oauth::store::service(account),
+                    message: e.to_string(),
+                });
+            }
+        },
     };
     // Also unwrap here, not only in the provider. The envelope is a property of
     // whatever WROTE the credential, and the obvious way to reuse glab's token

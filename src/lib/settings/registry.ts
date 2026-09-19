@@ -28,7 +28,7 @@ export type Tab = "accounts" | "watches" | "icon" | "verdict" | "ui" | "log";
  * How a key is edited.
  *
  * `token` and `project` are composites rather than a plain field because the
- * underlying schema node is a union: `accounts.*.token` is one of four table
+ * underlying schema node is a union: `accounts.*.token` is one of five table
  * shapes, and `watches.*.project` is a number or a path.
  */
 export type Control =

@@ -108,6 +108,16 @@ describe("wizardApi", () => {
     expect(result.path).toBe("/tmp/c.toml");
   });
 
+  it("reports the account a sign-in was made under only when the wizard says so", async () => {
+    answers.set("wizard_save", { ok: true, diagnostics: [] });
+    const { wizardApi } = await import("./ipc");
+    const signing = { ...ANSWERS, token: { oauth: true } as const };
+    await wizardApi().save(signing, { oauthAccount: "github" });
+    await wizardApi().save(signing, {});
+    expect(invoked[0].args).toEqual({ answers: signing, secret: null, confirm: null, oauthAccount: "github" });
+    expect(invoked[1].args).toEqual({ answers: signing, secret: null, confirm: null });
+  });
+
   it("passes a confirmation id back on save", async () => {
     answers.set("wizard_save", { ok: true, diagnostics: [] });
     const { wizardApi } = await import("./ipc");
@@ -242,5 +252,40 @@ describe("WizardApp", () => {
     expect(invoked.map((i) => i.cmd)).toContain("wizard_skip");
     expect(invoked.map((i) => i.cmd)).not.toContain("wizard_save");
     expect(skipped).toBe(1);
+  });
+});
+
+describe("oauthApi", () => {
+  it("maps every method onto one oauth command, and no token goes either way", async () => {
+    answers.set("oauth_start", {
+      id: "f1",
+      user_code: "WDJB-MJHT",
+      verification_uri: "https://github.com/login/device",
+      expires_in: 900,
+      host: "github.com",
+    });
+    const { oauthApi } = await import("./ipc");
+    const api = oauthApi();
+    await api.availability("github", "https://api.github.com");
+    await api.availability("gitlab", "https://gitlab.example.com", "gl-app");
+    const request = { account: "gh", provider: "github" as const, base_url: "https://api.github.com", client_id: null };
+    const started = await api.start(request);
+    await api.wait(started.id);
+    await api.cancel(started.id);
+    await api.openVerification(started.id);
+    await api.openInstall("github", "https://api.github.com");
+    await api.status("gh");
+    await api.signOut("gh");
+    expect(invoked).toEqual([
+      { cmd: "oauth_availability", args: { provider: "github", baseUrl: "https://api.github.com", clientId: null } },
+      { cmd: "oauth_availability", args: { provider: "gitlab", baseUrl: "https://gitlab.example.com", clientId: "gl-app" } },
+      { cmd: "oauth_start", args: { request } },
+      { cmd: "oauth_wait", args: { id: "f1" } },
+      { cmd: "oauth_cancel", args: { id: "f1" } },
+      { cmd: "oauth_open_verification", args: { id: "f1" } },
+      { cmd: "oauth_open_install", args: { provider: "github", baseUrl: "https://api.github.com" } },
+      { cmd: "oauth_status", args: { account: "gh" } },
+      { cmd: "oauth_sign_out", args: { account: "gh" } },
+    ]);
   });
 });

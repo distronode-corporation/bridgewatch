@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod auth;
 mod render;
 
 use std::io::IsTerminal;
@@ -146,6 +147,12 @@ enum Command {
     },
     /// Poll continuously, printing one line per change.
     Watch(WatchArgs),
+    /// Sign in with GitHub or GitLab, sign out, or show who is signed in, for
+    /// an account whose token source is token = { oauth = .. }.
+    Auth {
+        #[command(subcommand)]
+        action: auth::AuthAction,
+    },
     /// Print the config.toml the setup wizard would write, from flags.
     ///
     /// Non-interactive and offline: nothing is fetched, no token is read, and
@@ -357,6 +364,7 @@ async fn run(cli: Cli) -> Outcome {
         Command::Watch(args) => watch(&config, args).await,
         Command::Fixture { action } => fixture(&config, action).await,
         Command::Init(args) => init(&config, *args),
+        Command::Auth { action } => auth_command(&config, action).await,
     }
 }
 
@@ -597,6 +605,52 @@ fn load(args: &ConfigArgs) -> std::result::Result<config::Loaded, Failure> {
             exit::CONFIG,
             anyhow::Error::new(e).context("cannot load configuration"),
         )),
+    }
+}
+
+/// `bridgewatch auth`, against the network and the OS credential store.
+async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
+    let loaded = load(args)?;
+    start_logging(&loaded);
+    let config = loaded.config;
+    let store = SystemTokenProvider;
+    let now = bridgewatch_core::oauth::now();
+    match action {
+        auth::AuthAction::Login { account } => {
+            let timeout = config
+                .accounts
+                .get(&account)
+                .map(|a| a.timeout_secs)
+                .unwrap_or(15);
+            let transport = Arc::new(ReqwestTransport::new(std::time::Duration::from_secs(
+                timeout,
+            ))?);
+            let cancel = async {
+                let _ = tokio::signal::ctrl_c().await;
+            };
+            auth::login(
+                &config,
+                &account,
+                transport,
+                &store,
+                &bridgewatch_core::oauth::BuiltinClients::shipped(),
+                tokio::time::sleep,
+                cancel,
+                now,
+                &mut std::io::stdout(),
+            )
+            .await
+        }
+        auth::AuthAction::Logout { account } => {
+            auth::logout(&config, &account, &store, &mut std::io::stdout())
+        }
+        auth::AuthAction::Status { account } => auth::status(
+            &config,
+            account.as_deref(),
+            &store,
+            now,
+            &mut std::io::stdout(),
+        ),
     }
 }
 

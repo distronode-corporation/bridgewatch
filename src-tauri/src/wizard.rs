@@ -255,6 +255,34 @@ async fn connect(
     if let Err(request) = app.state::<WizardSession>().gate(conn, running.as_ref()) {
         return Ok(Err(request));
     }
+    let account = account_for(conn);
+    // An account that signs in is not resolved to one token: its client is
+    // built on the sign-in itself, which refreshes as it goes, exactly as the
+    // poller's is. The sign-in was stored under `conn.account` by `oauth_start`.
+    if let TokenSource::Oauth(source) = &conn.token {
+        let name = conn.account.as_deref().unwrap_or(UNNAMED);
+        let inner: Arc<dyn bridgewatch_core::client::Transport> = Arc::new(
+            ReqwestTransport::new(Duration::from_secs(account.timeout_secs))
+                .map_err(|e| failure(FailureKind::Network, e.to_string()))?,
+        );
+        let transport = bridgewatch_core::oauth::transport_for(
+            name,
+            &account,
+            source,
+            &bridgewatch_core::oauth::BuiltinClients::shipped(),
+            inner,
+            Arc::new(SystemTokenProvider),
+        )
+        .map_err(|e| account_issue("token", e.to_string()))?;
+        return client_for(
+            &bridgewatch_core::oauth::bearer_account(&account),
+            &Secret::new(""),
+            transport,
+            RequestRing::new(16),
+        )
+        .map(Ok)
+        .map_err(|e| failure(FailureKind::Network, e.to_string()));
+    }
     // Off the async threads: a keyring read can raise a Keychain prompt, and
     // a command source runs a program.
     let resolving = conn.clone();
@@ -262,7 +290,6 @@ async fn connect(
         tauri::async_runtime::spawn_blocking(move || secret_for(&resolving, &SystemTokenProvider))
             .await
             .map_err(|e| failure(FailureKind::Network, e.to_string()))??;
-    let account = account_for(conn);
     let transport = ReqwestTransport::new(Duration::from_secs(account.timeout_secs))
         .map_err(|e| failure(FailureKind::Network, e.to_string()))?;
     client_for(&account, &secret, Arc::new(transport), RequestRing::new(16))
@@ -418,6 +445,7 @@ pub async fn wizard_save(
     answers: WizardAnswers,
     secret: Option<String>,
     confirm: Option<String>,
+    oauth_account: Option<String>,
     app: AppHandle,
 ) -> Result<WizardSaveResult, WizardFailure> {
     let state = app.state::<Arc<AppState>>().inner().clone();
@@ -457,6 +485,24 @@ pub async fn wizard_save(
             });
         }
     };
+
+    // A sign-in made on the account step under an earlier name (the wizard
+    // reports which as `oauth_account`) is moved to the name being saved,
+    // before the write, for the same reason as a pasted token: the reload the
+    // write triggers has to find it. Never guessed: without the wizard's word
+    // nothing is moved, because the entry could be another account's.
+    if let TokenSource::Oauth(_) = &answers.token
+        && let Some(signed_in_as) =
+            oauth_account.filter(|a| !a.trim().is_empty() && *a != answers.account)
+    {
+        let to = answers.account.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            bridgewatch_core::oauth::store::rename(&signed_in_as, &to, &SystemTokenProvider)
+        })
+        .await
+        .map_err(|e| failure(FailureKind::Network, e.to_string()))?
+        .map_err(|e| account_issue("token", format!("could not move the sign-in: {e}")))?;
+    }
 
     // Stored BEFORE the write, so the reload the write triggers finds it.
     if let (TokenSource::Own(true), Some(pasted)) = (&answers.token, secret.as_deref()) {

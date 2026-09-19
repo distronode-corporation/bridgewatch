@@ -535,6 +535,20 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
                     "token = { own = false } selects no source; use own = true or another form",
                 ));
             }
+            // ⛔ An ERROR, not a warning, when there is no client id: signing
+            // in is the only thing this source does, and without an
+            // application to sign in through it can never produce a token. A
+            // self-managed server never borrows the built-in id (see
+            // `oauth::client_id_for`).
+            TokenSource::Oauth(source) => {
+                if let Err(e) = crate::oauth::client_id_for(
+                    account,
+                    source,
+                    &crate::oauth::BuiltinClients::shipped(),
+                ) {
+                    out.push(Diagnostic::error(format!("{base}.token"), e.to_string()));
+                }
+            }
             _ => {}
         }
     }

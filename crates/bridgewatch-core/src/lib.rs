@@ -15,13 +15,14 @@
 //!
 //! # Shape
 //!
-//! - [`config`] — the TOML file, its JSON Schema, and format-preserving edits.
-//! - [`token`] — resolving a credential without ever storing or logging one.
-//! - [`client`] — the five GitLab endpoints, behind a transport seam.
-//! - [`verdict`] — pure functions from responses to the view model.
-//! - [`poll`] — what to fetch, how often, and what to keep.
-//! - [`notify`] — what is worth interrupting somebody over.
-//! - [`wizard`] — the first-run setup wizard's steps, with no UI in them.
+//! - [`config`]: the TOML file, its JSON Schema, and format-preserving edits.
+//! - [`token`]: resolving a credential without ever storing or logging one.
+//! - [`client`]: the GitLab and GitHub clients, behind one trait and a transport seam.
+//! - [`oauth`]: signing in with GitHub or GitLab, and keeping the sign-in fresh.
+//! - [`verdict`]: pure functions from responses to the view model.
+//! - [`poll`]: what to fetch, how often, and what to keep.
+//! - [`notify`]: what is worth interrupting somebody over.
+//! - [`wizard`]: the first-run setup wizard's steps, with no UI in them.
 //!
 //! # Getting a snapshot
 //!
@@ -46,6 +47,7 @@ pub mod client;
 pub mod config;
 pub mod model;
 pub mod notify;
+pub mod oauth;
 pub mod poll;
 pub mod status;
 pub mod token;

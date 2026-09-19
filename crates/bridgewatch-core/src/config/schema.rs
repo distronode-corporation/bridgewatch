@@ -343,6 +343,112 @@ pub enum TokenSource {
     /// bridgewatch's own credential-store entry, `bridgewatch:<account>`,
     /// written by the GUI or by `set_own_token`.
     Own(bool),
+    /// Sign in with GitHub or GitLab (the OAuth device flow). `oauth = true`
+    /// uses bridgewatch's own application on github.com or gitlab.com;
+    /// `oauth = { client_id = "..." }` names your own, which GitHub Enterprise
+    /// Server and self-managed GitLab need. The tokens are kept in the OS
+    /// credential store, never in this file.
+    Oauth(OAuthSource),
+}
+
+/// Which OAuth application an `oauth` token source signs in through.
+///
+/// Written `oauth = true` for the built-in application of github.com or
+/// gitlab.com, and `oauth = { client_id = "..." }` for any other.
+//
+// ⚠️ Serialize, Deserialize and JsonSchema are hand-written because the two
+// spellings are one value: `true` is "no client id of my own". A plain derive
+// would make the file say `oauth = {}`, which the settings editor cannot write
+// (an edit sets a leaf, and an empty table has none).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OAuthSource {
+    /// The OAuth application's client id. `None` is the provider's built-in one.
+    pub client_id: Option<String>,
+}
+
+impl Serialize for OAuthSource {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        match &self.client_id {
+            None => s.serialize_bool(true),
+            Some(id) => {
+                let mut map = s.serialize_map(Some(1))?;
+                map.serialize_entry("client_id", id)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OAuthSource {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{Error as _, Visitor};
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Repr {
+            #[serde(default)]
+            client_id: Option<String>,
+        }
+
+        struct V;
+
+        impl<'de> Visitor<'de> for V {
+            type Value = OAuthSource;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("oauth = true, or oauth = { client_id = \"...\" }")
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Self::Value, E> {
+                if v {
+                    Ok(OAuthSource::default())
+                } else {
+                    Err(E::custom(
+                        "oauth = false selects no source; use oauth = true or another form",
+                    ))
+                }
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let repr = Repr::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map_err(A::Error::custom)?;
+                Ok(OAuthSource {
+                    client_id: repr.client_id,
+                })
+            }
+        }
+
+        d.deserialize_any(V)
+    }
+}
+
+impl JsonSchema for OAuthSource {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "OAuthSource".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Which OAuth application to sign in through: true for bridgewatch's own on github.com or gitlab.com, or { client_id = \"...\" } for your own (required for GitHub Enterprise Server and self-managed GitLab).",
+            "anyOf": [
+                { "type": "boolean", "const": true },
+                {
+                    "type": "object",
+                    "properties": {
+                        "client_id": {
+                            "description": "The OAuth application's client id. Not a secret.",
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            ]
+        })
+    }
 }
 
 impl Default for TokenSource {
@@ -376,7 +482,8 @@ impl<'de> Deserialize<'de> for TokenSource {
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str(
                     "a token source table: { keyring = { service = \"..\", user = \"\" } }, \
-                     { env = \"VAR\" }, { command = [\"prog\", \"arg\"] } or { own = true }",
+                     { env = \"VAR\" }, { command = [\"prog\", \"arg\"] }, { own = true } or \
+                     { oauth = true }",
                 )
             }
 
@@ -403,7 +510,7 @@ impl<'de> Deserialize<'de> for TokenSource {
             {
                 let Some(key) = map.next_key::<String>()? else {
                     return Err(A::Error::custom(
-                        "token = { } names no source; use keyring, env, command or own",
+                        "token = { } names no source; use keyring, env, command, own or oauth",
                     ));
                 };
                 let source = match key.as_str() {
@@ -417,15 +524,16 @@ impl<'de> Deserialize<'de> for TokenSource {
                     "env" => TokenSource::Env(map.next_value()?),
                     "command" => TokenSource::Command(map.next_value()?),
                     "own" => TokenSource::Own(map.next_value()?),
+                    "oauth" => TokenSource::Oauth(map.next_value()?),
                     other => {
                         return Err(A::Error::custom(format!(
-                            "unknown token source {other:?}; use keyring, env, command or own"
+                            "unknown token source {other:?}; use keyring, env, command, own or oauth"
                         )));
                     }
                 };
                 if let Some(extra) = map.next_key::<String>()? {
                     return Err(A::Error::custom(format!(
-                        "a token source names exactly one of keyring, env, command or own; \
+                        "a token source names exactly one of keyring, env, command, own or oauth; \
                          this one names both {key:?} and {extra:?}, and bridgewatch will not \
                          guess which credential you meant"
                     )));

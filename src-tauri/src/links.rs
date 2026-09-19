@@ -36,15 +36,36 @@ use url::Url;
 
 /// Check `candidate` against the configured accounts. Returns the parsed URL
 /// on success and a sentence for the log on refusal.
+///
+/// The shell itself opens through [`open_trusting`]; this, the same check
+/// with nothing extra trusted, is what the tests hold to the rules above.
+#[cfg(test)]
 pub fn check(candidate: &str, config: Option<&Config>) -> Result<Url, String> {
+    check_with(candidate, config, &[])
+}
+
+/// [`check`], also trusting the hosts of `extra`, for ONE call.
+///
+/// A sign-in opens its verification page before the account it signs in for
+/// is in the file (the wizard signs in first and writes the file last), so the
+/// account being signed in is trusted for that one open, by exactly the same
+/// origin rule, and nowhere else. The page's URL has already been held to that
+/// host by the core (`oauth::device::start`), so this is the second check and
+/// not the only one.
+pub fn check_with(
+    candidate: &str,
+    config: Option<&Config>,
+    extra: &[Account],
+) -> Result<Url, String> {
     let url = Url::parse(candidate.trim()).map_err(|e| format!("not a URL ({e})"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!("the {:?} scheme is never opened", url.scheme()));
     }
-    let Some(config) = config else {
+    if config.is_none() && extra.is_empty() {
         return Err("no configuration is loaded, so no host is trusted".into());
-    };
-    let allowed = config.accounts.values().any(|account| {
+    }
+    let configured = config.into_iter().flat_map(|c| c.accounts.values());
+    let allowed = configured.chain(extra.iter()).any(|account| {
         trusted_origins(account)
             .iter()
             .any(|origin| Url::parse(origin).is_ok_and(|base| same_origin(&base, &url)))
@@ -85,7 +106,18 @@ fn same_origin(base: &Url, url: &Url) -> bool {
 
 /// Open `candidate` in the default browser if [`check`] allows it.
 pub fn open(app: &AppHandle, candidate: &str, config: Option<&Config>) -> Result<(), String> {
-    let url = match check(candidate, config) {
+    open_trusting(app, candidate, config, &[])
+}
+
+/// [`open`], also trusting the hosts of `extra` for this call only. See
+/// [`check_with`].
+pub fn open_trusting(
+    app: &AppHandle,
+    candidate: &str,
+    config: Option<&Config>,
+    extra: &[Account],
+) -> Result<(), String> {
+    let url = match check_with(candidate, config, extra) {
         Ok(url) => url,
         Err(why) => {
             tracing::warn!(reason = %why, "refused to open a link");
@@ -227,5 +259,47 @@ mod tests {
     #[test]
     fn nothing_is_opened_without_a_configuration() {
         assert!(check("https://gitlab.com/", None).is_err());
+    }
+
+    /// The wizard signs in before any account is written, so the account
+    /// being signed in is trusted for the one open, by the same origin rule:
+    /// github.com's device page, and not a look-alike or another host.
+    #[test]
+    fn a_sign_in_trusts_its_own_account_for_one_call() {
+        let github = Account::for_provider(Provider::Github);
+        assert!(
+            check_with(
+                "https://github.com/login/device",
+                None,
+                std::slice::from_ref(&github)
+            )
+            .is_ok()
+        );
+        for bad in [
+            "https://github.com.evil.example/login/device",
+            "https://evil.example/login/device",
+            "http://github.com/login/device",
+        ] {
+            assert!(
+                check_with(bad, None, std::slice::from_ref(&github)).is_err(),
+                "{bad:?} was allowed"
+            );
+        }
+        // And only for that call: the plain check still trusts nothing.
+        assert!(check("https://github.com/login/device", None).is_err());
+
+        let gitlab = Account {
+            base_url: "https://gitlab.example.com".into(),
+            ..Account::for_provider(Provider::Gitlab)
+        };
+        assert!(
+            check_with(
+                "https://gitlab.example.com/oauth/device",
+                None,
+                std::slice::from_ref(&gitlab)
+            )
+            .is_ok()
+        );
+        assert!(check_with("https://gitlab.com/oauth/device", None, &[gitlab]).is_err());
     }
 }

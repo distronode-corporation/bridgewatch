@@ -27,6 +27,14 @@ import type {
   WizardPreview,
   WizardSaveResult,
 } from "../components/wizard/api";
+import type {
+  OAuthApi,
+  OAuthAvailability,
+  SignInProgress,
+  SignInStatus,
+  SignedIn,
+  StartedSignIn,
+} from "./oauth";
 import type { DiagnosticView, Edit, Snapshot, Status, Validation } from "./types";
 
 /** True inside the Tauri webview, false under vitest and `vite dev` in a browser. */
@@ -216,6 +224,9 @@ export function wizardApi(fallbackAccount?: string): WizardApi {
         answers,
         secret: options.secret ?? null,
         confirm: options.confirm ?? null,
+        // Only when the account step signed in: the shell moves that sign-in
+        // to the saved account name. Absent, every other save is unchanged.
+        ...(options.oauthAccount ? { oauthAccount: options.oauthAccount } : {}),
       });
       return { ...result, diagnostics: diagnosticsIn(result.diagnostics) };
     },
@@ -261,4 +272,31 @@ export function wizardInitial(config: unknown): Partial<WizardAnswers> | undefin
   const ui = (c.ui ?? {}) as Record<string, unknown>;
   if (typeof ui.launch_at_login === "boolean") initial.launch_at_login = ui.launch_at_login;
   return initial;
+}
+
+// ---------------------------------------------------------------------------
+// Sign in with GitHub / GitLab
+// ---------------------------------------------------------------------------
+
+/**
+ * The sign-in commands, as the wizard and Settings use them.
+ *
+ * ⛔ No token crosses here in either direction. The verification page is
+ * opened by the SHELL (`oauth_open_verification`), which trusts the host of
+ * the account being signed in for that one open, never by the webview.
+ */
+export function oauthApi(): OAuthApi {
+  return {
+    availability: (provider, baseUrl, clientId) =>
+      invoke<OAuthAvailability>("oauth_availability", { provider, baseUrl, clientId: clientId ?? null }),
+    start: (request) => invoke<StartedSignIn>("oauth_start", { request }),
+    wait: (id) => invoke<SignedIn>("oauth_wait", { id }),
+    cancel: (id) => invoke<void>("oauth_cancel", { id }),
+    openVerification: (id) => invoke<void>("oauth_open_verification", { id }),
+    openInstall: (provider, baseUrl) => invoke<void>("oauth_open_install", { provider, baseUrl }),
+    status: (account) => invoke<SignInStatus | null>("oauth_status", { account }),
+    signOut: (account) => invoke<void>("oauth_sign_out", { account }),
+    copy: copyText,
+    onProgress: (handler) => listen<SignInProgress>("oauth-progress", (event) => handler(event.payload)),
+  };
 }

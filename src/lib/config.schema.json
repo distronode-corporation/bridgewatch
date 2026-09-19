@@ -359,6 +359,25 @@
       },
       "additionalProperties": false
     },
+    "OAuthSource": {
+      "description": "Which OAuth application to sign in through: true for bridgewatch's own on github.com or gitlab.com, or { client_id = \"...\" } for your own (required for GitHub Enterprise Server and self-managed GitLab).",
+      "anyOf": [
+        {
+          "type": "boolean",
+          "const": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "client_id": {
+              "description": "The OAuth application's client id. Not a secret.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "PollConfig": {
       "description": "Poll intervals, in seconds.",
       "type": "object",
@@ -567,6 +586,19 @@
           "additionalProperties": false,
           "required": [
             "own"
+          ]
+        },
+        {
+          "description": "Sign in with GitHub or GitLab (the OAuth device flow). `oauth = true`\nuses bridgewatch's own application on github.com or gitlab.com;\n`oauth = { client_id = \"...\" }` names your own, which GitHub Enterprise\nServer and self-managed GitLab need. The tokens are kept in the OS\ncredential store, never in this file.",
+          "type": "object",
+          "properties": {
+            "oauth": {
+              "$ref": "#/$defs/OAuthSource"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "oauth"
           ]
         }
       ]

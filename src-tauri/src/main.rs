@@ -16,6 +16,7 @@ mod guard;
 mod icons;
 mod links;
 mod logging;
+mod oauth;
 mod poller;
 mod reorder;
 mod state;
@@ -90,6 +91,7 @@ fn main() {
         ))
         .manage(state.clone())
         .manage(wizard::WizardSession::default())
+        .manage(oauth::SignIns::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::get_status,
@@ -124,6 +126,14 @@ fn main() {
             wizard::wizard_save,
             wizard::wizard_skip,
             wizard::open_wizard,
+            oauth::oauth_availability,
+            oauth::oauth_start,
+            oauth::oauth_wait,
+            oauth::oauth_cancel,
+            oauth::oauth_open_verification,
+            oauth::oauth_open_install,
+            oauth::oauth_status,
+            oauth::oauth_sign_out,
         ])
         .on_window_event(on_window_event)
         .setup(move |app| {

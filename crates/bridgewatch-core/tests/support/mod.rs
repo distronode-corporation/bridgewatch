@@ -443,3 +443,98 @@ pub fn poller_with_transport(config: &Config, transport: Arc<ScriptedTransport>)
     }
     Poller::with_clients(config, clients, ring).expect("poller builds")
 }
+
+/// A credential store in memory, for the sign-in tests: the OS store is never
+/// touched. Writes can be made to fail, which is how a test stands in for a
+/// keychain that refused (or a process that died) at the worst moment.
+#[derive(Debug, Default)]
+pub struct MemoryStore {
+    entries: std::sync::Mutex<BTreeMap<(String, String), String>>,
+    refuse_writes: std::sync::atomic::AtomicBool,
+    writes: std::sync::atomic::AtomicUsize,
+}
+
+impl MemoryStore {
+    /// An empty store.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// What is stored at an address, raw.
+    pub fn get(&self, service: &str, user: &str) -> Option<String> {
+        self.entries
+            .lock()
+            .unwrap()
+            .get(&(service.to_string(), user.to_string()))
+            .cloned()
+    }
+
+    /// Store something directly, as another process would have.
+    pub fn put(&self, service: &str, user: &str, value: &str) {
+        self.entries
+            .lock()
+            .unwrap()
+            .insert((service.to_string(), user.to_string()), value.to_string());
+    }
+
+    /// Make every later write fail (or succeed again).
+    pub fn refuse_writes(&self, refuse: bool) {
+        self.refuse_writes.store(refuse, Ordering::SeqCst);
+    }
+
+    /// How many writes succeeded.
+    pub fn writes(&self) -> usize {
+        self.writes.load(Ordering::SeqCst)
+    }
+}
+
+impl bridgewatch_core::token::TokenProvider for MemoryStore {
+    fn keyring_get(
+        &self,
+        service: &str,
+        user: &str,
+    ) -> Result<String, bridgewatch_core::token::TokenError> {
+        self.get(service, user)
+            .ok_or_else(|| bridgewatch_core::token::TokenError::NoEntry {
+                service: service.into(),
+                user: user.into(),
+            })
+    }
+
+    fn keyring_set(
+        &self,
+        service: &str,
+        user: &str,
+        secret: &str,
+    ) -> Result<(), bridgewatch_core::token::TokenError> {
+        if self.refuse_writes.load(Ordering::SeqCst) {
+            return Err(bridgewatch_core::token::TokenError::Store {
+                service: service.into(),
+                message: "the keychain is locked".into(),
+            });
+        }
+        self.put(service, user, secret);
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn keyring_delete(
+        &self,
+        service: &str,
+        user: &str,
+    ) -> Result<(), bridgewatch_core::token::TokenError> {
+        self.entries
+            .lock()
+            .unwrap()
+            .remove(&(service.to_string(), user.to_string()));
+        Ok(())
+    }
+
+    fn env(&self, _: &str) -> Option<String> {
+        None
+    }
+
+    fn run(&self, _: &[String]) -> Result<String, bridgewatch_core::token::TokenError> {
+        Err(bridgewatch_core::token::TokenError::Empty)
+    }
+}
