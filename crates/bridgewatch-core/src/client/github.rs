@@ -773,6 +773,11 @@ pub fn status_error(status: u16, path: &str, response: &HttpResponse) -> Option<
         404 => Some(ClientError::NotFound {
             path: path.to_string(),
         }),
+        // A revalidated response. Only `ConditionalTransport` produces one that
+        // reaches here, carrying the body the server has just confirmed, and it
+        // keeps the status so the request log shows the saving. See
+        // `client::conditional`.
+        304 => None,
         // Never followed, for the same reason GitLab's are not: the credential
         // would travel to whatever host the redirect names.
         300..=399 => Some(ClientError::Redirect {
