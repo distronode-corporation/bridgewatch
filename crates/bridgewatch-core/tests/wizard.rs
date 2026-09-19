@@ -87,6 +87,7 @@ impl Transport for Routed {
             retry_after: None,
             etag: None,
             link: None,
+            oauth_scopes: None,
         })
     }
 }

@@ -681,39 +681,42 @@ async fn the_factory_builds_a_gitlab_client_behind_the_trait() {
     assert_eq!(client.ring().len(), 1, "and records into the same ring");
 }
 
-/// ⛔ An account naming a provider this build has no client for is REFUSED.
-/// Falling through to a GitLab client pointed at `https://api.github.com` would
-/// send `/api/v4/projects/...` to GitHub and present a pile of 404s as a wrong
-/// project id.
+/// ⛔ The provider decides which client is built, and nothing else does. The
+/// alternative this guards against is a GitLab client pointed at
+/// `https://api.github.com`, which would send `/api/v4/projects/...` to GitHub
+/// and present a pile of 404s as a wrong project id.
+///
+/// ⚠️ This replaced the phase 1 test that asserted `client_for` REFUSED a
+/// GitHub account. Both halves are asserted here: the GitLab account still
+/// reaches GitLab's URL shape, and the GitHub account now reaches GitHub's.
 #[tokio::test]
-async fn the_factory_refuses_a_provider_it_has_no_client_for() {
+async fn the_factory_builds_each_provider_its_own_client() {
     let account = Account {
         provider: Provider::Github,
+        header: AuthHeader::AuthorizationBearer,
         ..Account::default()
     };
-    let transport = Canned::new(vec![(200, "[]".into(), None)]);
-    let error = bridgewatch_core::client::client_for(
+    let transport = Canned::new(vec![(200, r#"{"workflow_runs":[]}"#.into(), None)]);
+    let client = bridgewatch_core::client::client_for(
         &account,
         &Secret::new("gho_SECRET"),
         transport.clone(),
         RequestRing::new(4),
     )
-    .expect_err("there is no GitHub client yet");
+    .expect("github is a provider this build has");
 
+    let rows = CiClient::list_pipelines(
+        client.as_ref(),
+        &ProjectRef::Path("acme-corp/monorepo".into()),
+        &ListQuery::exact("main", None, 5),
+    )
+    .await
+    .expect("the scripted empty page");
+    assert!(rows.is_empty());
     assert!(
-        matches!(
-            error,
-            ClientError::UnsupportedProvider { provider: "github" }
-        ),
-        "{error:?}"
-    );
-    assert!(
-        error.is_fatal(),
-        "retrying a provider that does not exist never helps"
-    );
-    assert!(
-        transport.paths().is_empty(),
-        "and nothing was sent anywhere"
+        transport.paths()[0].starts_with("/repos/acme-corp/monorepo/actions/runs?"),
+        "a GitHub account reaches GitHub's URL shape, not GitLab's: {:?}",
+        transport.paths()
     );
 }
 
@@ -785,14 +788,16 @@ impl bridgewatch_core::token::TokenProvider for OneVariable {
     }
 }
 
-/// ⛔ The poller refuses to build rather than approximating. `validate` already
-/// rejects the file, so this is the second line of the same defence: anything
-/// reaching `from_config` with a provider that has no client gets an error, not
-/// a GitLab client aimed at somebody else's API.
+/// A configuration with a GitHub account builds a poller, resolving its token
+/// through the same path a GitLab account takes.
+///
+/// ⚠️ This replaced the phase 1 test that asserted `from_config` REFUSED such a
+/// configuration. What it is worth keeping for is the other half of that test:
+/// the refusal was the second line of a defence whose first line is `validate`,
+/// and a build that succeeds here proves the two agree.
 #[test]
-fn the_poller_refuses_to_build_a_client_for_an_unimplemented_provider() {
-    let config: bridgewatch_core::Config = toml::from_str(
-        r#"
+fn a_github_account_builds_a_poller() {
+    let raw = r#"
         [accounts.gh]
         provider = "github"
         token = { env = "TOK" }
@@ -800,17 +805,19 @@ fn the_poller_refuses_to_build_a_client_for_an_unimplemented_provider() {
         [[watches]]
         id = "x"
         account = "gh"
-        project = "distronode-corporation/bridgewatch"
-        "#,
-    )
-    .expect("the table deserialises; it is validation that refuses it");
-
-    let error = bridgewatch_core::poll::Poller::from_config(&config, &OneVariable)
-        .err()
-        .map(|e| e.to_string())
-        .expect("no GitHub client exists");
+        project = "acme-corp/monorepo"
+        deploy_markers = ["publish"]
+        "#;
+    let config: bridgewatch_core::Config = toml::from_str(raw).expect("the table deserialises");
     assert!(
-        error.contains("not supported"),
-        "the failure says what is wrong: {error}"
+        bridgewatch_core::config::validate(&config)
+            .iter()
+            .all(|d| d.severity != bridgewatch_core::config::Severity::Error),
+        "and validation has nothing to say about it: {:?}",
+        bridgewatch_core::config::validate(&config)
     );
+
+    bridgewatch_core::poll::Poller::from_config(&config, &OneVariable)
+        .map(|_| ())
+        .expect("a GitHub poller builds");
 }

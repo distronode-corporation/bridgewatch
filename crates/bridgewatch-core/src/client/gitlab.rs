@@ -39,6 +39,16 @@ pub struct ListQuery {
     /// `updated_at` when filtering client-side, so recently-touched pipelines
     /// on other refs are not missed.
     pub order_by: &'static str,
+    /// The single workflow a GitHub watch is for, as a file name (`ci.yml`) or
+    /// a numeric workflow id. `None` means every workflow.
+    ///
+    /// ⚠️ Lives on the shared query because the client is the only thing that
+    /// knows how to ask for it and the poller is the only thing that knows it
+    /// was configured. **GitLab ignores it**, as the [`super::CiClient`]
+    /// documentation says a client does with a field it has no equivalent of:
+    /// a GitLab project has no such subdivision, and the request it builds is
+    /// unchanged whatever this holds.
+    pub workflow: Option<String>,
 }
 
 impl ListQuery {
@@ -49,6 +59,7 @@ impl ListQuery {
             source,
             per_page,
             order_by: "id",
+            workflow: None,
         }
     }
 
@@ -60,7 +71,18 @@ impl ListQuery {
             source: None,
             per_page,
             order_by: "updated_at",
+            workflow: None,
         }
+    }
+
+    /// The same query, for one workflow. A `None` or blank name is no
+    /// restriction, so an unset `workflow` key needs no special case upstream.
+    pub fn for_workflow(mut self, workflow: Option<&str>) -> Self {
+        self.workflow = workflow
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+            .map(str::to_string);
+        self
     }
 
     fn to_query(&self) -> String {
@@ -426,6 +448,12 @@ impl CiClient for GitLabClient {
 }
 
 /// Map an HTTP status onto a [`ClientError`], or `None` when it is a success.
+///
+/// ⚠️ GitLab's, and deliberately not shared with
+/// [`super::github::status_error`]. GitLab rate-limits with a 429 and nothing
+/// else, so a 403 here really is "not authorised"; on GitHub the same status
+/// is how an exhausted hourly budget arrives, and one function trying to serve
+/// both would have to be told which it was talking to anyway.
 pub fn status_error(status: u16, path: &str, retry_after: Option<u64>) -> Option<ClientError> {
     match status {
         200..=299 => None,
@@ -441,7 +469,13 @@ pub fn status_error(status: u16, path: &str, retry_after: Option<u64>) -> Option
             status,
             path: path.to_string(),
         }),
-        429 => Some(ClientError::RateLimited { retry_after }),
+        // `reset` stays empty on purpose: GitLab sends `retry-after` on the
+        // 429s this client sees, and filling it would change how long an
+        // existing GitLab account backs off.
+        429 => Some(ClientError::RateLimited {
+            retry_after,
+            reset: None,
+        }),
         500..=599 => Some(ClientError::Server { status }),
         other => Some(ClientError::Unexpected {
             status: other,

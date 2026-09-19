@@ -61,6 +61,7 @@ fn retry_after_is_honoured() {
     let mut p = policy();
     p.on_error(&ClientError::RateLimited {
         retry_after: Some(120),
+        reset: None,
     });
     assert_eq!(
         p.interval(true),
@@ -71,6 +72,7 @@ fn retry_after_is_honoured() {
     let mut p = policy();
     p.on_error(&ClientError::RateLimited {
         retry_after: Some(900),
+        reset: None,
     });
     assert_eq!(
         p.interval(true),
@@ -84,7 +86,10 @@ fn retry_after_is_honoured() {
 #[test]
 fn a_rate_limit_without_a_header_still_backs_off() {
     let mut p = policy();
-    p.on_error(&ClientError::RateLimited { retry_after: None });
+    p.on_error(&ClientError::RateLimited {
+        retry_after: None,
+        reset: None,
+    });
     assert_eq!(p.interval(false), Duration::from_secs(120));
 }
 
@@ -124,6 +129,7 @@ fn an_absurd_retry_after_is_clamped_rather_than_believed() {
     let mut p = policy();
     p.on_error(&ClientError::RateLimited {
         retry_after: Some(u64::MAX),
+        reset: None,
     });
 
     let interval = p.interval(false);
@@ -189,6 +195,7 @@ fn a_backing_off_watch_defers_until_its_own_interval_has_passed() {
 
     p.on_error(&ClientError::RateLimited {
         retry_after: Some(120),
+        reset: None,
     });
     p.mark_polled_ago(Duration::from_secs(30), Duration::from_secs(30));
     assert!(

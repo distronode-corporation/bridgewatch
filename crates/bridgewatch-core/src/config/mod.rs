@@ -433,16 +433,18 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
 
     for (name, account) in &config.accounts {
         let base = format!("accounts.{name}");
-        // ⛔ An ERROR, not a warning, and it is deliberate that the file will
-        // not load. The alternative is a watch that silently shows nothing, or
-        // worse, a GitLab client aimed at GitHub's API answering 404 for every
-        // project. The parser accepts the value so the diagnostic can name it;
-        // the phase that adds the client deletes these four lines.
-        if account.provider == Provider::Github {
+        // ⛔ An ERROR rather than a warning, and it is about the header
+        // SPELLING rather than about the token: GitHub reads a credential only
+        // from `Authorization`, so a `PRIVATE-TOKEN` account sends a request
+        // with no credential GitHub can see and is answered 401. That is a
+        // perfectly formed request with the wrong header name, which is the
+        // failure that reads most like a bad or unscoped token, so it is
+        // refused here where the file can name the key.
+        if account.provider == Provider::Github && account.header == AuthHeader::PrivateToken {
             out.push(Diagnostic::error(
-                format!("{base}.provider"),
-                "GitHub support is not implemented yet: this build can only talk to GitLab. \
-                 Remove the account, or set provider = \"gitlab\"",
+                format!("{base}.header"),
+                "PRIVATE-TOKEN is GitLab's header and GitHub ignores it, which presents as \
+                 a 401 that looks like a bad token; write header = \"Authorization: Bearer\"",
             ));
         }
         if account.base_url.trim().is_empty() {
@@ -602,6 +604,13 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
     let mut primaries = 0usize;
     for (i, watch) in config.watches.iter().enumerate() {
         let base = format!("watches.{i}");
+        // ⚠ `None` when the watch names an account that does not exist, which
+        // is already an error below. The provider-specific checks are then
+        // skipped rather than guessed at, saying "this key is GitHub-only"
+        // about a watch whose account is a typo would be the second-best
+        // diagnostic drowning the first, while the `sources` vocabulary falls
+        // back to GitLab's, which is the only one it had before today.
+        let provider = config.accounts.get(&watch.account).map(|a| a.provider);
         if watch.id.trim().is_empty() {
             out.push(Diagnostic::error(format!("{base}.id"), "id is empty"));
         } else if seen_ids.contains(&watch.id.as_str()) {
@@ -660,16 +669,100 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
             Ok(_) => {}
         }
 
+        // ⚠ The vocabulary is the ACCOUNT's, not bridgewatch's: `push` is the
+        // only value the two providers share, and a GitLab source on a GitHub
+        // watch (or the reverse) matches nothing at all. GitHub is the worse
+        // case of the two and is why this is checked per provider: an
+        // unrecognised `event` value is answered `200 {"total_count": 0}`, so
+        // the watch shows an empty popover and the API agrees with it.
         for (j, source) in watch.sources.iter().enumerate() {
-            if !KNOWN_PIPELINE_SOURCES.contains(&source.as_str()) {
+            let known = match provider.unwrap_or_default() {
+                Provider::Gitlab => KNOWN_PIPELINE_SOURCES.contains(&source.as_str()),
+                Provider::Github => KNOWN_GITHUB_EVENTS.contains(&source.as_str()),
+            };
+            if !known {
+                let vocabulary = match provider.unwrap_or_default() {
+                    Provider::Gitlab => "a GitLab pipeline source",
+                    Provider::Github => "a GitHub workflow event",
+                };
                 out.push(Diagnostic::warning(
                     format!("{base}.sources.{j}"),
                     format!(
-                        "{source:?} is not a pipeline source bridgewatch knows; no pipeline \
+                        "{source:?} is not {vocabulary} bridgewatch knows; no pipeline \
                          will match it, and the watch will show nothing"
                     ),
                 ));
             }
+        }
+
+        if provider == Some(Provider::Github) {
+            // ⛔ An ERROR: there is no `/repos/<id>` endpoint, so this watch
+            // can never resolve. It is nearly always a GitLab project id left
+            // behind by moving a watch from one account to the other, which is
+            // exactly the mistake worth catching in the file.
+            if let ProjectRef::Id(id) = &watch.project {
+                out.push(Diagnostic::error(
+                    format!("{base}.project"),
+                    format!(
+                        "GitHub addresses a repository as owner/repo and has no endpoint \
+                         for the numeric id {id}; write project = \"owner/repo\""
+                    ),
+                ));
+            }
+            // A warning rather than an error: it can only 404, but a file that
+            // still loads shows the failure against the watch it belongs to.
+            if let ProjectRef::Path(p) = &watch.project
+                && p.split('/').filter(|s| !s.is_empty()).count() != 2
+            {
+                out.push(Diagnostic::warning(
+                    format!("{base}.project"),
+                    format!(
+                        "{p:?} is not a GitHub owner/repo pair, so every request for this \
+                         watch will be answered 404"
+                    ),
+                ));
+            }
+            if watch.dive.depth > 1 {
+                out.push(Diagnostic::warning(
+                    format!("{base}.dive.depth"),
+                    "GitHub has no nested runs, so there are no levels to walk and this \
+                     key is ignored",
+                ));
+            }
+            // ⚠ Said only for a value somebody must have typed. `bridges`
+            // defaults to `"*"` and an explicit `"*"` cannot be told from the
+            // default once the file is parsed, so warning on it would put a
+            // line under every GitHub watch ever written, including the ones
+            // that never mentioned dive at all.
+            if !watch.dive.exclude.is_empty()
+                || (watch.dive.bridges != DiveConfig::default().bridges
+                    && !watch.dive.bridges.is_empty())
+            {
+                out.push(Diagnostic::warning(
+                    format!("{base}.dive"),
+                    "dive selects trigger jobs to walk into, and this watch has none to \
+                     select: one workflow run is one row, and a run's jobs are all in one \
+                     list, a called workflow's included. The key starts selecting when a \
+                     watch folds a commit's several runs into one row",
+                ));
+            }
+        }
+
+        // ⚠ A warning on a GitLab watch rather than an error, the same way
+        // every other cross-provider key is treated: moving a watch between
+        // accounts should not make the file unloadable, and the key is inert
+        // here rather than dangerous.
+        if provider == Some(Provider::Gitlab)
+            && watch
+                .workflow
+                .as_deref()
+                .is_some_and(|w| !w.trim().is_empty())
+        {
+            out.push(Diagnostic::warning(
+                format!("{base}.workflow"),
+                "workflow selects one GitHub Actions workflow and is ignored on a GitLab \
+                 account, where a project has no such subdivision",
+            ));
         }
 
         // ⚠ A warning, not an error, and the wording is measured rather than
@@ -834,6 +927,58 @@ pub const KNOWN_PIPELINE_SOURCES: &[&str] = &[
     "duo_workflow",
     "pipeline_execution_policy_schedule",
     "unknown",
+];
+
+/// The `event` values a GitHub workflow run reports, as of the 2022-11-28 API.
+///
+/// The webhook events that can start a workflow, plus two that are not webhook
+/// events at all: `schedule` (cron) and ⚠️ **`dynamic`**, which is what GitHub
+/// reports for a run with no workflow file behind it, such as default-setup
+/// CodeQL or a Copilot agent. `dynamic` was measured on live runs and appears
+/// in no list of triggering events, which is the reason this is a warning and
+/// not an error.
+///
+/// ⛔ Getting a value wrong here is expensive on GitHub in a way it is not on
+/// GitLab: an unrecognised `event` filter is answered **`200` with
+/// `total_count: 0`**, not a 422, so the watch shows nothing and the API looks
+/// like it agrees.
+pub const KNOWN_GITHUB_EVENTS: &[&str] = &[
+    "branch_protection_rule",
+    "check_run",
+    "check_suite",
+    "create",
+    "delete",
+    "deployment",
+    "deployment_status",
+    "discussion",
+    "discussion_comment",
+    "dynamic",
+    "fork",
+    "gollum",
+    "issue_comment",
+    "issues",
+    "label",
+    "merge_group",
+    "milestone",
+    "page_build",
+    "project",
+    "project_card",
+    "project_column",
+    "public",
+    "pull_request",
+    "pull_request_review",
+    "pull_request_review_comment",
+    "pull_request_target",
+    "push",
+    "registry_package",
+    "release",
+    "repository_dispatch",
+    "schedule",
+    "status",
+    "watch",
+    "workflow_call",
+    "workflow_dispatch",
+    "workflow_run",
 ];
 
 /// The values `[log].level` accepts. Anything else is a warning from

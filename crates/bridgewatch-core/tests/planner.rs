@@ -395,6 +395,7 @@ async fn a_failed_list_keeps_the_last_frame_and_says_why() {
         1,
         bridgewatch_core::client::ClientError::RateLimited {
             retry_after: Some(60),
+            reset: None,
         },
     );
     let second = poller.tick().await;

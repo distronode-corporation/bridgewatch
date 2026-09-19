@@ -83,10 +83,10 @@ export const REGISTRY: RegistryEntry[] = [
     control: "select",
     label: "Provider",
     options: ["gitlab", "github"],
-    // The value parses and the configuration is then REFUSED, which is the
-    // honest answer while there is no GitHub client: silently ignoring it would
-    // leave a watch showing nothing with no explanation.
-    hint: "GitHub is not supported yet; choosing it makes the file invalid.",
+    // Changing it changes what the other account fields mean: the base URL, the
+    // API path and the auth header all default per provider, and a github
+    // account reads `Authorization: Bearer` and nothing else.
+    hint: "GitLab CI, or GitHub Actions. The base URL, API path and auth header follow it.",
   },
   {
     path: "accounts.*.base_url",
@@ -146,6 +146,13 @@ export const REGISTRY: RegistryEntry[] = [
     control: "text",
     label: "Ref",
     hint: 'Exact (main), glob (pf/*) or regex (re:^release/.*$).',
+  },
+  {
+    path: "watches.*.workflow",
+    tab: "watches",
+    control: "text",
+    label: "Workflow",
+    hint: "GitHub only: one workflow file (ci.yml) or id. Empty watches every workflow.",
   },
   {
     path: "watches.*.sources",

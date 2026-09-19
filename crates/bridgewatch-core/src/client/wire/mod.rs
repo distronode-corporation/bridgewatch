@@ -13,4 +13,5 @@
 //! has no bridges at all) are absorbed in its own `From` impl rather than
 //! leaking into the verdict engine.
 
+pub mod github;
 pub mod gitlab;

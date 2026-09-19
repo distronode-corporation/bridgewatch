@@ -23,8 +23,14 @@
 
 mod support;
 
+use std::sync::Arc;
+
+use bridgewatch_core::client::http::{HttpRequest, HttpResponse, Transport};
+use bridgewatch_core::client::{ClientError, GitHubClient, ListQuery, RequestRing};
 use bridgewatch_core::config::edit::Edit;
+use bridgewatch_core::config::{Account, ProjectRef, Provider};
 use bridgewatch_core::poll::Poller;
+use bridgewatch_core::token::Secret;
 use support::{level_of, runtime, with_log};
 
 fn poller_for(fixture: &str) -> Poller {
@@ -104,4 +110,67 @@ fn the_per_tick_line_is_debug_and_not_info() {
         Some("DEBUG".to_string()),
         "and it is debug too: {log}"
     );
+}
+
+/// A transport that answers one empty page and records nothing.
+#[derive(Debug)]
+struct OneEmptyPage;
+
+#[async_trait::async_trait]
+impl Transport for OneEmptyPage {
+    async fn execute(&self, _request: HttpRequest) -> Result<HttpResponse, ClientError> {
+        Ok(HttpResponse {
+            status: 200,
+            body: r#"{"total_count":0,"workflow_runs":[]}"#.to_string(),
+            next_page: None,
+            ratelimit_remaining: Some(4_999),
+            ratelimit_reset: None,
+            retry_after: None,
+            etag: None,
+            link: None,
+            oauth_scopes: None,
+        })
+    }
+}
+
+/// ⛔ The debug LOG is where a credential escapes if it escapes at all, because
+/// unlike the request ring it is free text that people paste into issues. The
+/// GitHub client's per-request line carries the method, the path, the status,
+/// the size and the time, and nothing whatever about the `Authorization` header
+/// it was sent with, not even the word.
+#[test]
+fn the_github_request_line_never_carries_the_token() {
+    // First, so that nothing below can reach a callsite before the shared
+    // subscriber exists (the rule at the top of this file).
+    support::start_capture();
+    let runtime = runtime();
+    let client = GitHubClient::new(
+        &Account::for_provider(Provider::Github),
+        &Secret::new("ghp_SECRET"),
+        Arc::new(OneEmptyPage),
+        RequestRing::new(4),
+    );
+
+    let (result, log) = with_log(|| {
+        runtime.block_on(client.list_pipelines(
+            &ProjectRef::Path("acme-corp/monorepo".into()),
+            &ListQuery::exact("main", None, 5),
+        ))
+    });
+    result.expect("the scripted empty page");
+
+    assert!(
+        !log.is_empty(),
+        "nothing was captured, so the absences that follow would pass on an empty log"
+    );
+    assert!(!log.contains("ghp_SECRET"), "{log}");
+    assert!(
+        !log.to_ascii_lowercase().contains("bearer"),
+        "not even the scheme, which is half the header: {log}"
+    );
+    assert!(
+        log.contains("path=\"/repos/acme-corp/monorepo/actions/runs"),
+        "the path is what makes the line worth printing: {log}"
+    );
+    assert!(log.contains("status=200"), "{log}");
 }

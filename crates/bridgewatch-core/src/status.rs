@@ -3,6 +3,11 @@
 //!
 //! GitLab adds statuses over time. [`Status`] therefore never fails to decode:
 //! anything unrecognised lands in [`Status::Unknown`] carrying the raw string.
+//!
+//! The names are GitLab's because that is the vocabulary the view model, the
+//! Rhai hook and every `expected.json` publish. A second provider folds its own
+//! into them rather than adding a parallel enum: see [`Status::from_github`],
+//! which maps GitHub's `status` plus `conclusion` pair onto these.
 
 use serde::{Deserialize, Serialize};
 
@@ -111,6 +116,76 @@ impl Status {
     /// because somebody has not pressed a button.
     pub fn is_settled(&self) -> bool {
         !self.is_live()
+    }
+
+    /// GitHub Actions splits one status into two fields, and neither is
+    /// enumerated on a workflow run.
+    ///
+    /// `status` is the phase (`queued`, `in_progress`, `completed`, and the ones
+    /// the documentation only half admits to: `requested`, `pending`, `waiting`),
+    /// and `conclusion` is the outcome, which is `null` until the phase is
+    /// `completed`. The pair is folded onto the same [`Status`] the rest of the
+    /// engine reads, so every verdict rule, every icon rule and the whole view
+    /// model work on a GitHub run without knowing it is one.
+    ///
+    /// ⛔ **`action_required` is a GATE, not a failure, and getting this wrong
+    /// reds the tray on one run in eight.** A fork pull request from a first-time
+    /// contributor produces a run that is `completed` with `conclusion:
+    /// action_required` and **zero jobs**, waiting for a maintainer to press
+    /// Approve. Reading "conclusion is not success, so it failed" turns every such
+    /// run red; it is [`Status::Manual`], which `is_settled()` already treats as
+    /// "no further progress without a human" and which the icon rules draw as
+    /// `parked_gate`.
+    ///
+    /// ⛔ **`waiting` is the mirror image.** A run held by a deployment protection
+    /// rule has `status: waiting` with a `null` conclusion, which on the conclusion
+    /// alone is indistinguishable from a run that is executing. Mapping it anywhere
+    /// [`Status::is_live`] answers true would hold the fast poll interval open all
+    /// weekend for a run nobody will touch until Monday, which is the exact mistake
+    /// `is_live`'s own documentation says this tool exists to avoid.
+    ///
+    /// ⚠️ **The run's pair is an OPEN vocabulary.** In GitHub's OpenAPI description
+    /// `workflow-run.status` and `workflow-run.conclusion` are bare nullable
+    /// strings with no `enum` at all (the 14-value list everyone quotes belongs to
+    /// the *query parameter*, and spans both fields), which is how `startup_failure`
+    /// and `stale` reach a run at all: they are enumerated only on a check suite,
+    /// and the run mirrors its suite through an unconstrained string. Anything
+    /// unrecognised therefore becomes [`Status::Unknown`] carrying the raw value,
+    /// which the icon rules draw as `unknown` rather than as a wrong colour.
+    ///
+    /// `neutral` is the one judgement call: it means "ran, did not pass, does not
+    /// count", which nothing in the API says is TOLERATED. `Unknown("neutral")` is
+    /// the honest answer, and `[watches.jobs]` is how a user says what they want it
+    /// to mean.
+    pub fn from_github(status: &str, conclusion: Option<&str>) -> Status {
+        // The phase decides first: a conclusion only exists once `completed`, and
+        // a non-completed run carrying one would be the API contradicting itself.
+        match status {
+            "queued" => return Status::Pending,
+            "in_progress" => return Status::Running,
+            // Both are pre-queue phases GitHub reports for a run that has been
+            // accepted but not yet scheduled.
+            "requested" | "pending" => return Status::Created,
+            "waiting" => return Status::Manual,
+            "completed" => {}
+            other => return Status::Unknown(other.to_string()),
+        }
+        match conclusion {
+            Some("success") => Status::Success,
+            // `startup_failure` is an invalid or unparseable workflow file, and
+            // `timed_out` is the job limit: both are work that should have happened
+            // and did not.
+            Some("failure") | Some("startup_failure") | Some("timed_out") => Status::Failed,
+            Some("cancelled") => Status::Canceled,
+            // `stale` is GitHub's word for a run whose result was discarded before
+            // it could count, which is what `skipped` already means here.
+            Some("skipped") | Some("stale") => Status::Skipped,
+            Some("action_required") => Status::Manual,
+            Some(other) => Status::Unknown(other.to_string()),
+            // Completed with no conclusion at all. Rare, and not something to
+            // guess at: `Unknown` draws the question mark and says so.
+            None => Status::Unknown("completed".to_string()),
+        }
     }
 }
 

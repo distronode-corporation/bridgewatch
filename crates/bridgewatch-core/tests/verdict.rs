@@ -537,6 +537,7 @@ async fn a_pipeline_whose_detail_did_not_arrive_is_unknown() {
         "/jobs",
         bridgewatch_core::client::ClientError::RateLimited {
             retry_after: Some(30),
+            reset: None,
         },
     );
     let mut poller = support::poller_with_transport(&config, transport);

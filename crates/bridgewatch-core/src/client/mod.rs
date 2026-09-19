@@ -8,6 +8,7 @@
 //! of these and never name GitLab.
 
 pub mod fixture;
+pub mod github;
 pub mod gitlab;
 pub mod http;
 pub mod wire;
@@ -15,6 +16,7 @@ pub mod wire;
 use std::sync::Arc;
 
 pub use fixture::FixtureTransport;
+pub use github::GitHubClient;
 pub use gitlab::{GitLabClient, ListQuery};
 pub use http::{HttpRequest, HttpResponse, RequestLog, RequestRing, ReqwestTransport, Transport};
 
@@ -87,14 +89,15 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
 
 /// Build the client an account's `provider` asks for.
 ///
-/// ⛔ The ONE place a provider is turned into a client. Phase 2 of GitHub
-/// support adds an arm here and changes nothing else: the poller, the wizard
-/// and the CLI all hold a `dyn CiClient` and cannot tell the difference.
+/// ⛔ The ONE place a provider is turned into a client, and the only place in
+/// the tree that names both: the poller, the wizard and the CLI hold a
+/// `dyn CiClient` and cannot tell which they have.
 ///
-/// ⛔ An unimplemented provider is refused rather than approximated. Falling
-/// through to a GitLab client pointed at `https://api.github.com` would issue
-/// `/api/v4/projects/...` requests against GitHub, collect 404s, and present as
-/// a wrong project id.
+/// The `Result` remains although both arms now succeed. A client is built from
+/// a credential and a transport, which is exactly the sort of thing that grows
+/// a failure case (an App installation token has to be exchanged before it can
+/// be used), and an infallible signature here would make adding one a change at
+/// every call site.
 pub fn client_for(
     account: &Account,
     token: &Secret,
@@ -103,9 +106,7 @@ pub fn client_for(
 ) -> Result<Arc<dyn CiClient>, ClientError> {
     match account.provider {
         Provider::Gitlab => Ok(Arc::new(GitLabClient::new(account, token, transport, ring))),
-        Provider::Github => Err(ClientError::UnsupportedProvider {
-            provider: Provider::Github.as_str(),
-        }),
+        Provider::Github => Ok(Arc::new(GitHubClient::new(account, token, transport, ring))),
     }
 }
 
@@ -131,11 +132,23 @@ pub enum ClientError {
         /// The path that 404'd.
         path: String,
     },
-    /// 429: rate limited.
+    /// Rate limited: a 429, or on GitHub a 403 that carries a rate-limit
+    /// signal. See [`github::status_error`].
     #[error("rate limited; retry after {}s", retry_after.map(|r| r.to_string()).unwrap_or_else(|| "?".into()))]
     RateLimited {
-        /// `retry-after` in seconds, when GitLab supplied one.
+        /// `retry-after` in seconds, when the server supplied one.
         retry_after: Option<u64>,
+        /// `x-ratelimit-reset`, a Unix timestamp, when the server supplied one.
+        ///
+        /// ⚠️ GitHub sends `retry-after` only for a SECONDARY limit; when the
+        /// primary hourly budget is exhausted the recovery time is here and
+        /// nowhere else, so a backoff that read only `retry_after` would fall
+        /// back to doubling an interval against a window that is an hour long.
+        /// [`crate::poll::PollPolicy::on_error`] derives one from the other.
+        /// GitLab's classifier leaves this `None`: it sends `retry-after` on
+        /// the 429s that matter, and reading its reset header here would change
+        /// a backoff that is doing its job.
+        reset: Option<u64>,
     },
     /// 5xx.
     #[error("server error ({status})")]
@@ -178,15 +191,17 @@ pub enum ClientError {
         /// The path that returned it.
         path: String,
     },
-    /// The account names a provider this build has no client for. Raised by
-    /// [`client_for`] before any request is made, never by a response.
-    #[error(
-        "{provider} accounts are not supported by this build of bridgewatch yet; \
-         remove the account or set provider = \"gitlab\""
-    )]
-    UnsupportedProvider {
-        /// The provider named in the configuration.
-        provider: &'static str,
+    /// The request cannot be made as asked, decided before anything is sent.
+    ///
+    /// ⚠️ This replaced `UnsupportedProvider`, which existed only while there
+    /// was a provider with no client. Both of today's uses are GitHub's and
+    /// both are decisions rather than responses: a repository addressed by a
+    /// numeric id, which GitHub has no URL for, and a pagination `Link` naming
+    /// another host, which must not be followed with the token attached.
+    #[error("{message}")]
+    Unsupported {
+        /// What cannot be done, and what to write instead.
+        message: String,
     },
 }
 
@@ -195,7 +210,7 @@ impl ClientError {
     pub fn is_fatal(&self) -> bool {
         matches!(
             self,
-            ClientError::Auth { .. } | ClientError::UnsupportedProvider { .. }
+            ClientError::Auth { .. } | ClientError::Unsupported { .. }
         )
     }
 
@@ -212,7 +227,17 @@ impl ClientError {
     /// `retry-after`, when the server gave one.
     pub fn retry_after(&self) -> Option<u64> {
         match self {
-            ClientError::RateLimited { retry_after } => *retry_after,
+            ClientError::RateLimited { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
+
+    /// The Unix timestamp the rate limit resets at, when the server gave one.
+    /// A caller uses it only where [`ClientError::retry_after`] answered
+    /// nothing; see the field's documentation.
+    pub fn rate_limit_reset(&self) -> Option<u64> {
+        match self {
+            ClientError::RateLimited { reset, .. } => *reset,
             _ => None,
         }
     }

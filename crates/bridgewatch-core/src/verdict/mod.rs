@@ -563,7 +563,18 @@ pub fn evaluate_pipeline(
         // without bridges — which is most of them — showed the outline check
         // where README rule 8 promises the hourglass.
         awaiting_gate: all_bridges.iter().any(|b| b.verdict == "awaiting_gate")
-            || parent_classified.iter().any(|(c, _)| c.is_gate()),
+            || parent_classified.iter().any(|(c, _)| c.is_gate())
+            // ⛔ And a pipeline whose own status is the gate, when there are no
+            // jobs to read it from. GitHub's `conclusion: action_required` is
+            // exactly that shape: a fork pull request waiting for a
+            // maintainer's approval arrives SETTLED, with a non-success
+            // conclusion and a job list of length zero, and it was 13% of all
+            // runs in the sample the port was scoped from. Without this the row
+            // falls through every rule to `succeeded_no_deploy` and an
+            // unapproved run reads green. Same shape as `anything_live`'s last
+            // clause above, and the same justification: the list row is all
+            // there is, so it is what answers.
+            || (nothing_fetched && detail.pipeline.status.is_gate()),
         parent_not_built: detail.pipeline.status.is_not_built(),
         any_blocking_failure: !failures.is_empty(),
         sibling_policy: watch.sibling_failure,

@@ -24,6 +24,30 @@ pub const POLL_NOW_MIN_GAP: Duration = Duration::from_secs(2);
 /// overflow.
 pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// How long until a rate limit's reset timestamp, when that is all the server
+/// gave.
+///
+/// ⛔ GitHub sends `retry-after` only for a SECONDARY limit. An exhausted
+/// PRIMARY budget carries `x-ratelimit-reset`, a Unix timestamp, and nothing
+/// else, and its window is an HOUR, so a backoff that fell back to doubling
+/// a five-second interval would spend the whole hour asking and being refused.
+/// A `retry-after` the server did send always wins; this is only consulted when
+/// it did not.
+///
+/// ⚠️ Computed on the WALL clock, which is the only clock an absolute timestamp
+/// can be compared against, so a machine whose clock is wrong reads a wrong
+/// number. A reset already in the past, or one so far ahead that it is a broken
+/// header rather than an instruction, yields nothing and lets the ordinary
+/// doubling take over; [`MAX_RETRY_AFTER`] clamps what is returned either way.
+fn seconds_until(error: &ClientError) -> Option<u64> {
+    let reset = error.rate_limit_reset()?;
+    let now = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    reset.checked_sub(now).filter(|secs| *secs > 0)
+}
+
 /// Why an out-of-band poll was asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PollNow {
@@ -145,7 +169,7 @@ impl PollPolicy {
     pub fn on_error(&mut self, error: &ClientError) {
         self.last_poll = Some(Stamp::now());
         self.consecutive_errors = self.consecutive_errors.saturating_add(1);
-        if let Some(secs) = error.retry_after() {
+        if let Some(secs) = error.retry_after().or_else(|| seconds_until(error)) {
             self.retry_after = Some(Duration::from_secs(secs).min(MAX_RETRY_AFTER));
         }
     }

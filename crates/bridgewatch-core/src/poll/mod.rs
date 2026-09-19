@@ -590,7 +590,7 @@ async fn fetch_detail(
 /// discarded and a watch that shows nothing.
 pub fn list_query(watch: &Watch, rules: &WatchRules) -> ListQuery {
     let per_page = (watch.show.max_rows as u32 * 4).clamp(10, 100);
-    match rules.ref_matcher.exact() {
+    let query = match rules.ref_matcher.exact() {
         Some(exact) => match watch.sources.as_slice() {
             // An empty list filters nothing, so the page can be exactly what the
             // watch shows.
@@ -599,7 +599,11 @@ pub fn list_query(watch: &Watch, rules: &WatchRules) -> ListQuery {
             _ => ListQuery::exact(exact, None, per_page.max(30)),
         },
         None => ListQuery::scan(per_page.max(30)),
-    }
+    };
+    // GitLab ignores it; GitHub asks that workflow's own endpoint. Carried on
+    // the query rather than read from the watch inside a client, so that the
+    // clients keep taking one request description and nothing provider-shaped.
+    query.for_workflow(watch.workflow.as_deref())
 }
 
 /// Filter and trim the list rows a watch should show.

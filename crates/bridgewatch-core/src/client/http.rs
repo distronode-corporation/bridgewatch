@@ -94,8 +94,21 @@ pub struct HttpResponse {
     /// GitHub pages with `Link: <...>; rel="next"` rather than GitLab's
     /// `x-next-page`, and rewrites `/repos/{owner}/{repo}/` to
     /// `/repositories/{id}/` in those URLs, so the next page has to be FOLLOWED
-    /// rather than reconstructed. Nothing reads it yet.
+    /// rather than reconstructed. Read by
+    /// [`super::github::GitHubClient`]; GitLab still pages on `next_page`.
     pub link: Option<String>,
+    /// `x-oauth-scopes`, exactly as received: a comma-separated list, or an
+    /// empty string for a credential that has none.
+    ///
+    /// ⛔ The presence of this header is the ONLY thing that distinguishes a
+    /// GitHub classic token from a fine-grained one at runtime, and it is why a
+    /// header field exists for it at all. GitHub has no token-introspection
+    /// endpoint: a classic token gets its granted scopes echoed on every
+    /// response, and a fine-grained token or an App installation token gets no
+    /// header whatever. ⚠️ Absent and empty are therefore DIFFERENT answers,
+    /// "there is nothing here to tell you" against "this token was granted no
+    /// scopes", so this is `Option<String>` and never defaulted to `""`.
+    pub oauth_scopes: Option<String>,
 }
 
 /// Executes HTTP requests. The one seam between the verdict engine and the
@@ -268,6 +281,11 @@ impl Transport for ReqwestTransport {
         // Taken verbatim: see the fields' docs. An empty header is not a value.
         let etag = header("etag").filter(|s| !s.is_empty());
         let link = header("link").filter(|s| !s.is_empty());
+        // ⛔ NOT filtered on emptiness, unlike the two above: an empty
+        // `x-oauth-scopes` is a classic token with no scopes, which is a
+        // different answer from a fine-grained token that sends no header at
+        // all. See the field's documentation.
+        let oauth_scopes = header("x-oauth-scopes");
 
         let body = response
             .text()
@@ -283,6 +301,7 @@ impl Transport for ReqwestTransport {
             retry_after,
             etag,
             link,
+            oauth_scopes,
         })
     }
 }

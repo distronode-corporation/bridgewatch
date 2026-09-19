@@ -17,9 +17,9 @@
 //! store-level call to fall back to — the rejection is in the client layer.
 //! [`SystemTokenProvider::keyring_get`] therefore shells out:
 //!
-//! - **macOS**: `security find-generic-password -s <service> -w`. Verified to
-//!   return immediately with exit 44 and no GUI prompt for a service that does
-//!   not exist.
+//! - **macOS**: `security find-generic-password -s <service> -a "" -w`.
+//!   Verified to return immediately with exit 44 and no GUI prompt for a
+//!   service that does not exist.
 //! - **Linux**: `secret-tool lookup service <service> username ""`, when
 //!   `secret-tool` is on `PATH`. This mirrors the attributes `glab` writes;
 //!   it could not be verified from the macOS box this was written on, so it is
@@ -27,6 +27,18 @@
 //!
 //! Neither fallback runs unless `user` is empty, so the ordinary path is still
 //! the crate's.
+//!
+//! ⛔ **The service string is the only thing that is provider-specific here,
+//! and `-a ""` is why an empty user can be taken at its word.** `gh` writes
+//! TWO keychain items under `gh:github.com`: one whose account is the login,
+//! and one whose account is EMPTY, which is the *active account* slot
+//! `gh auth switch` moves. `security find-generic-password` **without `-a`**
+//! returns the named item, so `user = ""` against that service used to read the
+//! per-user slot rather than the active one, the same token today, and a
+//! different one the moment somebody switches accounts, with nothing to say
+//! which had been read. `go-keyring` itself passes `-a ""`; so does this now,
+//! which makes the empty user mean what the configuration says it means. glab
+//! writes only the empty-account item, so its lookup is unaffected.
 //!
 //! # The go-keyring envelope
 //!
@@ -514,10 +526,7 @@ pub fn decode_keyring_envelope(raw: &str) -> Result<String, TokenError> {
 /// will not address. Returns `None` when there is nothing there.
 fn empty_user_lookup(service: &str) -> Option<String> {
     #[cfg(target_os = "macos")]
-    let command = (
-        "security",
-        vec!["find-generic-password", "-s", service, "-w"],
-    );
+    let command = ("security", security_lookup_args(service));
     #[cfg(target_os = "linux")]
     let command = ("secret-tool", secret_tool_lookup_args(service));
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -537,6 +546,18 @@ fn empty_user_lookup(service: &str) -> Option<String> {
         .trim_end_matches(['\n', '\r'])
         .to_string();
     (!secret.is_empty()).then_some(secret)
+}
+
+/// `security`'s arguments for an empty-account lookup of `service`.
+///
+/// ⛔ `-a ""` is the whole point and it is not decoration: see the module
+/// documentation. Without it the lookup returns whichever item macOS finds
+/// first for the service, which for `gh` is the per-user one and not the active
+/// account it was asked for. Built on every platform so the argv is tested
+/// where the tests run and not only on macOS.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn security_lookup_args(service: &str) -> Vec<&str> {
+    vec!["find-generic-password", "-s", service, "-a", "", "-w"]
 }
 
 /// `secret-tool`'s arguments for an empty-username lookup of `service`.
@@ -644,7 +665,27 @@ pub fn clear_own_token(account: &str, provider: &dyn TokenProvider) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::secret_tool_lookup_args;
+    use super::{secret_tool_lookup_args, security_lookup_args};
+
+    /// ⛔ The empty ACCOUNT is asked for explicitly. `gh` keeps two items under
+    /// one service, the login's, and an empty-account copy that is the active
+    /// account, and a lookup with no `-a` returns the named one, so an empty
+    /// `user` silently read the wrong slot and would have diverged from it the
+    /// first time somebody ran `gh auth switch`.
+    #[test]
+    fn a_keychain_lookup_asks_for_the_empty_account_by_name() {
+        assert_eq!(
+            security_lookup_args("gh:github.com"),
+            [
+                "find-generic-password",
+                "-s",
+                "gh:github.com",
+                "-a",
+                "",
+                "-w"
+            ]
+        );
+    }
 
     /// Lo11: a service that looks like an option is fenced off with `--`, and
     /// an ordinary one is left exactly as it always was.

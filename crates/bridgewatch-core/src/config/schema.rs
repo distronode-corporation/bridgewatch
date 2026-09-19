@@ -57,9 +57,8 @@ pub enum Provider {
     /// GitLab CI, the provider bridgewatch was built for.
     #[default]
     Gitlab,
-    /// GitHub Actions. ⚠️ Accepted by the parser and refused by validation:
-    /// there is no GitHub client yet, so a configuration naming one is an
-    /// error rather than a silent no-op.
+    /// GitHub Actions. One workflow run is one pipeline, and the watch's
+    /// `workflow` key says which workflow.
     Github,
 }
 
@@ -94,6 +93,21 @@ impl Provider {
             Provider::Github => String::new(),
         }
     }
+
+    /// The header an account of this provider carries its token in when the
+    /// file does not say.
+    ///
+    /// ⚠️ GitHub reads a credential from `Authorization` and nowhere else, so
+    /// the GitLab default would make every GitHub account fail with a 401 until
+    /// its owner found the key. It is still an ERROR to write `PRIVATE-TOKEN`
+    /// on a GitHub account: defaulting is for the line nobody wrote, not for
+    /// overruling one somebody did.
+    pub fn default_header(&self) -> AuthHeader {
+        match self {
+            Provider::Gitlab => AuthHeader::PrivateToken,
+            Provider::Github => AuthHeader::AuthorizationBearer,
+        }
+    }
 }
 
 impl std::fmt::Display for Provider {
@@ -104,15 +118,15 @@ impl std::fmt::Display for Provider {
 
 /// One instance and the credential used against it.
 //
-// ⛔ `Deserialize` is hand-written (see the impl below), because `base_url` and
-// `api_path` default to something DIFFERENT per provider and a serde field
-// default cannot see a sibling field. Said in a plain comment rather than a doc
-// one: the doc comment becomes the key's description in the JSON Schema, which
-// is what the settings pane shows a user.
+// ⛔ `Deserialize` is hand-written (see the impl below), because `base_url`,
+// `api_path` and `header` default to something DIFFERENT per provider and a
+// serde field default cannot see a sibling field. Said in a plain comment
+// rather than a doc one: the doc comment becomes the key's description in the
+// JSON Schema, which is what the settings pane shows a user.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Account {
-    /// Which CI provider this account talks to. GitHub is not supported yet.
+    /// Which CI provider this account talks to: `gitlab` or `github`.
     #[serde(default)]
     pub provider: Provider,
     /// Instance root, without a trailing slash, e.g. `https://gitlab.com`.
@@ -126,7 +140,8 @@ pub struct Account {
     /// Where the token comes from. Never the token itself.
     #[serde(default)]
     pub token: TokenSource,
-    /// Which header carries the token.
+    /// Which header carries the token. Defaults per provider: `PRIVATE-TOKEN`,
+    /// or `Authorization: Bearer` for GitHub, which reads no other header.
     #[serde(default)]
     pub header: AuthHeader,
     /// Per-request timeout.
@@ -137,22 +152,44 @@ pub struct Account {
     pub rate_limit_backoff: RateLimitBackoff,
 }
 
+impl Account {
+    /// An account for `provider`, with that provider's three defaults.
+    ///
+    /// ⚠️ The reason this exists rather than being left to struct-update
+    /// syntax: `Account { provider: Provider::Github, ..Account::default() }`
+    /// compiles, reads as though it said what it means, and produces a GitHub
+    /// account pointed at `https://gitlab.com` with `/api/v4` and a
+    /// `PRIVATE-TOKEN` header, because the defaults were taken before the
+    /// provider was. Nothing in the file path can hit that (the hand-written
+    /// `Deserialize` fills the three together), so it is anything building an
+    /// account in code that needs this.
+    pub fn for_provider(provider: Provider) -> Self {
+        Self {
+            base_url: provider.default_base_url(),
+            api_path: provider.default_api_path(),
+            header: provider.default_header(),
+            provider,
+            ..Account::default()
+        }
+    }
+}
+
 impl Default for Account {
     fn default() -> Self {
         let provider = Provider::default();
         Self {
             base_url: provider.default_base_url(),
             api_path: provider.default_api_path(),
+            header: provider.default_header(),
             provider,
             token: TokenSource::default(),
-            header: AuthHeader::default(),
             timeout_secs: default_timeout_secs(),
             rate_limit_backoff: RateLimitBackoff::default(),
         }
     }
 }
 
-/// Read an account, filling the two provider-dependent defaults afterwards.
+/// Read an account, filling the three provider-dependent defaults afterwards.
 ///
 /// ⛔ A serde field default is a function of nothing: it cannot look at
 /// `provider`, which is why this is written out rather than derived. An
@@ -176,7 +213,7 @@ impl<'de> Deserialize<'de> for Account {
             #[serde(default)]
             token: TokenSource,
             #[serde(default)]
-            header: AuthHeader,
+            header: Option<AuthHeader>,
             #[serde(default = "default_timeout_secs")]
             timeout_secs: u64,
             #[serde(default)]
@@ -191,9 +228,11 @@ impl<'de> Deserialize<'de> for Account {
             api_path: repr
                 .api_path
                 .unwrap_or_else(|| repr.provider.default_api_path()),
+            header: repr
+                .header
+                .unwrap_or_else(|| repr.provider.default_header()),
             provider: repr.provider,
             token: repr.token,
-            header: repr.header,
             timeout_secs: repr.timeout_secs,
             rate_limit_backoff: repr.rate_limit_backoff,
         })
@@ -408,6 +447,11 @@ pub struct Watch {
     /// Ref pattern: exact (`main`), glob (`pf/*`) or regex (`re:^release/.*$`).
     #[serde(rename = "ref", default = "default_ref")]
     pub ref_pattern: String,
+    /// GitHub only: the one workflow this watch follows, as its file name
+    /// (`ci.yml`) or its numeric id. Absent or empty is every workflow, and
+    /// then the watch shows one row per run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
     /// Pipeline sources to accept. Empty means all of them.
     #[serde(default)]
     pub sources: Vec<String>,
@@ -455,6 +499,9 @@ impl Watch {
 }
 
 /// A project, addressed either by numeric id or by namespace path.
+///
+/// ⚠️ Which forms are usable depends on the account's provider: GitLab takes
+/// either, and GitHub takes only `owner/repo`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ProjectRef {
@@ -465,11 +512,34 @@ pub enum ProjectRef {
 }
 
 impl ProjectRef {
-    /// The path segment to interpolate into an API URL.
+    /// The path segment to interpolate into a GitLab API URL.
     pub fn url_segment(&self) -> String {
-        match self {
-            ProjectRef::Id(id) => id.to_string(),
-            ProjectRef::Path(p) => urlencoding::encode(p).into_owned(),
+        self.url_segment_for(Provider::Gitlab)
+    }
+
+    /// The path segment to interpolate into `provider`'s API URL.
+    ///
+    /// ⛔ **The slash is the difference, and it is easy to miss because both
+    /// forms look right.** GitLab's `/projects/{id}` takes one opaque segment,
+    /// so a path is percent-encoded whole into `group%2Fproject`. GitHub's
+    /// `/repos/{owner}/{repo}` is two segments, so its slash must survive;
+    /// encoding it gives a 404 that reads like a missing repository. Each
+    /// segment is still encoded on its own, so nothing can break out of one.
+    ///
+    /// A numeric id renders as itself for both, because a total function is
+    /// easier to reason about than one that can fail; GitHub has no
+    /// `/repos/<id>` endpoint, and it is
+    /// [`crate::config::validate`] and the GitHub client that refuse it, each
+    /// with a message saying what to write instead.
+    pub fn url_segment_for(&self, provider: Provider) -> String {
+        match (self, provider) {
+            (ProjectRef::Id(id), _) => id.to_string(),
+            (ProjectRef::Path(p), Provider::Gitlab) => urlencoding::encode(p).into_owned(),
+            (ProjectRef::Path(p), Provider::Github) => p
+                .split('/')
+                .map(|segment| urlencoding::encode(segment).into_owned())
+                .collect::<Vec<_>>()
+                .join("/"),
         }
     }
 }

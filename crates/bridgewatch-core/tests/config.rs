@@ -780,7 +780,10 @@ deploy_markers = ["deploy:origins"]
     assert!(says("log.level", "not a log level"), "{by_path:?}");
     assert!(says("ui.popover", "nothing to draw in"), "{by_path:?}");
     assert!(
-        says("watches.0.sources.1", "not a pipeline source"),
+        // ⚠ The vocabulary is named because it is the ACCOUNT's, not
+        // bridgewatch's: the same value can be a real source on one watch and
+        // nothing at all on the next one.
+        says("watches.0.sources.1", "not a GitLab pipeline source"),
         "{by_path:?}"
     );
     assert!(
@@ -1360,12 +1363,14 @@ fn an_explicit_gitlab_provider_means_exactly_the_default() {
     assert_eq!(account.api_path, "/api/v4");
 }
 
-/// ⛔ A GitHub account PARSES and is then refused. The value has to reach the
-/// typed config for the diagnostic to be able to name it, and the refusal has
-/// to be an error: there is no GitHub client, so loading the file would give a
-/// watch that silently shows nothing.
+/// A GitHub account loads, with nothing to say about it.
+///
+/// ⚠️ This replaced the phase 1 test that asserted validation REFUSED such a
+/// file, and it keeps that test's real assertion: that the ONLY diagnostic is
+/// the absence of one. GitHub's empty `api_path` is correct for github.com, and
+/// the api_path rule must not fire a second, misleading error about it.
 #[test]
-fn a_github_account_parses_and_validation_refuses_it() {
+fn a_github_account_loads_with_no_diagnostics_of_its_own() {
     let raw = r#"
 [accounts.gh]
 provider = "github"
@@ -1375,35 +1380,179 @@ token = { env = "TOK" }
 id = "x"
 account = "gh"
 project = "distronode-corporation/bridgewatch"
+workflow = "ci.yml"
+sources = ["push"]
+deploy_markers = ["publish"]
 "#;
-    let err = parse(raw).expect_err("GitHub is not implemented yet");
+    let loaded = parse(raw).expect("a GitHub account is an ordinary account now");
+    let account = &loaded.config.accounts["gh"];
+    assert_eq!(account.provider, Provider::Github);
+    assert_eq!(account.api_path, "");
+    assert_eq!(
+        account.header,
+        config::AuthHeader::AuthorizationBearer,
+        "the header nobody wrote follows the provider, because GitHub reads no other"
+    );
+    assert_eq!(loaded.config.watches[0].workflow.as_deref(), Some("ci.yml"));
+    assert_eq!(
+        loaded
+            .warnings
+            .iter()
+            .map(|w| w.path.as_str())
+            .collect::<Vec<_>>(),
+        Vec::<&str>::new(),
+        "{:?}",
+        loaded.warnings
+    );
+}
+
+/// ⛔ `PRIVATE-TOKEN` is GitLab's header and GitHub reads only `Authorization`,
+/// so an account that writes it sends a request GitHub sees no credential in
+/// and is answered 401, a well-formed request with the wrong header name,
+/// which is the failure that reads most like a bad or unscoped token. It is
+/// refused where the file can name the key instead.
+#[test]
+fn a_github_account_may_not_carry_gitlabs_token_header() {
+    let raw = r#"
+[accounts.gh]
+provider = "github"
+header = "PRIVATE-TOKEN"
+token = { env = "TOK" }
+
+[[watches]]
+id = "x"
+account = "gh"
+project = "acme-corp/monorepo"
+deploy_markers = ["publish"]
+"#;
+    let err = parse(raw).expect_err("GitHub ignores that header");
     let config::ConfigError::Invalid { diagnostics, .. } = err else {
         panic!("expected Invalid, got {err}");
     };
-
-    let provider_errors: Vec<&config::Diagnostic> = diagnostics
-        .iter()
-        .filter(|d| d.severity == Severity::Error && d.path == "accounts.gh.provider")
-        .collect();
-    assert_eq!(provider_errors.len(), 1, "{diagnostics:?}");
-    assert!(
-        provider_errors[0].message.contains("not implemented yet"),
-        "the message says why rather than how: {}",
-        provider_errors[0].message
-    );
-    assert!(
-        provider_errors[0].line_col(raw).is_some(),
-        "the diagnostic points at the provider line"
-    );
-
-    // ⚠ And it is the ONLY error. GitHub's empty `api_path` is right for
-    // github.com, so the api_path rule must not fire a second, misleading one.
-    let paths: Vec<&str> = diagnostics
+    let errors: Vec<&config::Diagnostic> = diagnostics
         .iter()
         .filter(|d| d.severity == Severity::Error)
-        .map(|d| d.path.as_str())
         .collect();
-    assert_eq!(paths, ["accounts.gh.provider"], "{diagnostics:?}");
+    assert_eq!(errors.len(), 1, "{diagnostics:?}");
+    assert_eq!(errors[0].path, "accounts.gh.header");
+    assert!(
+        errors[0].message.contains("Authorization: Bearer"),
+        "the message says what to write: {}",
+        errors[0].message
+    );
+    assert!(
+        errors[0].line_col(raw).is_some(),
+        "and points at the header line"
+    );
+}
+
+/// ⛔ GitHub has no endpoint for a numeric repository id, so a watch naming one
+/// can never resolve. It is nearly always a GitLab project id left behind by
+/// moving a watch from one account to the other, which is exactly the mistake
+/// worth catching in the file rather than in a 404.
+#[test]
+fn a_numeric_project_on_a_github_watch_is_an_error() {
+    let raw = r#"
+[accounts.gh]
+provider = "github"
+token = { env = "TOK" }
+
+[[watches]]
+id = "x"
+account = "gh"
+project = 82468124
+deploy_markers = ["publish"]
+"#;
+    let err = parse(raw).expect_err("there is no /repos/<id>");
+    let config::ConfigError::Invalid { diagnostics, .. } = err else {
+        panic!("expected Invalid, got {err}");
+    };
+    let errors: Vec<&config::Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert_eq!(errors.len(), 1, "{diagnostics:?}");
+    assert_eq!(errors[0].path, "watches.0.project");
+    assert!(
+        errors[0].message.contains("owner/repo"),
+        "the message says what to write: {}",
+        errors[0].message
+    );
+}
+
+/// Cross-provider keys are WARNINGS, so a watch moved between accounts still
+/// loads and says what stopped meaning anything.
+#[test]
+fn keys_that_belong_to_the_other_provider_warn_rather_than_refuse() {
+    let raw = r#"
+[accounts.gl]
+token = { env = "TOK" }
+
+[accounts.gh]
+provider = "github"
+token = { env = "TOK" }
+
+[[watches]]
+id = "on-gitlab"
+account = "gl"
+role = "secondary"
+project = 1
+workflow = "ci.yml"
+
+[[watches]]
+id = "on-github"
+account = "gh"
+project = "acme-corp/monorepo"
+sources = ["merge_request_event"]
+dive = { bridges = "deploy*", depth = 2 }
+deploy_markers = ["publish"]
+"#;
+    let loaded = parse(raw).expect("every one of these is a warning");
+    let said: Vec<(&str, &str)> = loaded
+        .warnings
+        .iter()
+        .map(|w| (w.path.as_str(), w.message.as_str()))
+        .collect();
+    let says =
+        |path: &str, needle: &str| said.iter().any(|(p, m)| *p == path && m.contains(needle));
+
+    assert!(
+        says("watches.0.workflow", "ignored on a GitLab"),
+        "{said:?}"
+    );
+    assert!(
+        says("watches.1.sources.0", "not a GitHub workflow event"),
+        "a GitLab source name on a GitHub watch is answered 200 with an empty \
+         list, so nothing else would ever say it: {said:?}"
+    );
+    assert!(says("watches.1.dive.depth", "no nested runs"), "{said:?}");
+    assert!(says("watches.1.dive", "none to select"), "{said:?}");
+}
+
+/// ⚠ And the default `dive` is left alone. `bridges` defaults to `"*"`, and an
+/// explicitly written `"*"` cannot be told from the default once the file is
+/// parsed, so warning on the value would put a line under every GitHub watch
+/// ever written, including the ones that never mentioned `dive` at all.
+#[test]
+fn a_github_watch_that_never_mentioned_dive_is_not_warned_about() {
+    let raw = r#"
+[accounts.gh]
+provider = "github"
+token = { env = "TOK" }
+
+[[watches]]
+id = "x"
+account = "gh"
+project = "acme-corp/monorepo"
+sources = ["push", "workflow_dispatch", "dynamic"]
+deploy_markers = ["publish"]
+"#;
+    let loaded = parse(raw).expect("loads");
+    assert!(
+        loaded.warnings.is_empty(),
+        "a plain GitHub watch has nothing wrong with it: {:?}",
+        loaded.warnings
+    );
 }
 
 /// The two defaults that follow the provider. Read off the deserialiser, since

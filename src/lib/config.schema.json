@@ -77,12 +77,12 @@
           "default": "https://gitlab.com"
         },
         "header": {
-          "description": "Which header carries the token.",
+          "description": "Which header carries the token. Defaults per provider: `PRIVATE-TOKEN`,\nor `Authorization: Bearer` for GitHub, which reads no other header.",
           "$ref": "#/$defs/AuthHeader",
           "default": "PRIVATE-TOKEN"
         },
         "provider": {
-          "description": "Which CI provider this account talks to. GitHub is not supported yet.",
+          "description": "Which CI provider this account talks to: `gitlab` or `github`.",
           "$ref": "#/$defs/Provider",
           "default": "gitlab"
         },
@@ -392,7 +392,7 @@
       "additionalProperties": false
     },
     "ProjectRef": {
-      "description": "A project, addressed either by numeric id or by namespace path.",
+      "description": "A project, addressed either by numeric id or by namespace path.\n\n⚠️ Which forms are usable depends on the account's provider: GitLab takes\neither, and GitHub takes only `owner/repo`.",
       "anyOf": [
         {
           "description": "Numeric project id, the cheapest and most stable form.",
@@ -415,7 +415,7 @@
           "const": "gitlab"
         },
         {
-          "description": "GitHub Actions. ⚠️ Accepted by the parser and refused by validation:\nthere is no GitHub client yet, so a configuration naming one is an\nerror rather than a silent no-op.",
+          "description": "GitHub Actions. One workflow run is one pipeline, and the watch's\n`workflow` key says which workflow.",
           "type": "string",
           "const": "github"
         }
@@ -706,6 +706,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "workflow": {
+          "description": "GitHub only: the one workflow this watch follows, as its file name\n(`ci.yml`) or its numeric id. Absent or empty is every workflow, and\nthen the watch shows one row per run.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
