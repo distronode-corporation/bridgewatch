@@ -411,6 +411,27 @@ describe("TokenField, sign in", () => {
     expect(host.textContent).toContain("Signed in as @octocat.");
   });
 
+  it("switches an account that used another source to the sign-in once it succeeds", async () => {
+    const oauth = fake(true);
+    const edits = await renderWith(oauth, { keyring: { service: "gh:github.com", user: "" } });
+    await pick("oauth");
+    expect(edits).toEqual([]);
+    oauth.status.mockResolvedValue(SIGNED_IN);
+    await press('[data-action="oauth-sign-in"]');
+    expect(edits).toHaveLength(1);
+    expect(edits[0]).toContainEqual({ op: "unset", path: "accounts.gh.token.keyring" });
+    expect(edits[0]).toContainEqual({ op: "set", path: "accounts.gh.token.oauth", value: { boolean: true } });
+    expect(host.textContent).toContain("Signed in as @octocat. This account now uses the sign-in.");
+  });
+
+  it("does not rewrite the file when the account already signs in", async () => {
+    const oauth = fake(true);
+    const edits = await renderWith(oauth, { oauth: true });
+    oauth.status.mockResolvedValue(SIGNED_IN);
+    await press('[data-action="oauth-sign-in"]');
+    expect(edits).toEqual([]);
+  });
+
   it("shows the stored sign-in, signs out, and links the app's install page", async () => {
     const oauth = fake(true, SIGNED_IN);
     await renderWith(oauth, { oauth: true });

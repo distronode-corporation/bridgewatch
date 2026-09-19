@@ -348,12 +348,16 @@
           request={() => ({ account, provider, base_url: instance, client_id: clientId.trim() || null })}
           label={status ? "Sign in again" : undefined}
           onsignedin={(signed) => {
-            // Signing in stores the tokens; the FILE still names whatever source
-            // it named until "Use this source" writes `oauth`.
-            message =
-              current.kind === "oauth"
-                ? `Signed in as @${signed.login ?? "unknown"}.`
-                : `Signed in as @${signed.login ?? "unknown"}. Press "Use this source" to switch this account to it.`;
+            // Signing in stores the tokens, and pressing Sign in on this option
+            // is the choice itself, so the account is switched to it in the same
+            // step. It used to wait for "Use this source", and a real sign-in
+            // on 2026-09-19 left both accounts reading their old source with a
+            // stored sign-in nobody used.
+            const switching = current.kind !== "oauth";
+            if (switching) chooseOauth();
+            message = switching
+              ? `Signed in as @${signed.login ?? "unknown"}. This account now uses the sign-in.`
+              : `Signed in as @${signed.login ?? "unknown"}.`;
             void loadStatus();
           }}
         />
