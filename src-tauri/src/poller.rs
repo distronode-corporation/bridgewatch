@@ -235,8 +235,42 @@ pub fn set_icon(app: &AppHandle, icon_state: IconState) {
         tracing::warn!("the tray icon is gone; nothing to set");
         return;
     };
+    set_tooltip(&tray, icon_state);
     apply_icon(&tray, &LAST_ICON, drawable, std::time::Instant::now());
 }
+
+/// The state the tooltip currently names.
+///
+/// ⚠ Deliberately not folded into [`IconMemo`]: two states can share one image,
+/// because a glyph that does not draw falls back to the unknown one, and the
+/// tooltip has to follow the STATE rather than the picture.
+#[cfg(not(target_os = "linux"))]
+static LAST_TOOLTIP: std::sync::Mutex<Option<IconState>> = std::sync::Mutex::new(None);
+
+/// Name the current state in the tray's tooltip: "bridgewatch: deployed".
+///
+/// Cheap because it runs where the icon is swapped, so it costs a main-thread
+/// hop per genuine state change rather than one per tick.
+///
+/// ⛔ Nothing on Linux: tauri 2.11.5 documents `set_tooltip` as "**Linux:**
+/// Unsupported" and tray-icon 0.24.2's GTK backend is a bare `Ok(())`, so the
+/// call would change nothing. Linux has no lever at all for this; the doc on
+/// `TRAY_LABEL` in tray.rs says why.
+#[cfg(not(target_os = "linux"))]
+fn set_tooltip(tray: &tauri::tray::TrayIcon, icon_state: IconState) {
+    let mut last = LAST_TOOLTIP.lock().unwrap_or_else(|e| e.into_inner());
+    if *last == Some(icon_state) {
+        return;
+    }
+    match tray.set_tooltip(Some(format!("bridgewatch: {icon_state}"))) {
+        // Not remembered on failure, so the next state change tries again.
+        Ok(()) => *last = Some(icon_state),
+        Err(e) => tracing::warn!(error = %e, "could not set the tray tooltip"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn set_tooltip(_tray: &tauri::tray::TrayIcon, _icon_state: IconState) {}
 
 /// Where a tray image goes. The real one is the Tauri tray; tests use a fake.
 pub trait TraySink {

@@ -15,6 +15,59 @@ use bridgewatch_core::config::{self, Config};
 use bridgewatch_core::poll::Poller;
 use bridgewatch_core::token::Secret;
 
+/// Everything a scoped subscriber wrote.
+#[derive(Clone, Default)]
+pub struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    /// What has been written so far.
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap_or_else(|e| e.into_inner())).into_owned()
+    }
+}
+
+/// Run `f` with everything logged at `level` or louder captured, and nothing
+/// installed globally.
+///
+/// ⚠ `with_default` is thread-scoped, so anything asynchronous has to be
+/// POLLED inside the closure: a subscriber set here and a `block_on` outside it
+/// would capture nothing, and the assertions would read as a missing log line
+/// rather than as a broken harness.
+pub fn with_log<T>(level: tracing::Level, f: impl FnOnce() -> T) -> (T, String) {
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let out = tracing::subscriber::with_default(subscriber, f);
+    (out, captured.text())
+}
+
+/// A current-thread runtime, for a test that has to drive a future inside
+/// [`with_log`] rather than under `#[tokio::test]`.
+pub fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+}
+
 /// The repository's `examples/distronode.toml`, which is also the shipped example.
 pub fn example_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

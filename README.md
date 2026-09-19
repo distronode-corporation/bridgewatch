@@ -527,6 +527,11 @@ Verdict codes and error codes never overlap, so a script can tell a red pipeline
 typo in its own command line. For `check` and `watch` the code is the tray icon's state,
 that is the worst state among the primary watches.
 
+`--watch <id>` makes the watches you name the subject, so when none of them is primary
+the code is the worst state among **all** of them: `check --watch hourly` on a failed
+schedule exits 1, not 4. Name a primary watch alongside and the tray rule applies again,
+because a secondary watch must not be able to outvote a primary one.
+
 ```
   0   check/watch: deployed or succeeded_no_deploy; any other command: success
   1   check/watch: failed; fixture scrub --check: a fixture would change

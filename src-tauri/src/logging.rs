@@ -67,26 +67,50 @@ pub fn apply_config_level(level: &str) {
     }
 }
 
-/// The one info line logged at startup: which file, and what it asks for.
+/// The filter directive in force, for the config-loaded line to quote.
+///
+/// [`CURRENT`] is empty exactly when `RUST_LOG` decided at startup, in which
+/// case the variable itself is the honest answer: [`HANDLE`] was never set, so
+/// nothing this program does can change the level for the rest of the run.
+pub fn current_directive() -> String {
+    let current = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if !current.is_empty() {
+        return current;
+    }
+    match std::env::var("RUST_LOG") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => directive(None, None),
+    }
+}
+
+/// The one info line logged at startup: which file, what it asks for, and how
+/// loud the program will be.
 pub fn startup_line(resolved: &crate::config::Resolved) -> String {
-    let path = resolved.path.display();
     let seeded = if resolved.seeded {
         " (seeded from the example)"
     } else {
         ""
     };
-    match &resolved.loaded {
-        Some(l) => format!(
-            "bridgewatch {} using {path}{seeded}: {} watch(es), {} account(s)",
+    config_line(
+        &format!(
+            "bridgewatch {} using {}{seeded}",
             env!("CARGO_PKG_VERSION"),
-            l.config.watches.len(),
-            l.config.account_count()
+            resolved.path.display()
         ),
-        None => format!(
-            "bridgewatch {} using {path}{seeded}: the file does not load, nothing is watched",
-            env!("CARGO_PKG_VERSION")
-        ),
-    }
+        resolved.loaded.as_ref().map(|l| &l.config),
+    )
+}
+
+/// The info line for a configuration that has just been read, from whichever
+/// read it was.
+///
+/// ⚠ A reload logs the same shape as the startup line on purpose. `info` is
+/// the level for "a person is debugging why the tray is wrong", and the first
+/// question is always which file is in force and what is in it, an answer that
+/// has to survive the wizard writing the file after startup, and every hot
+/// reload after that.
+pub fn config_line(head: &str, config: Option<&bridgewatch_core::config::Config>) -> String {
+    bridgewatch_core::config::describe_load(head, config, &current_directive())
 }
 
 #[cfg(test)]
