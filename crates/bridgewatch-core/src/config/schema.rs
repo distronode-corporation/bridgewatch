@@ -65,6 +65,12 @@ pub enum Provider {
 }
 
 impl Provider {
+    /// Whether this is GitLab, the default. A serde `skip_serializing_if`
+    /// predicate, which is why it takes a reference.
+    pub fn is_gitlab(&self) -> bool {
+        *self == Provider::Gitlab
+    }
+
     /// The config spelling, `gitlab` or `github`.
     pub fn as_str(&self) -> &'static str {
         match self {

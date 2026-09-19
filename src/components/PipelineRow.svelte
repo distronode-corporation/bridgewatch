@@ -12,7 +12,7 @@
     stateWord,
   } from "../lib/format";
   import { openExternal } from "../lib/ipc";
-  import type { BridgeView, JobsMode, PipelineView } from "../lib/types";
+  import type { BridgeView, JobsMode, PipelineView, Provider } from "../lib/types";
   import { PipelineJobs, defaultExpanded, type ExpansionStore } from "./jobs";
   import Link from "./Link.svelte";
 
@@ -24,11 +24,13 @@
     collapsed?: boolean;
     /** Which jobs an expanded row lists: the watch's effective `jobs` mode. */
     mode?: JobsMode;
+    /** The watch's provider, which decides what a bridge is called. */
+    provider?: Provider;
     /** Bridge open/closed choices, one store per window so a poll keeps them. */
     expansion: ExpansionStore;
   }
 
-  let { row, now, collapsed = false, mode = "all", expansion }: Props = $props();
+  let { row, now, collapsed = false, mode = "all", provider = "gitlab", expansion }: Props = $props();
 
   /**
    * A bridge nobody has toggled: open while its pipeline is live (the job
@@ -114,6 +116,7 @@
         pipeline={row}
         {expansion}
         {mode}
+        {provider}
         {now}
         isDefaultOpen={openByDefault}
         onOpen={(url) => void openExternal(url)}

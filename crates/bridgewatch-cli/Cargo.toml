@@ -1,6 +1,6 @@
 [package]
 name = "bridgewatch-cli"
-description = "Command-line bridgewatch: bridge-aware GitLab CI verdicts, config tooling and fixture recording. Install with cargo install."
+description = "Command-line bridgewatch: bridge-aware GitLab CI and GitHub Actions verdicts, config tooling and fixture recording. Install with cargo install."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

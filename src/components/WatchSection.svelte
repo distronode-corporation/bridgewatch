@@ -24,6 +24,8 @@
   // The core resolves the effective mode (`show.jobs`, else `ui.jobs`); a
   // recording made before the key existed has none, which means "all".
   const mode = $derived(watch.jobs ?? "all");
+  // Absent means GitLab: the core omits the key for it, so its JSON is unchanged.
+  const provider = $derived(watch.provider ?? "gitlab");
 </script>
 
 <section class="watch border-border border-b last:border-b-0" data-watch={watch.id} data-role={watch.role}>
@@ -65,7 +67,7 @@
     <!-- A collapsed secondary watch still shows its newest row: hiding it
          entirely would leave a header with no information in it at all. -->
     {#if expanded || index === 0}
-      <PipelineRow {row} {now} {mode} {expansion} collapsed={!expanded} />
+      <PipelineRow {row} {now} {mode} {provider} {expansion} collapsed={!expanded} />
     {/if}
   {/each}
 </section>

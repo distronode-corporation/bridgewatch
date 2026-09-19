@@ -13,7 +13,7 @@ pub use planner::{PipelinePlan, Plan};
 pub use policy::{MAX_RETRY_AFTER, POLL_NOW_MIN_GAP, PollNow, PollPolicy};
 
 use crate::client::{CiClient, ClientError, ListQuery, RequestRing};
-use crate::config::{Config, JobsMode, ProjectRef, Role, Watch, WatchRules};
+use crate::config::{Config, JobsMode, ProjectRef, Provider, Role, Watch, WatchRules};
 use crate::model::{Bridge, Pipeline, PipelineDetail};
 use crate::notify::{Notification, NotifyLedger, notifications_for};
 use crate::verdict::{
@@ -39,6 +39,9 @@ struct WatchState {
     policy: PollPolicy,
     /// `show.jobs` resolved against `ui.jobs`, once, at build time.
     jobs_mode: JobsMode,
+    /// The watch's account's provider, carried into every view. An unknown
+    /// account reads as GitLab, the default; that watch shows an error anyway.
+    provider: Provider,
     last_bridges: HashMap<u64, Vec<Bridge>>,
     /// The last view this watch produced.
     ///
@@ -89,6 +92,11 @@ impl Poller {
                         .unwrap_or_default(),
                 ),
                 jobs_mode: watch.effective_jobs(&config.ui),
+                provider: config
+                    .accounts
+                    .get(&watch.account)
+                    .map(|a| a.provider)
+                    .unwrap_or_default(),
                 watch: watch.clone(),
                 cache: PipelineCache::new(),
                 last_bridges: HashMap::new(),
@@ -189,6 +197,7 @@ impl Poller {
                     rows: Vec::new(),
                     error: Some(format!("unknown account {:?}", state.watch.account)),
                     jobs: state.jobs_mode,
+                    provider: state.provider,
                 });
                 continue;
             };
@@ -354,6 +363,7 @@ async fn poll_watch(
                     rows: Vec::new(),
                     error: Some(e.to_string()),
                     jobs: state.jobs_mode,
+                    provider: state.provider,
                 },
             };
         }
@@ -432,6 +442,7 @@ async fn poll_watch(
         rows: views,
         error,
         jobs: state.jobs_mode,
+        provider: state.provider,
     }
 }
 

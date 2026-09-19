@@ -120,6 +120,12 @@ export interface WatchView {
    * optional only for older recordings, where absent means `"all"`.
    */
   jobs?: JobsMode;
+  /**
+   * The provider of the watch's account. The core sends it only for GitHub,
+   * so a GitLab watch's JSON is byte-identical to before the key existed:
+   * absent means `"gitlab"`.
+   */
+  provider?: Provider;
 }
 
 export interface RequestLog {

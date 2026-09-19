@@ -18,7 +18,7 @@ pub use icon::{IconState, PipelineFacts};
 pub use script::{ScriptError, VerdictScript};
 
 use crate::client::RequestLog;
-use crate::config::{JobsMode, Role, Watch, WatchRules};
+use crate::config::{JobsMode, Provider, Role, Watch, WatchRules};
 use crate::model::{Bridge, Job, PipelineDetail};
 use crate::status::JobClass;
 
@@ -206,6 +206,15 @@ pub struct WatchView {
     /// Every job is in the rows either way; this only says which to draw.
     #[serde(default)]
     pub jobs: JobsMode,
+    /// The provider of the watch's account, so the frontend can word a bridge
+    /// honestly: on GitHub a bridge is a workflow run, not a GitLab trigger
+    /// job with a child pipeline.
+    ///
+    /// Omitted for GitLab (and defaulted back on read) so a GitLab watch
+    /// serialises exactly as it did before this field existed: `check --json`
+    /// and every recorded snapshot are a committed-bytes contract.
+    #[serde(default, skip_serializing_if = "Provider::is_gitlab")]
+    pub provider: Provider,
 }
 
 impl WatchView {

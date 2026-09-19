@@ -102,7 +102,7 @@ type Outcome = std::result::Result<i32, Failure>;
 #[command(
     name = "bridgewatch",
     version,
-    about = "Bridge-aware GitLab CI monitor: walks trigger jobs into child pipelines and derives a deploy verdict.",
+    about = "Bridge-aware monitor for GitLab CI and GitHub Actions: walks each bridge (a trigger job, or one workflow run of a push) into its jobs and derives a deploy verdict.",
     long_about = None,
     after_help = exit::HELP,
 )]

@@ -1415,6 +1415,26 @@ fn a_github_config_writes_provider_and_lets_the_three_defaults_apply() {
     assert_eq!(again.toml, built.toml);
 }
 
+/// A GitHub schedule watch shows one row per run, which has no bridges for
+/// `only_when` to filter, so the wizard leaves it out; the GitLab schedule watch
+/// keeps it (pinned in the test that builds one).
+#[test]
+fn a_github_schedule_watch_is_written_without_only_when() {
+    let built = wizard::build_config(
+        &WizardAnswers {
+            schedule_watch: true,
+            ..gh_answers()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(!built.toml.contains("only_when"), "{}", built.toml);
+    let c = load(&built.toml);
+    let schedule = &c.watches[1];
+    assert_eq!(schedule.sources, ["schedule"]);
+    assert_eq!(schedule.dive.only_when, None);
+}
+
 /// ⛔ The one check that matters most: the text the wizard shows for review
 /// loads with NO errors and NO warnings of its own.
 #[test]

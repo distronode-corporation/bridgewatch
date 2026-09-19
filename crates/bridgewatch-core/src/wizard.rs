@@ -1839,12 +1839,13 @@ pub fn build_config(
                 Role::Secondary,
             )?;
             // Stays cheap until something breaks, as the shipped example does.
-            // ⚠️ `only_when` is a bridge filter, so on GitHub it selects nothing
-            // and costs nothing: a run has no bridges to dive into yet. It is
-            // written anyway, because it is the value that becomes right the
-            // day a watch folds a commit's runs into one row, and
-            // `config::validate` does not warn about it.
-            watch.dive.only_when = Some("failed".into());
+            // Not on a GitHub watch that shows one row per run: `only_when` is a
+            // bridge filter, a run has no bridges, and `config::validate` warns
+            // about it there, so writing it would hand the user a warning for a
+            // line they never typed. The GitLab watch is written as it always was.
+            if answers.provider == Provider::Gitlab || !watch.group.is_run() {
+                watch.dive.only_when = Some("failed".into());
+            }
             apply_poll_defaults(&mut watch, answers);
             new_watches.push(watch);
         }

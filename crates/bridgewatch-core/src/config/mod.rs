@@ -749,6 +749,18 @@ pub fn validate(config: &Config) -> Vec<Diagnostic> {
                      commit's several runs into one row, where dive selects workflow names",
                 ));
             }
+            // Separate from the warning above because `only_when` has no
+            // default to be confused with: any value on a run watch was
+            // written by someone, and it can never select anything.
+            if watch.group.is_run() && watch.dive.only_when.is_some() {
+                out.push(Diagnostic::warning(
+                    format!("{base}.dive.only_when"),
+                    "only_when restricts diving to trigger jobs in a given state, and this \
+                     watch has none: one workflow run is one row, and its jobs are always \
+                     listed. Remove it, or set group = \"commit\" to fold a commit's several \
+                     runs into one row, where only_when selects workflows by their state",
+                ));
+            }
             if watch.group.is_run() && watch.fan_out_secs.is_some() {
                 out.push(Diagnostic::warning(
                     format!("{base}.fan_out_secs"),

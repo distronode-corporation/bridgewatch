@@ -1607,6 +1607,68 @@ deploy_markers = ["publish"]
     assert!(says("watches.1.dive", "none to select"), "{said:?}");
 }
 
+/// `dive.only_when` on a GitHub watch that shows one row per run can never
+/// select anything, so it is said; on a commit group, where each run is a
+/// bridge, and on GitLab it is a real filter and nothing is said.
+#[test]
+fn only_when_on_a_github_run_watch_warns_and_nowhere_else() {
+    let raw = r#"
+[accounts.gl]
+token = { env = "TOK" }
+
+[accounts.gh]
+provider = "github"
+token = { env = "TOK" }
+
+[[watches]]
+id = "gitlab-schedule"
+account = "gl"
+role = "secondary"
+project = 1
+sources = ["schedule"]
+dive = { only_when = "failed" }
+
+[[watches]]
+id = "github-run"
+account = "gh"
+project = "acme-corp/monorepo"
+role = "secondary"
+dive = { only_when = "failed" }
+
+[[watches]]
+id = "github-commit"
+account = "gh"
+project = "acme-corp/monorepo"
+role = "secondary"
+group = "commit"
+dive = { only_when = "failed" }
+"#;
+    let loaded = parse(raw).expect("a warning, not an error");
+    let said: Vec<(&str, &str)> = loaded
+        .warnings
+        .iter()
+        .map(|w| (w.path.as_str(), w.message.as_str()))
+        .collect();
+    assert_eq!(
+        said.iter()
+            .filter(|(p, _)| p.contains("only_when"))
+            .map(|(p, _)| *p)
+            .collect::<Vec<_>>(),
+        ["watches.1.dive.only_when"],
+        "{said:?}"
+    );
+    let (_, message) = said
+        .iter()
+        .find(|(p, _)| *p == "watches.1.dive.only_when")
+        .unwrap();
+    assert!(message.contains("group = \"commit\""), "{message}");
+    // The broader dive warning is for bridges/exclude; it does not fire here.
+    assert!(
+        !said.iter().any(|(p, _)| *p == "watches.1.dive"),
+        "{said:?}"
+    );
+}
+
 /// ⚠ And the default `dive` is left alone. `bridges` defaults to `"*"`, and an
 /// explicitly written `"*"` cannot be told from the default once the file is
 /// parsed, so warning on the value would put a line under every GitHub watch

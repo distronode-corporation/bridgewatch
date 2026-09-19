@@ -11,6 +11,12 @@
    * the status the core sends, not on a provider flag, so the GitLab wording
    * is untouched.
    *
+   * Any other bridge on a GitHub watch is a workflow run in a commit group. It
+   * has no separate trigger job: the core sets both `web_url` and `child_url`
+   * to the run's page, so it gets ONE link, "workflow run", and words that do
+   * not name GitLab. The provider comes from the watch (`WatchView.provider`),
+   * because nothing on the bridge itself says which kind it is.
+   *
    * Open/closed lives in the `expansion` store, keyed by pipeline id + bridge
    * name, so a snapshot refresh that replaces `bridge` with a new object does
    * not collapse it.
@@ -19,7 +25,7 @@
 
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
   import { bridgeTone, bridgeWord } from "../../lib/format";
-  import type { BridgeView, JobsMode } from "../../lib/types";
+  import type { BridgeView, JobsMode, Provider } from "../../lib/types";
   import JobList from "./JobList.svelte";
   import { TONE_DOT, TONE_TEXT, filterJobs, type ExpansionStore } from "./jobs";
 
@@ -30,17 +36,21 @@
     /** Open state for a bridge the user never toggled. */
     defaultOpen?: boolean;
     mode?: JobsMode;
+    /** The watch's provider. Absent means GitLab. */
+    provider?: Provider;
     onOpen: (url: string) => void;
     /** See JobList: an external clock, or omit to let the list tick itself. */
     now?: number;
   }
 
-  let { bridge, pipelineId, expansion, defaultOpen = false, mode = "all", onOpen, now }: Props = $props();
+  let { bridge, pipelineId, expansion, defaultOpen = false, mode = "all", provider = "gitlab", onOpen, now }: Props =
+    $props();
 
   const open = $derived(expansion.isOpen(pipelineId, bridge.name, defaultOpen));
   const tone = $derived(bridgeTone(bridge.verdict));
   const shownCount = $derived(filterJobs(bridge.jobs, mode).length);
   const neverStarted = $derived(bridge.status === "never_started");
+  const workflowRun = $derived(provider === "github" && !neverStarted);
   const bodyId = $derived(`bridge-${pipelineId}-${bridge.name.replace(/[^A-Za-z0-9_-]/g, "_")}`);
 
   function openUrl(event: MouseEvent, url: string | null) {
@@ -82,7 +92,18 @@
          name sits in a button, and an anchor nested in a button is neither
          valid nor reachable by keyboard. A bridge with no `web_url` gets no
          link rather than a dead one; its name is already plain text above. -->
-    {#if bridge.web_url}
+    {#if workflowRun}
+      {#if bridge.web_url ?? bridge.child_url}
+        <a
+          href={bridge.web_url ?? bridge.child_url}
+          class="text-muted-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm text-[11px] outline-none hover:underline focus-visible:ring-2"
+          title="the workflow run"
+          aria-label={`Open workflow run ${bridge.name}`}
+          data-slot="bridge-run-link"
+          onclick={(event) => openUrl(event, bridge.web_url ?? bridge.child_url)}>workflow run</a
+        >
+      {/if}
+    {:else if bridge.web_url}
       <a
         href={bridge.web_url}
         class="text-muted-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm text-[11px] outline-none hover:underline focus-visible:ring-2"
@@ -92,7 +113,9 @@
         onclick={(event) => openUrl(event, bridge.web_url)}>{neverStarted ? "workflow" : "job"}</a
       >
     {/if}
-    {#if bridge.child_url}
+    {#if workflowRun}
+      <!-- The run link above is the whole story: its child is itself. -->
+    {:else if bridge.child_url}
       <a
         href={bridge.child_url}
         class="text-muted-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm text-[11px] outline-none hover:underline focus-visible:ring-2"
@@ -112,6 +135,8 @@
   <Collapsible.Content id={bodyId} class="pt-0.5 pb-1 pl-5">
     {#if neverStarted}
       <p class="text-muted-foreground px-1 text-xs">Expected workflow did not run.</p>
+    {:else if workflowRun && !bridge.dived}
+      <p class="text-muted-foreground px-1 text-xs">Workflow run not inspected.</p>
     {:else if !bridge.dived}
       <!-- `dived: false` means nobody looked, NOT that the child had no jobs. -->
       <p class="text-muted-foreground px-1 text-xs">Child pipeline not inspected.</p>

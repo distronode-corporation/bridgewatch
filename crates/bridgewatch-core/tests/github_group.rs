@@ -433,6 +433,9 @@ async fn a_push_that_fans_out_into_three_workflows_is_one_row_that_deployed_with
     assert_eq!(row["bridges"][2]["verdict"], "failed");
     assert_eq!(row["bridges"][1]["child_id"], 4102);
     assert_eq!(row["parent_jobs"], serde_json::json!([]));
+    // The watch says it is GitHub, which is how the job view knows each bridge
+    // is a workflow run and not a GitLab trigger job with a child pipeline.
+    assert_eq!(json["watches"][0]["provider"], "github");
 }
 
 /// And `sibling_failure = "fail"` turns the same push red, exactly as it would

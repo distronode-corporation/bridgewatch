@@ -1,6 +1,6 @@
 [package]
 name = "bridgewatch-core"
-description = "Bridge-aware GitLab CI pipeline model, verdict engine and poller. No GUI dependencies."
+description = "Bridge-aware GitLab CI and GitHub Actions pipeline model, verdict engine and poller. No GUI dependencies."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

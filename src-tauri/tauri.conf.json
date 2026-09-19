@@ -76,7 +76,7 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "Bridge-aware GitLab CI tray monitor",
+    "shortDescription": "Bridge-aware tray monitor for GitLab CI and GitHub Actions",
     "longDescription": "bridgewatch walks GitLab trigger jobs into their child pipelines and derives a deploy verdict, so the tray can say \"deployed, and the android bridge failed\" instead of a flat red.",
     "copyright": "Copyright (c) 2026 Distronode Corporation",
     "licenseFile": "../LICENSE",

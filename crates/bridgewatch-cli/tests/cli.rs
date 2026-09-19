@@ -385,6 +385,9 @@ fn help_and_version_exit_zero_and_help_documents_every_code() {
         );
     }
     assert!(help.contains("unknown"), "{help}");
+    // The one-line description names both providers, not GitLab alone.
+    let first = help.lines().next().unwrap_or_default();
+    assert!(first.contains("GitLab CI and GitHub Actions"), "{first}");
 
     let out = run(bin().arg("--version"));
     assert_eq!(code(&out), 0);
@@ -685,6 +688,8 @@ fn init_prints_a_config_that_validates_and_writes_nothing() {
     );
     assert!(text.contains("id = \"app-main\""), "{text}");
     assert!(text.contains("id = \"app-main-schedule\""), "{text}");
+    // A GitLab schedule watch still dives only when something failed.
+    assert!(text.contains("only_when = \"failed\""), "{text}");
     assert!(stderr(&out).contains("nothing written"), "{}", stderr(&out));
 
     // What it printed is a config the validator accepts.
@@ -863,7 +868,9 @@ fn init_for_github_prints_a_config_that_validates_with_nothing_to_say() {
     ] {
         assert!(text.contains(wanted), "{wanted} missing:\n{text}");
     }
-    for absent in ["base_url", "api_path", "header", "glab"] {
+    // `only_when` is a bridge filter and a run-mode watch has no bridges, so
+    // the schedule watch must not carry it (validate would warn if it did).
+    for absent in ["base_url", "api_path", "header", "glab", "only_when"] {
         assert!(!text.contains(absent), "{absent} was written:\n{text}");
     }
 

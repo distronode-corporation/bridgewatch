@@ -7,7 +7,7 @@
    * bridge is listed only when it has one of those or a verdict that is news on
    * its own (failed, dead, passed with warnings, awaiting a gate).
    */
-  import type { JobsMode, PipelineView } from "../../lib/types";
+  import type { JobsMode, PipelineView, Provider } from "../../lib/types";
   import BridgeJobs from "./BridgeJobs.svelte";
   import JobList from "./JobList.svelte";
   import { bridgeVisible, defaultExpanded, filterJobs, type ExpansionStore } from "./jobs";
@@ -16,6 +16,8 @@
     pipeline: PipelineView;
     expansion: ExpansionStore;
     mode?: JobsMode;
+    /** The watch's provider: on GitHub each bridge is a workflow run. */
+    provider?: Provider;
     onOpen: (url: string) => void;
     /** Parent stage order, when known. Else inferred from job ids. */
     stageOrder?: readonly string[] | null;
@@ -29,6 +31,7 @@
     pipeline,
     expansion,
     mode = "all",
+    provider = "gitlab",
     onOpen,
     stageOrder = null,
     now,
@@ -50,7 +53,7 @@
       <JobList jobs={pipeline.parent_jobs} {mode} {stageOrder} {onOpen} {now} />
     {/if}
     {#if bridges.length > 0}
-      <div class="flex flex-col" role="list" aria-label="child pipelines">
+      <div class="flex flex-col" role="list" aria-label={provider === "github" ? "workflow runs" : "child pipelines"}>
         {#each bridges as bridge (bridge.name)}
           <div role="listitem">
             <BridgeJobs
@@ -59,6 +62,7 @@
               {expansion}
               defaultOpen={isDefaultOpen(pipeline, bridge)}
               {mode}
+              {provider}
               {onOpen}
               {now}
             />

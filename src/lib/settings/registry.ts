@@ -111,7 +111,7 @@ export const REGISTRY: RegistryEntry[] = [
     tab: "accounts",
     control: "text",
     label: "Base URL",
-    hint: "Instance root, no trailing slash. Self-managed instances welcome.",
+    hint: "Instance root, no trailing slash. GitLab: self-managed welcome. GitHub: https://api.github.com, or an Enterprise Server root.",
   },
   {
     path: "accounts.*.api_path",
@@ -156,7 +156,7 @@ export const REGISTRY: RegistryEntry[] = [
     tab: "watches",
     control: "project",
     label: "Project",
-    hint: "Numeric id, or group/path which is URL-encoded for you.",
+    hint: "GitLab: numeric id, or group/path (URL-encoded for you). GitHub: owner/repo.",
   },
   {
     path: "watches.*.ref",
@@ -210,7 +210,7 @@ export const REGISTRY: RegistryEntry[] = [
     tab: "watches",
     control: "list",
     label: "Sources",
-    hint: "Pipeline sources to accept. Empty means all of them.",
+    hint: "Pipeline sources (GitLab) or workflow events (GitHub) to accept. Empty means all of them.",
   },
   {
     path: "watches.*.role",
@@ -354,7 +354,7 @@ export const REGISTRY: RegistryEntry[] = [
     tab: "icon",
     control: "text",
     label: "Theme",
-    hint: 'builtin, or a directory of <state>.png overrides.',
+    hint: "builtin, or a directory of <glyph>.png (or <glyph>@1x.png) overrides, named for the glyph a state draws.",
   },
   {
     path: "icon.states.*",

@@ -331,6 +331,123 @@ describe("BridgeJobs, a dead bridge in words", () => {
   });
 });
 
+describe("BridgeJobs, a GitHub workflow run in a commit group", () => {
+  const RUN = "https://github.com/acme-corp/monorepo/actions/runs/9001";
+
+  function render(view: BridgeView, onOpen: (url: string) => void = () => {}, provider?: "gitlab" | "github") {
+    component = mount(BridgeJobs, {
+      target: host,
+      props: {
+        bridge: view,
+        pipelineId: 5000,
+        expansion: createExpansionStore(),
+        defaultOpen: true,
+        provider,
+        onOpen,
+        now: T0,
+      },
+    });
+    flushSync();
+  }
+
+  // What the core sends for a run: the run's page as both links, because a run
+  // has no trigger job apart from itself.
+  const run = (over: Partial<BridgeView> = {}) =>
+    bridge({ name: "CI", status: "failed", verdict: "failed", child_id: 9001, child_project_id: null, web_url: RUN, child_url: RUN, ...over });
+
+  it("shows one link, labelled workflow run, that opens the run", () => {
+    const onOpen = vi.fn();
+    render(run(), onOpen, "github");
+    const links = host.querySelectorAll<HTMLAnchorElement>('[data-bridge="CI"] a');
+    expect(links).toHaveLength(1);
+    const only = links[0];
+    expect(only.dataset.slot).toBe("bridge-run-link");
+    expect(only.textContent).toBe("workflow run");
+    expect(only.getAttribute("title")).toBe("the workflow run");
+    expect(only.getAttribute("aria-label")).toBe("Open workflow run CI");
+    expect(only.getAttribute("href")).toBe(RUN);
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    only.dispatchEvent(event);
+    expect(onOpen.mock.calls).toEqual([[RUN]]);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("names neither GitLab, a trigger job nor a child pipeline", () => {
+    render(run({ dived: false, jobs: [] }), () => {}, "github");
+    const row = host.querySelector<HTMLElement>('[data-bridge="CI"]')!;
+    expect(row.innerHTML).not.toContain("GitLab");
+    expect(row.innerHTML).not.toContain("trigger job");
+    expect(row.textContent).not.toContain("child");
+    expect(host.querySelector('[data-slot="bridge-job-link"]')).toBeNull();
+    expect(host.querySelector('[data-slot="bridge-child-link"]')).toBeNull();
+    expect(row.textContent).toContain("Workflow run not inspected.");
+  });
+
+  it("falls back to the child url when the run carries no web_url", () => {
+    render(run({ web_url: null }), () => {}, "github");
+    expect(host.querySelector('[data-slot="bridge-run-link"]')?.getAttribute("href")).toBe(RUN);
+  });
+
+  it("keeps the never-started words for an expect bridge on a GitHub watch", () => {
+    const url = "https://github.com/acme-corp/monorepo/actions/workflows/release.yml";
+    render(
+      bridge({
+        name: "release.yml",
+        status: "never_started",
+        verdict: "dead",
+        child_id: null,
+        child_url: null,
+        child_project_id: null,
+        dived: false,
+        web_url: url,
+      }),
+      () => {},
+      "github",
+    );
+    expect(host.querySelector('[data-slot="bridge-run-link"]')).toBeNull();
+    const job = host.querySelector<HTMLAnchorElement>('[data-slot="bridge-job-link"]')!;
+    expect(job.textContent).toBe("workflow");
+    expect(job.getAttribute("aria-label")).toBe("Open workflow release.yml");
+    expect(host.querySelector('[data-slot="bridge-never-started"]')?.textContent?.trim()).toBe("never started");
+  });
+
+  it("keeps both GitLab links when the provider says gitlab", () => {
+    render(
+      bridge({
+        name: "trigger:website",
+        web_url: "https://gitlab.example/p/-/jobs/77",
+        child_url: "https://gitlab.example/p/-/pipelines/900",
+      }),
+      () => {},
+      "gitlab",
+    );
+    expect(host.querySelector('[data-slot="bridge-run-link"]')).toBeNull();
+    expect(host.querySelector('[data-slot="bridge-job-link"]')?.getAttribute("aria-label")).toBe(
+      "Open trigger job trigger:website in GitLab",
+    );
+    expect(host.querySelector('[data-slot="bridge-child-link"]')?.getAttribute("aria-label")).toBe(
+      "Open the child pipeline of trigger:website in GitLab",
+    );
+  });
+
+  it("reaches the bridge from PipelineJobs, which passes the provider down", () => {
+    component = mount(PipelineJobs, {
+      target: host,
+      props: {
+        pipeline: pipeline({ parent_jobs: [], bridges: [run()] }),
+        expansion: createExpansionStore(),
+        provider: "github",
+        onOpen: () => {},
+        now: T0,
+      },
+    });
+    flushSync();
+    expect(host.querySelector('[role="list"]')?.getAttribute("aria-label")).toBe("workflow runs");
+    expect(host.querySelector('[data-slot="bridge-run-link"]')?.textContent).toBe("workflow run");
+    expect(host.querySelector('[data-slot="bridge-job-link"]')).toBeNull();
+  });
+});
+
 describe("UpdatedAgo", () => {
   it("ticks once a second", () => {
     vi.useFakeTimers();

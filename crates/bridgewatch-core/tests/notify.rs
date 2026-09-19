@@ -46,6 +46,22 @@ fn poller_for(fixture: &str, edits: &[Edit]) -> Poller {
     support::fixture_poller(&config, &dir).0
 }
 
+/// A GitLab watch's view carries no `provider` key at all, so `check --json`
+/// and every recorded snapshot read byte for byte as they did before GitHub
+/// support, and reading one back still yields GitLab.
+#[tokio::test]
+async fn a_gitlab_watch_view_serialises_without_a_provider_key() {
+    let mut poller = poller_for("ca41ab28-deployed-with-failure", &[]);
+    let snapshot = poller.tick().await.snapshot;
+    let json = serde_json::to_value(&snapshot).expect("a snapshot serialises");
+    let watch = json["watches"][0]
+        .as_object()
+        .expect("a watch is an object");
+    assert!(!watch.contains_key("provider"), "keys: {:?}", watch.keys());
+    let back: WatchView = serde_json::from_value(json["watches"][0].clone()).expect("reads back");
+    assert_eq!(back.provider, bridgewatch_core::config::Provider::Gitlab);
+}
+
 /// The first successful tick baselines silently. Starting the app must not
 /// replay the last week as a burst.
 #[tokio::test]
@@ -436,6 +452,7 @@ fn a_watch_is_not_baselined_on_a_tick_that_failed() {
         rows: Vec::new(),
         error: Some("transport error: dns failure".into()),
         jobs: Default::default(),
+        provider: Default::default(),
     };
     assert!(notifications_for(&watch, &offline, &mut ledger).is_empty());
     assert!(
@@ -491,6 +508,7 @@ fn a_template_that_fails_to_render_does_not_burn_the_dedupe_key() {
         rows: vec![row_view("deployed", "live")],
         error: None,
         jobs: Default::default(),
+        provider: Default::default(),
     };
 
     let mut ledger = NotifyLedger::default();

@@ -191,3 +191,22 @@ describe("provider applicability", () => {
     expect(providerOf(undefined)).toBe("gitlab");
   });
 });
+
+describe("hints on keys both providers use", () => {
+  // These keys apply to GitLab and GitHub alike, so a hint written for GitLab
+  // alone tells a GitHub user the wrong shape of value.
+  it("says the GitHub shape of a project, a base URL and a source", () => {
+    expect(entry("watches.*.project").hint).toContain("GitHub: owner/repo");
+    expect(entry("accounts.*.base_url").hint).toContain("GitHub:");
+    expect(entry("watches.*.sources").hint).toContain("workflow events (GitHub)");
+  });
+
+  it("names theme files for the glyph, which is what the tray loads", () => {
+    // src-tauri/src/icons.rs reads `<symbol>.png`, then `<symbol>@1x.png`,
+    // where the symbol is the state after `[icon].states` remaps it.
+    const hint = entry("icon.theme").hint ?? "";
+    expect(hint).toContain("<glyph>.png");
+    expect(hint).toContain("<glyph>@1x.png");
+    expect(hint).not.toContain("<state>");
+  });
+});
