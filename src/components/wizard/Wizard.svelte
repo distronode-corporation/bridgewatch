@@ -25,12 +25,13 @@
     messageOf,
     needsConfirm,
     type Confirmable,
+    type CliTokenDetection,
     type Connection,
-    type GlabDetection,
     type Identity,
     type MarkerSuggestions,
     type ProjectListing,
     type ProjectSummary,
+    type Provider,
     type StepIssue,
     type WizardAnswers,
     type WizardApi,
@@ -40,12 +41,16 @@
     STEPS,
     answersOf,
     baseUrlOf,
+    cliName,
     draftFromAnswers,
     emptyDraft,
     formatCommand,
     parseCommand,
+    projectRefFor,
+    stepTitle,
     suggestAccountName,
     suggestWatchId,
+    switchProvider,
     tokenSourceOf,
     validateStep,
     type Draft,
@@ -76,11 +81,21 @@
 
   // --- connection ----------------------------------------------------------
   const connKey = $derived(
-    JSON.stringify([baseUrlOf(draft), tokenSourceOf(draft), draft.tokenMode === "paste" ? draft.secret : null]),
+    JSON.stringify([
+      draft.provider,
+      baseUrlOf(draft),
+      tokenSourceOf(draft),
+      draft.tokenMode === "paste" ? draft.secret : null,
+    ]),
   );
 
   function connection(confirm?: string): Connection {
-    const conn: Connection = { base_url: baseUrlOf(draft), token: tokenSourceOf(draft) };
+    // `provider` only for GitHub: the shell reads its absence as gitlab, so a
+    // GitLab connection is exactly the one it always was.
+    const conn: Connection =
+      draft.provider === "github"
+        ? { provider: "github", base_url: baseUrlOf(draft), token: tokenSourceOf(draft) }
+        : { base_url: baseUrlOf(draft), token: tokenSourceOf(draft) };
     if (draft.tokenMode === "paste" && draft.secret.trim()) conn.secret = draft.secret.trim();
     if (confirm) conn.confirm = confirm;
     return conn;
@@ -133,39 +148,54 @@
     return answer;
   }
 
-  // --- step 1: glab detection and test connection --------------------------
-  let glab = $state<GlabDetection | null>(null);
-  let detectedSource: Draft["glabSource"] = null;
+  // --- step 1: CLI token detection (glab or gh) and test connection -------
+  let cli = $state<CliTokenDetection | null>(null);
+  let detectedSource: Draft["cliSource"] = null;
   let detectSeq = 0;
   // `draft` is a deep $state proxy, so compare sources by value, never by identity.
-  const sameSource = (a: Draft["glabSource"], b: Draft["glabSource"]) => JSON.stringify(a) === JSON.stringify(b);
+  const sameSource = (a: Draft["cliSource"], b: Draft["cliSource"]) => JSON.stringify(a) === JSON.stringify(b);
 
   async function detect() {
-    if (!api.detectGlab) return;
+    if (!api.detectCliToken) return;
     const base = baseUrlOf(draft);
+    const provider = draft.provider;
     const seq = ++detectSeq;
-    let result: GlabDetection;
+    let result: CliTokenDetection;
     try {
-      result = await api.detectGlab(base);
+      result = await api.detectCliToken(base, provider);
     } catch (error) {
       result = { status: "unavailable", reason: messageOf(error) };
     }
     if (seq !== detectSeq) return;
-    glab = result;
+    cli = result;
     if (result.status === "found") {
-      const adopt = draft.tokenMode === "glab" || (freshStart && draft.tokenMode === "paste" && !draft.secret);
-      if (adopt || sameSource(draft.glabSource, detectedSource)) draft.glabSource = result.source;
+      const adopt = draft.tokenMode === "cli" || (freshStart && draft.tokenMode === "paste" && !draft.secret);
+      if (adopt || sameSource(draft.cliSource, detectedSource)) draft.cliSource = result.source;
       detectedSource = result.source;
-      if (adopt) draft.tokenMode = "glab";
-    } else if (draft.glabSource !== null && sameSource(draft.glabSource, detectedSource)) {
-      draft.glabSource = null;
+      if (adopt) draft.tokenMode = "cli";
+    } else if (draft.cliSource !== null && sameSource(draft.cliSource, detectedSource)) {
+      draft.cliSource = null;
       detectedSource = null;
-      if (draft.tokenMode === "glab") draft.tokenMode = "paste";
+      if (draft.tokenMode === "cli") draft.tokenMode = "paste";
     }
   }
 
   function instanceChanged() {
-    if (!draft.accountEdited) draft.account = suggestAccountName(baseUrlOf(draft));
+    if (!draft.accountEdited) draft.account = suggestAccountName(baseUrlOf(draft), draft.provider);
+    void detect();
+  }
+
+  function providerChanged(provider: Provider) {
+    if (draft.provider === provider) return;
+    switchProvider(draft, provider);
+    // The last provider's detection answers nothing about this one.
+    cli = null;
+    detectedSource = null;
+    listing = null;
+    listingKey = null;
+    suggestions = null;
+    suggestionsKey = null;
+    delete errors.project;
     void detect();
   }
 
@@ -237,7 +267,11 @@
 
   function pick(project: ProjectSummary) {
     draft.projectInput = project.path;
-    setProject({ ref: project.id, path: project.path, default_branch: project.default_branch });
+    setProject({
+      ref: projectRefFor(draft.provider, project),
+      path: project.path,
+      default_branch: project.default_branch,
+    });
   }
 
   /** True when the typed text already names the chosen project. */
@@ -253,7 +287,11 @@
     try {
       const result = await live((c) => api.resolveProject(c, typed));
       if (result === null) return false;
-      setProject({ ref: result.id, path: result.path, default_branch: result.default_branch });
+      setProject({
+        ref: result.project ?? projectRefFor(draft.provider, result),
+        path: result.path,
+        default_branch: result.default_branch,
+      });
       return true;
     } catch (error) {
       const issue = issuesOf(error).find((i) => i.step === "project");
@@ -273,12 +311,18 @@
   async function loadSuggestions() {
     const project = draft.project;
     if (!project) return;
-    const key = JSON.stringify([connKey, project.ref, draft.refName.trim()]);
+    // GitHub only: the workflow picks which run the names come from.
+    const workflow = draft.provider === "github" ? draft.workflow.trim() : "";
+    const key = JSON.stringify([connKey, project.ref, draft.refName.trim(), workflow]);
     if (key === suggestionsKey) return;
     sugLoading = true;
     sugError = null;
     try {
-      const result = await live((c) => api.suggestDeployMarkers(c, project.ref, draft.refName.trim()));
+      const result = await live((c) =>
+        workflow
+          ? api.suggestDeployMarkers(c, project.ref, draft.refName.trim(), workflow)
+          : api.suggestDeployMarkers(c, project.ref, draft.refName.trim()),
+      );
       if (result === null) return;
       suggestions = result;
       suggestionsKey = key;
@@ -318,8 +362,8 @@
     switch (draft.tokenMode) {
       case "paste":
         return `The token you pasted goes into bridgewatch's own keychain entry for "${draft.account.trim()}", never into this file.`;
-      case "glab":
-        return "The token stays in glab's keychain entry; this file only says where it is.";
+      case "cli":
+        return `The token stays in ${cliName(draft.provider)}'s keychain entry; this file only says where it is.`;
       case "env":
         return `The token is read from $${draft.envVar.trim()} when bridgewatch starts.`;
       case "command":
@@ -466,7 +510,7 @@
 
   <form class="flex min-h-0 flex-1 flex-col gap-4" onsubmit={submit} novalidate>
     <h2 id="wizard-heading" class="text-base font-semibold outline-none" tabindex="-1" bind:this={heading}>
-      {step.title}
+      {stepTitle(step, draft.provider)}
     </h2>
 
     <div class="min-h-0 flex-1 overflow-y-auto" bind:this={body}>
@@ -474,12 +518,13 @@
         <AccountStep
           bind:draft
           {errors}
-          {glab}
+          {cli}
           identity={shownIdentity}
           {testing}
           testError={shownTestError}
           onTest={() => void testConnection()}
           onInstanceChange={instanceChanged}
+          onProviderChange={providerChanged}
         />
       {:else if step.id === "project"}
         <ProjectStep

@@ -79,7 +79,7 @@ type FakeApi = { [K in keyof Api]: Mock<Api[K]> };
 
 function fakeApi(overrides: Partial<{ [K in keyof Api]: Mock<(...args: never[]) => unknown> }> = {}): FakeApi {
   return {
-    detectGlab: vi.fn<Api["detectGlab"]>(async () => ({ status: "not_found", service: "glab:gitlab.com" })),
+    detectCliToken: vi.fn<Api["detectCliToken"]>(async () => ({ status: "not_found", service: "glab:gitlab.com" })),
     testConnection: vi.fn<Api["testConnection"]>(async () => IDENTITY),
     listProjects: vi.fn<Api["listProjects"]>(async () => LISTING),
     resolveProject: vi.fn<Api["resolveProject"]>(async () => RESOLVED),
@@ -391,7 +391,7 @@ describe("test connection", () => {
 
   it("offers glab's token when detection finds it, and uses its keyring source", async () => {
     const source = { keyring: { service: "glab:gitlab.com", user: "" } };
-    const api = fakeApi({ detectGlab: vi.fn(async () => ({ status: "found", source })) });
+    const api = fakeApi({ detectCliToken: vi.fn(async () => ({ status: "found", source })) });
     await start(api);
     expect(q<HTMLInputElement>('input[name="token-mode"][value="glab"]')?.checked).toBe(true);
     await click('[data-action="test-connection"]');
@@ -611,5 +611,135 @@ describe("re-running on an existing config", () => {
     await next();
     expect(stepId()).toBe("watch");
     expect(q<HTMLInputElement>("#wizard-watch-id")?.value).toBe("web-main");
+  });
+});
+
+describe("GitHub", () => {
+  const GH_IDENTITY: Identity = {
+    username: "octo",
+    name: null,
+    bot: false,
+    token: { kind: "unknown" },
+    scopes: [],
+    expires_at: null,
+    warnings: [],
+  };
+  const GH_LISTING: ProjectListing = {
+    mode: "projects",
+    truncated: false,
+    projects: [{ id: 700, path: "acme/web", name: "web", default_branch: "trunk", web_url: null }],
+  };
+  const GH_SOURCE = { keyring: { service: "gh:github.com", user: "" } };
+
+  function ghApi(overrides: Parameters<typeof fakeApi>[0] = {}) {
+    return fakeApi({
+      detectCliToken: vi.fn(async (_base: string, provider: string) =>
+        provider === "github"
+          ? { status: "found", source: GH_SOURCE }
+          : { status: "not_found", service: "glab:gitlab.com:token" },
+      ),
+      testConnection: vi.fn(async () => GH_IDENTITY),
+      listProjects: vi.fn(async () => GH_LISTING),
+      ...overrides,
+    });
+  }
+
+  it("keeps GitLab first and preselected, and sends no provider for it", async () => {
+    const api = fakeApi();
+    await start(api);
+    const radios = [...host.querySelectorAll<HTMLInputElement>('input[name="provider"]')];
+    expect(radios.map((r) => r.value)).toEqual(["gitlab", "github"]);
+    expect(radios[0].checked).toBe(true);
+    expect(text("#wizard-heading")).toBe("Connect to GitLab");
+    expect(api.detectCliToken.mock.calls[0]).toEqual(["https://gitlab.com", "gitlab"]);
+    expect(text('[data-slot="token-needs"]')).toContain("read_api");
+  });
+
+  it("walks a github.com account end to end: gh's item, owner/repo, events, a workflow, 30 s", async () => {
+    const api = ghApi();
+    await start(api);
+    await click('input[name="provider"][value="github"]');
+    expect(text("#wizard-heading")).toBe("Connect to GitHub");
+    expect(api.detectCliToken.mock.calls.at(-1)).toEqual(["https://api.github.com", "github"]);
+    // gh's item was found and adopted; the radio carries gh's name.
+    expect(q<HTMLInputElement>('input[name="token-mode"][value="gh"]')?.checked).toBe(true);
+    expect(q('input[name="token-mode"][value="glab"]')).toBeNull();
+    expect(text('[data-slot="token-needs"]')).toContain("Actions: read");
+    expect(text('[data-slot="token-needs"]')).not.toContain("read_api");
+
+    await click('[data-action="test-connection"]');
+    expect(api.testConnection.mock.calls[0][0]).toEqual({
+      provider: "github",
+      base_url: "https://api.github.com",
+      token: GH_SOURCE,
+    });
+    // A fine-grained token lists no scopes; say so rather than warn.
+    expect(text('[data-slot="scopes-unknown"]')).toContain("not reported");
+
+    await next();
+    expect(stepId()).toBe("project");
+    expect(text('label[for="wizard-project-input"]')).toBe("Repository (owner/repo or URL)");
+    await click('input[name="project"][value="700"]');
+    await next();
+    expect(stepId()).toBe("watch");
+    expect(q<HTMLInputElement>("#wizard-ref")?.value).toBe("trunk");
+    // GitHub's events, and no pf/* preflight switch.
+    expect(q("#wizard-source-pull_request")).not.toBeNull();
+    expect(q("#wizard-source-merge_request_event")).toBeNull();
+    expect(q("#wizard-preflight")).toBeNull();
+    expect(q("#wizard-schedule")).not.toBeNull();
+    await type("#wizard-workflow", "ci.yml");
+    await next();
+    expect(stepId()).toBe("deploy");
+    // The project is the PATH, and the workflow narrows the run the names come from.
+    expect(api.suggestDeployMarkers.mock.calls[0].slice(1)).toEqual(["acme/web", "trunk", "ci.yml"]);
+    await click('input[name="marker-mode"][value="none"]');
+    await next();
+    expect(q<HTMLSelectElement>("#wizard-live-secs")?.value).toBe("30");
+    await next();
+    expect(stepId()).toBe("review");
+    expect(api.previewConfig.mock.calls[0][0]).toMatchObject({
+      provider: "github",
+      account: "github",
+      base_url: "https://api.github.com",
+      token: GH_SOURCE,
+      project: "acme/web",
+      workflow: "ci.yml",
+      ref_name: "trunk",
+      sources: ["push"],
+      preflight_ref: null,
+      live_secs: 30,
+    });
+    expect(text('[data-slot="token-note"]')).toContain("gh's keychain entry");
+  });
+
+  it("an Enterprise host is typed, and resolving a repository keeps the path the core returns", async () => {
+    const api = ghApi({
+      detectCliToken: vi.fn(async () => ({ status: "not_found", service: "gh:ghe.acme.com" })),
+      listProjects: vi.fn(async () => ({ mode: "type_id_or_path", reason: "Type the repository.", suggestion: null })),
+      resolveProject: vi.fn(async () => ({
+        id: 9,
+        path: "platform/api",
+        project: "platform/api",
+        default_branch: "main",
+        web_url: null,
+      })),
+    });
+    await start(api);
+    await click('input[name="provider"][value="github"]');
+    await click('input[name="instance"][value="self-managed"]');
+    await type("#wizard-base-url", "https://ghe.acme.com");
+    q<HTMLInputElement>("#wizard-base-url")!.dispatchEvent(new Event("blur"));
+    await settle();
+    expect(q<HTMLInputElement>("#wizard-account")?.value).toBe("ghe");
+    await type("#wizard-secret", "pasted-secret-value");
+    await next();
+    await type("#wizard-project-input", "https://ghe.acme.com/platform/api");
+    await next();
+    expect(stepId()).toBe("watch");
+    await next();
+    expect(api.suggestDeployMarkers.mock.calls[0][0]).toMatchObject({ provider: "github", base_url: "https://ghe.acme.com" });
+    // No workflow typed: the call carries none.
+    expect(api.suggestDeployMarkers.mock.calls[0].slice(1)).toEqual(["platform/api", "main"]);
   });
 });

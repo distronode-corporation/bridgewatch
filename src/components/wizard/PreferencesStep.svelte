@@ -3,7 +3,7 @@
   import { Label } from "$lib/components/ui/label/index.js";
   import { Switch } from "$lib/components/ui/switch/index.js";
   import FieldMessage from "./FieldMessage.svelte";
-  import { LIVE_SPEEDS, type Draft, type StepErrors } from "./model";
+  import { liveSpeeds, type Draft, type StepErrors } from "./model";
 
   interface Props {
     draft: Draft;
@@ -11,6 +11,15 @@
   }
 
   let { draft = $bindable(), errors }: Props = $props();
+
+  const speeds = $derived(liveSpeeds(draft.provider));
+  // GitHub's budget is 5,000 requests an HOUR per token (shared with gh and
+  // anything else using it), so its watches start slower and idle at 120 s.
+  const idleHint = $derived(
+    draft.provider === "github"
+      ? "When nothing is running it checks every two minutes. GitHub allows 5,000 requests an hour per token, shared with gh and anything else using it."
+      : "When nothing is running it checks once a minute.",
+  );
 
   const NOTIFY: { key: keyof Draft["notify"]; label: string }[] = [
     { key: "deployed", label: "A deploy finished" },
@@ -46,17 +55,17 @@
       aria-invalid={errors.live_secs ? "true" : undefined}
       aria-describedby="wizard-live-msg"
     >
-      {#if !LIVE_SPEEDS.some((s) => s.value === draft.liveSecs)}
+      {#if !speeds.some((s) => s.value === draft.liveSecs)}
         <option value={String(draft.liveSecs)}>Every {draft.liveSecs} s (current)</option>
       {/if}
-      {#each LIVE_SPEEDS as speed (speed.value)}
+      {#each speeds as speed (speed.value)}
         <option value={String(speed.value)}>{speed.label}</option>
       {/each}
     </select>
     <FieldMessage
       id="wizard-live-msg"
       message={errors.live_secs}
-      hint="When nothing is running it checks once a minute."
+      hint={idleHint}
     />
   </div>
 </div>

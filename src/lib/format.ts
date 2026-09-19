@@ -169,7 +169,7 @@ export function millis(ms: number): string {
 }
 
 /**
- * A pipeline source, shortened for a badge.
+ * A pipeline source (GitLab) or workflow event (GitHub), shortened for a badge.
  *
  * Unknown sources pass through verbatim: GitLab adds sources, and a badge that
  * says `merge_request_event` is worse than one that says nothing but better
@@ -190,6 +190,26 @@ export function sourceBadge(source: string | null | undefined): string {
       return "api";
     case "trigger":
       return "trig";
+    // GitHub workflow events. None of these is a GitLab source name, so no
+    // GitLab badge moves; `push` and `schedule` are spelled the same by both.
+    case "pull_request":
+    case "pull_request_target":
+      return "PR";
+    case "workflow_dispatch":
+      return "manual";
+    case "workflow_run":
+      return "chained";
+    case "workflow_call":
+      return "called";
+    case "repository_dispatch":
+      return "dispatch";
+    case "merge_group":
+      return "queue";
+    case "release":
+      return "release";
+    // Runs GitHub starts itself (Dependabot updates, Pages builds, Copilot).
+    case "dynamic":
+      return "auto";
     default:
       return source;
   }

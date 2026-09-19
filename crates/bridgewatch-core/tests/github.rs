@@ -723,7 +723,7 @@ async fn a_403_is_a_rate_limit_when_the_headers_say_so_and_auth_when_they_do_not
     let (client, _) = github_client(transport);
     let error = client.get_pipeline(&repo(), 4001).await.unwrap_err();
     assert!(
-        matches!(error, ClientError::Auth { status: 403 }),
+        matches!(error, ClientError::Auth { status: 403, .. }),
         "{error:?}"
     );
     assert!(error.is_fatal());
@@ -733,7 +733,7 @@ async fn a_403_is_a_rate_limit_when_the_headers_say_so_and_auth_when_they_do_not
     let (client, _) = github_client(transport);
     let error = client.get_pipeline(&repo(), 4001).await.unwrap_err();
     assert!(
-        matches!(error, ClientError::Auth { status: 401 }),
+        matches!(error, ClientError::Auth { status: 401, .. }),
         "{error:?}"
     );
 }

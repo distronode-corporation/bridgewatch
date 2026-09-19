@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 use super::http::{HttpRequest, RequestLog, RequestRing, Transport};
 use super::wire::gitlab as wire;
 use super::{CiClient, ClientError};
-use crate::config::{Account, ProjectRef};
+use crate::config::{Account, ProjectRef, Provider};
 use crate::model::{Bridge, Job, Pipeline, Project, TokenInfo, User};
 use crate::token::Secret;
 
@@ -457,7 +457,10 @@ impl CiClient for GitLabClient {
 pub fn status_error(status: u16, path: &str, retry_after: Option<u64>) -> Option<ClientError> {
     match status {
         200..=299 => None,
-        401 | 403 => Some(ClientError::Auth { status }),
+        401 | 403 => Some(ClientError::Auth {
+            status,
+            provider: Provider::Gitlab,
+        }),
         404 => Some(ClientError::NotFound {
             path: path.to_string(),
         }),

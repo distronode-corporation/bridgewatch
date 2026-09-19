@@ -16,7 +16,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   Confirmable,
   Connection,
-  GlabDetection,
+  CliTokenDetection,
   Identity,
   MarkerSuggestions,
   ProjectListing,
@@ -184,7 +184,8 @@ export function wizardApi(fallbackAccount?: string): WizardApi {
     return { ...connection, account: fallbackAccount };
   };
   return {
-    detectGlab: (baseUrl) => invoke<GlabDetection>("wizard_detect_glab", { baseUrl }),
+    detectCliToken: (baseUrl, provider) =>
+      invoke<CliTokenDetection>("wizard_detect_cli_token", { baseUrl, provider }),
     testConnection: (connection) =>
       invoke<Confirmable<Identity>>("wizard_test_connection", { connection: withAccount(connection) }),
     listProjects: (connection, search) =>
@@ -197,11 +198,14 @@ export function wizardApi(fallbackAccount?: string): WizardApi {
         connection: withAccount(connection),
         idOrPath,
       }),
-    suggestDeployMarkers: (connection, project, refName) =>
+    suggestDeployMarkers: (connection, project, refName, workflow) =>
       invoke<Confirmable<MarkerSuggestions>>("wizard_suggest_deploy_markers", {
         connection: withAccount(connection),
         project,
         refName,
+        // Only when there is one: the shell reads a missing key as `None`, so
+        // a GitLab call carries exactly the three keys it always did.
+        ...(workflow ? { workflow } : {}),
       }),
     previewConfig: async (answers) => {
       const preview = await invoke<WizardPreview>("wizard_preview_config", { answers });
@@ -237,6 +241,9 @@ export function wizardInitial(config: unknown): Partial<WizardAnswers> | undefin
     watches.find((w) => w.account === account && (w.role ?? "primary") === "primary") ??
     watches.find((w) => w.account === account);
   const initial: Partial<WizardAnswers> = { account };
+  // Only a GitHub account says so: absent is GitLab, and a GitLab re-run
+  // pre-fills exactly what it always did.
+  if (acc.provider === "github") initial.provider = "github";
   if (typeof acc.base_url === "string") initial.base_url = acc.base_url;
   if (acc.token && typeof acc.token === "object") initial.token = acc.token as TokenSource;
   if (watch) {
@@ -246,6 +253,7 @@ export function wizardInitial(config: unknown): Partial<WizardAnswers> | undefin
     if (typeof watch.id === "string") initial.watch_id = watch.id;
     if (typeof watch.ref === "string") initial.ref_name = watch.ref;
     if (Array.isArray(watch.sources)) initial.sources = watch.sources.map(String);
+    if (initial.provider === "github" && typeof watch.workflow === "string") initial.workflow = watch.workflow;
     if (Array.isArray(watch.deploy_markers)) {
       initial.deploy_markers = watch.deploy_markers.map(String);
     }

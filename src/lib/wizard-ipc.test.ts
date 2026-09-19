@@ -47,7 +47,7 @@ describe("wizardApi", () => {
     const { wizardApi } = await import("./ipc");
     const api = wizardApi();
     const conn = { base_url: "https://gitlab.com", token: { own: true } as const, secret: "glpat-x" };
-    await api.detectGlab!("https://gitlab.com");
+    await api.detectCliToken!("https://gitlab.com", "gitlab");
     await api.testConnection(conn);
     await api.listProjects(conn);
     await api.resolveProject(conn, "group/project");
@@ -55,7 +55,7 @@ describe("wizardApi", () => {
     await api.previewConfig(ANSWERS).catch(() => {});
     await api.skip();
     expect(invoked.map((i) => i.cmd)).toEqual([
-      "wizard_detect_glab",
+      "wizard_detect_cli_token",
       "wizard_test_connection",
       "wizard_list_projects",
       "wizard_resolve_project",
@@ -63,10 +63,25 @@ describe("wizardApi", () => {
       "wizard_preview_config",
       "wizard_skip",
     ]);
-    expect(invoked[0].args).toEqual({ baseUrl: "https://gitlab.com" });
+    expect(invoked[0].args).toEqual({ baseUrl: "https://gitlab.com", provider: "gitlab" });
     expect(invoked[2].args).toEqual({ connection: conn, search: null });
     expect(invoked[3].args).toEqual({ connection: conn, idOrPath: "group/project" });
     expect(invoked[4].args).toEqual({ connection: conn, project: 5, refName: "main" });
+  });
+
+  it("sends a workflow only when there is one, and asks for gh's item by provider", async () => {
+    const { wizardApi } = await import("./ipc");
+    const api = wizardApi();
+    const conn = { provider: "github" as const, base_url: "https://api.github.com", token: { own: true } as const };
+    await api.detectCliToken!("https://api.github.com", "github");
+    await api.suggestDeployMarkers(conn, "acme/web", "main", "ci.yml");
+    await api.suggestDeployMarkers(conn, "acme/web", "main");
+    expect(invoked[0]).toEqual({
+      cmd: "wizard_detect_cli_token",
+      args: { baseUrl: "https://api.github.com", provider: "github" },
+    });
+    expect(invoked[1].args).toEqual({ connection: conn, project: "acme/web", refName: "main", workflow: "ci.yml" });
+    expect(invoked[2].args).toEqual({ connection: conn, project: "acme/web", refName: "main" });
   });
 
   it("names the account an own-token source belongs to", async () => {
@@ -160,6 +175,21 @@ describe("wizardInitial", () => {
     });
   });
 
+  it("pre-fills a GitHub account's provider and workflow, and nothing extra for GitLab", async () => {
+    const { wizardInitial } = await import("./ipc");
+    const initial = wizardInitial({
+      accounts: { hub: { provider: "github", base_url: "https://api.github.com", token: { own: true } } },
+      watches: [{ id: "web-main", role: "primary", account: "hub", project: "acme/web", ref: "main", workflow: "ci.yml" }],
+    });
+    expect(initial).toMatchObject({ provider: "github", project: "acme/web", workflow: "ci.yml" });
+    const gitlab = wizardInitial({
+      accounts: { lab: { provider: "gitlab", base_url: "https://gitlab.com", token: { own: true } } },
+      watches: [{ id: "w", role: "primary", account: "lab", project: 1, ref: "main", workflow: "stray.yml" }],
+    });
+    expect(gitlab && "provider" in gitlab).toBe(false);
+    expect(gitlab && "workflow" in gitlab).toBe(false);
+  });
+
   it("has nothing to pre-fill without an account", async () => {
     const { wizardInitial } = await import("./ipc");
     expect(wizardInitial(null)).toBeUndefined();
@@ -187,7 +217,7 @@ describe("WizardApp", () => {
       },
       job_order: [[]],
     });
-    answers.set("wizard_detect_glab", { status: "not_found", service: "glab:gitlab.example.com" });
+    answers.set("wizard_detect_cli_token", { status: "not_found", service: "glab:gitlab.example.com" });
     let skipped = 0;
     host = document.createElement("div");
     document.body.append(host);

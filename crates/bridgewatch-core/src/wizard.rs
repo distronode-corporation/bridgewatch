@@ -4,11 +4,12 @@
 //! the behaviour is tested against a scripted transport:
 //!
 //! 1. **Account.** [`test_connection`] names who a token authenticates as and
-//!    what kind of token it is; [`detect_glab_token`] offers `glab`'s keyring
-//!    item (existence only, never the value).
+//!    what kind of token it is; [`detect_cli_token`] offers the provider's own
+//!    CLI keyring item, `glab`'s or `gh`'s (existence only, never the value).
 //! 2. **Project.** [`list_projects`], or for a token that cannot list,
 //!    [`ProjectListing::TypeIdOrPath`]; [`resolve_project`] turns what was
-//!    typed into an id, a path and a default branch.
+//!    typed into the reference that provider addresses a project BY, a path
+//!    and a default branch.
 //! 3. **Deploy detection.** [`suggest_deploy_markers`] ranks the latest
 //!    pipeline's job names, parent and children, by how deploy-like they are.
 //! 4. **Review.** [`build_config`] turns the answers into `config.toml`
@@ -19,6 +20,12 @@
 //! Nothing here writes a file or reads a credential: the shell shows the text
 //! [`build_config`] returns and writes it only when the user says so, which is
 //! what makes "skip" write nothing.
+//!
+//! ⚠️ Every step that can differ per provider takes a [`Provider`] rather than
+//! asking the client for one. The client is the thing that TALKS to a provider;
+//! which provider the answers are FOR is an answer in its own right, settled on
+//! step 1 before any client exists, and it has to be available to
+//! [`build_config`], which makes no request at all.
 
 use std::path::Path;
 
@@ -27,8 +34,8 @@ use serde::{Deserialize, Serialize};
 use crate::client::{CiClient, ClientError, ListQuery};
 use crate::config::edit::{ConfigEditor, Edit, EditError, EditValue, quote_path_segment};
 use crate::config::{
-    self, Config, Diagnostic, KNOWN_PIPELINE_SOURCES, Pattern, ProjectRef, RefMatcher, Role,
-    Severity, TokenSource, Watch,
+    self, Config, Diagnostic, KNOWN_GITHUB_EVENTS, KNOWN_PIPELINE_SOURCES, Pattern, ProjectRef,
+    Provider, RefMatcher, Role, Severity, TokenSource, Watch,
 };
 use crate::model::{Job, Pipeline, User};
 
@@ -68,13 +75,16 @@ pub struct StepIssue {
 #[derive(Debug, thiserror::Error)]
 pub enum WizardError {
     /// 401 or 403. The message names the likely cause rather than the status.
-    #[error(
-        "GitLab refused the token ({status}). Check that it has not expired or been revoked, \
-         and that it has the read_api scope"
-    )]
+    ///
+    /// ⚠️ The provider comes from the refusal itself
+    /// ([`ClientError::Auth`] carries it), never from a second lookup, so the
+    /// sentence can never name a provider other than the one that answered.
+    #[error("{}", unauthorized_message(.status, .provider))]
     Unauthorized {
         /// The HTTP status.
         status: u16,
+        /// Which provider refused it.
+        provider: Provider,
     },
     /// 404, which GitLab also answers when the token cannot see the thing.
     #[error("{what} was not found, or this token cannot see it")]
@@ -107,6 +117,26 @@ pub enum WizardError {
         /// The token prefix that was found, e.g. `glpat-`. Never the token.
         prefix: &'static str,
     },
+}
+
+/// The sentence [`WizardError::Unauthorized`] displays.
+///
+/// ⛔ GitLab's wording is unchanged to the byte, for the reason
+/// [`crate::client::ClientError::Auth`]'s is: it is an error a GitLab user has
+/// already read, and this packet adds a provider rather than rewording an
+/// existing one.
+fn unauthorized_message(status: &u16, provider: &Provider) -> String {
+    match provider {
+        Provider::Gitlab => format!(
+            "GitLab refused the token ({status}). Check that it has not expired or been revoked, \
+             and that it has the read_api scope"
+        ),
+        Provider::Github => format!(
+            "GitHub refused the token ({status}). Check that it has not expired or been revoked, \
+             and that it can read Actions on this repository (a classic token needs the repo \
+             scope for a private repository; a fine-grained token needs Actions: read)"
+        ),
+    }
 }
 
 impl WizardError {
@@ -147,7 +177,9 @@ impl WizardError {
 
     fn from_client(error: ClientError, what: impl Into<String>) -> Self {
         match error {
-            ClientError::Auth { status } => WizardError::Unauthorized { status },
+            ClientError::Auth { status, provider } => {
+                WizardError::Unauthorized { status, provider }
+            }
             ClientError::NotFound { .. } => WizardError::NotFound { what: what.into() },
             other => WizardError::Client(other),
         }
@@ -281,9 +313,16 @@ pub fn classify_token(user: &User, token_self_answered: bool) -> TokenKind {
 /// Step 1's "Test connection": who is this token, and what can it do?
 ///
 /// `GET /user` must succeed; its failure is the answer (a 401 is a bad token).
-/// `GET /personal_access_tokens/self` is best effort: it supplies scopes and
-/// expiry where the instance and the credential support it.
-pub async fn test_connection(client: &dyn CiClient) -> Result<Identity, WizardError> {
+/// The token's own description is best effort: GitLab's
+/// `/personal_access_tokens/self` supplies scopes and expiry where the instance
+/// and the credential support it, and GitHub has no such endpoint at all, so
+/// [`CiClient::token_self`] there reads the `X-OAuth-Scopes` header a CLASSIC
+/// token gets and fails for a fine-grained one, which lands on the same
+/// "kind unknown" answer an old GitLab instance gives.
+pub async fn test_connection(
+    client: &dyn CiClient,
+    provider: Provider,
+) -> Result<Identity, WizardError> {
     let user = client
         .current_user()
         .await
@@ -305,13 +344,44 @@ pub async fn test_connection(client: &dyn CiClient) -> Result<Identity, WizardEr
         });
     }
     let scopes = info.as_ref().map(|i| i.scopes.clone()).unwrap_or_default();
-    if info.is_some() && !scopes.iter().any(|s| s == "read_api" || s == "api") {
-        warnings.push(format!(
-            "The token's scopes are [{}]. bridgewatch reads pipelines through the API, which \
-             needs read_api (or api); expect 403s until it has one.",
-            scopes.join(", ")
-        ));
+    // ⛔ Only when the provider told us what the scopes ARE. On GitHub an
+    // absent answer is the NORMAL case for a fine-grained token, which is the
+    // one GitHub itself recommends, so warning about it would put an amber line
+    // under the best credential a user can bring. The UI says "not reported"
+    // instead.
+    if info.is_some() {
+        match provider {
+            Provider::Gitlab => {
+                if !scopes.iter().any(|s| s == "read_api" || s == "api") {
+                    warnings.push(format!(
+                        "The token's scopes are [{}]. bridgewatch reads pipelines through the \
+                         API, which needs read_api (or api); expect 403s until it has one.",
+                        scopes.join(", ")
+                    ));
+                }
+            }
+            // ⚠️ `repo` and nothing narrower: there is no `actions:read` classic
+            // scope to ask for, and `workflow` (the common wrong guess) grants
+            // WRITE access to workflow FILES and no read of runs whatsoever.
+            // A public repository needs no scope at all, which is why this says
+            // "private" rather than claiming the token cannot work.
+            Provider::Github => {
+                if !scopes.iter().any(|s| s == "repo") {
+                    warnings.push(format!(
+                        "The token's scopes are [{}]. A classic token needs the repo scope to \
+                         read Actions on a PRIVATE repository; a public one needs none. \
+                         (There is no actions:read classic scope, and workflow is a write \
+                         scope for workflow files.)",
+                        scopes.join(", ")
+                    ));
+                }
+            }
+        }
     }
+    // ⚠️ Names GitLab unconditionally and correctly: `active` is a field of
+    // GitLab's `/personal_access_tokens/self` answer, and GitHub's client
+    // leaves it `None` because GitHub reports no such thing. A provider-aware
+    // sentence here would be a branch that can only ever take one arm.
     if info.as_ref().and_then(|i| i.active) == Some(false) {
         warnings.push("GitLab reports this token as inactive.".to_string());
     }
@@ -328,13 +398,13 @@ pub async fn test_connection(client: &dyn CiClient) -> Result<Identity, WizardEr
 }
 
 // ---------------------------------------------------------------------------
-// Step 1: glab's keyring item
+// Step 1: the provider CLI's keyring item
 // ---------------------------------------------------------------------------
 
 /// Asks the OS credential store whether an item EXISTS. It has no way to
 /// return a value, by construction: the wizard only needs to know whether to
-/// offer `glab`'s token, and reading it here would put a credential in memory
-/// for no reason.
+/// offer `glab`'s or `gh`'s token, and reading it here would put a credential
+/// in memory for no reason.
 pub trait KeyringProbe: Send + Sync {
     /// Whether an item with this service and user exists. `Err` means the
     /// store could not be asked (no `secret-tool`, an unsupported platform).
@@ -400,24 +470,67 @@ impl KeyringProbe for SystemKeyringProbe {
     }
 }
 
+/// The host part of an instance URL, lowercased and including any port.
+/// `None` for anything that is not an `http(s)` URL with a host.
+pub fn host_of(base_url: &str) -> Option<String> {
+    let trimmed = base_url.trim();
+    let rest = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))?;
+    let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
+}
+
 /// The keyring service `glab` stores an instance's token under:
 /// `glab:<host>:token`, with an empty user. `None` for a URL with no host.
 ///
 /// Verified for gitlab.com (see [`crate::token`]); the self-managed form
 /// follows glab's own naming and has not been checked against a live install.
 pub fn glab_service_for(base_url: &str) -> Option<String> {
-    let rest = base_url
-        .trim()
-        .strip_prefix("https://")
-        .or_else(|| base_url.trim().strip_prefix("http://"))?;
-    let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
-    (!host.is_empty()).then(|| format!("glab:{host}:token"))
+    host_of(base_url).map(|host| format!("glab:{host}:token"))
 }
 
-/// What the wizard found when it looked for `glab`'s token.
+/// The keyring service `gh` stores a host's token under: `gh:<host>`, from
+/// `cli/cli`'s own `keyringServiceName`. `None` for a URL with no host.
+///
+/// ⛔ **The host is the WEB host, not the API host, and they differ on
+/// github.com.** An account's `base_url` is `https://api.github.com`, while gh
+/// stores `gh:github.com`; likewise GHEC data residency is
+/// `https://api.acme.ghe.com` against `gh:acme.ghe.com`. Only GitHub Enterprise
+/// Server has the same host in both places, because there the API is a path
+/// prefix rather than a subdomain. Stripping one leading `api.` covers all
+/// three, and getting it wrong is a lookup that quietly finds nothing.
+pub fn gh_service_for(base_url: &str) -> Option<String> {
+    let host = host_of(base_url)?;
+    let host = host.strip_prefix("api.").unwrap_or(&host);
+    (!host.is_empty()).then(|| format!("gh:{host}"))
+}
+
+/// The keyring service this provider's own CLI writes.
+pub fn cli_service_for(provider: Provider, base_url: &str) -> Option<String> {
+    match provider {
+        Provider::Gitlab => glab_service_for(base_url),
+        Provider::Github => gh_service_for(base_url),
+    }
+}
+
+/// The name of the CLI whose keyring item [`detect_cli_token`] looks for, for a
+/// sentence on a form.
+pub fn cli_name_for(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Gitlab => "glab",
+        Provider::Github => "gh",
+    }
+}
+
+/// What the wizard found when it looked for the provider CLI's token.
+///
+/// ⚠️ Named for what it holds rather than for `glab`, which it was called until
+/// `gh` became a second answer with the same shape. The serialised form is
+/// unchanged: a snake_case `status` tag with the same three variants.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
-pub enum GlabDetection {
+pub enum CliTokenDetection {
     /// The item exists; offer this source.
     Found {
         /// The token source to write if the user accepts.
@@ -436,22 +549,35 @@ pub enum GlabDetection {
     },
 }
 
-/// Look for `glab`'s keyring item for this instance. Existence only.
-pub fn detect_glab_token(probe: &dyn KeyringProbe, base_url: &str) -> GlabDetection {
-    let Some(service) = glab_service_for(base_url) else {
-        return GlabDetection::Unavailable {
+/// Look for the provider CLI's keyring item for this instance. Existence only.
+///
+/// ⛔ **The user is EMPTY for both CLIs, and for `gh` that is a choice rather
+/// than the only address.** `glab` writes one item with an empty account.
+/// `gh` writes TWO under `gh:<host>`: one keyed by the login, and one with an
+/// empty account which is its ACTIVE-account slot, the one `gh auth switch`
+/// moves. Reading the empty slot is what makes bridgewatch follow a switch
+/// instead of pinning whichever login happened to be current when the wizard
+/// ran, and it means [`crate::token`]'s existing empty-user path and its
+/// `go-keyring-base64:` unwrap serve both providers with no new credential code.
+pub fn detect_cli_token(
+    probe: &dyn KeyringProbe,
+    provider: Provider,
+    base_url: &str,
+) -> CliTokenDetection {
+    let Some(service) = cli_service_for(provider, base_url) else {
+        return CliTokenDetection::Unavailable {
             reason: format!("{base_url:?} has no host to look up"),
         };
     };
     match probe.exists(&service, "") {
-        Ok(true) => GlabDetection::Found {
+        Ok(true) => CliTokenDetection::Found {
             source: TokenSource::Keyring {
                 service,
                 user: String::new(),
             },
         },
-        Ok(false) => GlabDetection::NotFound { service },
-        Err(reason) => GlabDetection::Unavailable { reason },
+        Ok(false) => CliTokenDetection::NotFound { service },
+        Err(reason) => CliTokenDetection::Unavailable { reason },
     }
 }
 
@@ -534,7 +660,7 @@ pub async fn list_projects(
             projects: projects.into_iter().map(Into::into).collect(),
             truncated,
         }),
-        Err(ClientError::Auth { status: 403 }) | Err(ClientError::NotFound { .. }) => {
+        Err(ClientError::Auth { status: 403, .. }) | Err(ClientError::NotFound { .. }) => {
             Ok(ProjectListing::TypeIdOrPath {
                 reason: "This token is not allowed to list projects. Type the project id or \
                          path."
@@ -548,10 +674,19 @@ pub async fn list_projects(
 
 /// Turn what somebody typed into a [`ProjectRef`], without a request.
 ///
-/// Accepts a numeric id, `group/project`, and a pasted project URL
+/// GitLab accepts a numeric id, `group/project`, and a pasted project URL
 /// (`https://gitlab.com/group/project`, with or without `.git`, a trailing
 /// slash or a `/-/...` suffix).
-pub fn parse_project_input(input: &str) -> Result<ProjectRef, WizardError> {
+///
+/// ⛔ **GitHub accepts `owner/repo` and no numeric id.** There is no
+/// `/repos/<id>` endpoint, so an id could only ever 404, and
+/// [`crate::config::validate`] makes one an ERROR on a github watch: refusing
+/// it here, where the user typed it, is the same rule said at the moment it can
+/// still be corrected. A pasted URL may carry more than two segments
+/// (`.../actions/runs/123`); those are trimmed, because a repository is exactly
+/// two, while a TYPED `a/b/c` is refused rather than silently truncated to
+/// something the user did not write.
+pub fn parse_project_input(input: &str, provider: Provider) -> Result<ProjectRef, WizardError> {
     let issue = |message: &str| {
         WizardError::Input(StepIssue {
             step: WizardStep::Project,
@@ -561,17 +696,26 @@ pub fn parse_project_input(input: &str) -> Result<ProjectRef, WizardError> {
     };
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Err(issue(
-            "type a project id (e.g. 82468124) or path (group/project)",
-        ));
+        return Err(match provider {
+            Provider::Gitlab => issue("type a project id (e.g. 82468124) or path (group/project)"),
+            Provider::Github => issue("type a repository as owner/repo (e.g. acme-corp/monorepo)"),
+        });
     }
-    if let Ok(id) = trimmed.parse::<u64>() {
-        return Ok(ProjectRef::Id(id));
+    if trimmed.chars().all(|c| c.is_ascii_digit()) && trimmed.parse::<u64>().is_ok() {
+        return match provider {
+            Provider::Gitlab => Ok(ProjectRef::Id(trimmed.parse().expect("checked above"))),
+            Provider::Github => Err(issue(
+                "GitHub addresses a repository as owner/repo, not by a numeric id; type \
+                 e.g. acme-corp/monorepo",
+            )),
+        };
     }
     let mut path = trimmed;
+    let mut was_url = false;
     for scheme in ["https://", "http://"] {
         if let Some(rest) = path.strip_prefix(scheme) {
             path = rest.split_once('/').map(|(_, p)| p).unwrap_or("");
+            was_url = true;
         }
     }
     if let Some((before, _)) = path.split_once("/-/") {
@@ -579,24 +723,51 @@ pub fn parse_project_input(input: &str) -> Result<ProjectRef, WizardError> {
     }
     let path = path.trim_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
-    if !path.contains('/')
-        || path.split('/').any(str::is_empty)
-        || path.contains(char::is_whitespace)
-    {
-        return Err(issue(
-            "that is not a project id or a group/project path (a URL of the project works too)",
-        ));
+    let segments: Vec<&str> = path.split('/').collect();
+    let bad = |p: &str| {
+        p.split('/').any(str::is_empty) || p.contains(char::is_whitespace) || !p.contains('/')
+    };
+    match provider {
+        Provider::Gitlab => {
+            if bad(path) {
+                return Err(issue(
+                    "that is not a project id or a group/project path (a URL of the project \
+                     works too)",
+                ));
+            }
+            Ok(ProjectRef::Path(path.to_string()))
+        }
+        Provider::Github => {
+            let trimmed_path = if was_url && segments.len() > 2 {
+                segments[..2].join("/")
+            } else {
+                path.to_string()
+            };
+            if bad(&trimmed_path) || trimmed_path.split('/').count() != 2 {
+                return Err(issue(
+                    "that is not an owner/repo pair (a URL of the repository works too)",
+                ));
+            }
+            Ok(ProjectRef::Path(trimmed_path))
+        }
     }
-    Ok(ProjectRef::Path(path.to_string()))
 }
 
 /// A project, resolved against the instance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedProject {
-    /// Numeric id. The wizard writes this, because it survives a rename.
+    /// Numeric id, as the provider reports it. Informational for GitHub, where
+    /// no endpoint takes it.
     pub id: u64,
-    /// `group/project`.
+    /// `group/project`, or `owner/repo`.
     pub path: String,
+    /// The reference to WRITE into `config.toml` for this provider.
+    ///
+    /// ⛔ The wizard wrote `ProjectRef::Id(id)` for every provider, which on a
+    /// github account is a config the core refuses to load. A GitLab id still
+    /// survives a project rename, which is why it stays GitLab's answer; GitHub
+    /// has no URL that takes one, so its answer is the path.
+    pub project: ProjectRef,
     /// The default branch, to pre-fill the watch's `ref`. `None` for an empty
     /// repository.
     pub default_branch: Option<String>,
@@ -607,16 +778,22 @@ pub struct ResolvedProject {
 /// Step 2: resolve a typed id, path or URL to a real project.
 pub async fn resolve_project(
     client: &dyn CiClient,
+    provider: Provider,
     id_or_path: &str,
 ) -> Result<ResolvedProject, WizardError> {
-    let project = parse_project_input(id_or_path)?;
+    let project = parse_project_input(id_or_path, provider)?;
     let found = client
         .project(&project)
         .await
         .map_err(|e| WizardError::from_client(e, format!("project {project}")))?;
+    let path = found.path_with_namespace;
     Ok(ResolvedProject {
         id: found.id,
-        path: found.path_with_namespace,
+        project: match provider {
+            Provider::Gitlab => ProjectRef::Id(found.id),
+            Provider::Github => ProjectRef::Path(path.clone()),
+        },
+        path,
         default_branch: found.default_branch,
         web_url: found.web_url,
     })
@@ -764,13 +941,25 @@ fn representative(rows: &[Pipeline]) -> Option<&Pipeline> {
 
 /// Step 4: suggest deploy markers from the latest pipeline on `ref_name`,
 /// reading its jobs and, through its bridges, every child pipeline's jobs.
+///
+/// ⚠️ On GitHub this is the same code one level shallower, and deliberately so:
+/// [`CiClient::pipeline_bridges`] answers empty without a request for a github
+/// account, so the loop below runs zero times and the suggestions are the run's
+/// own job names. `workflow` is passed through so the run they come from is the
+/// run the watch will actually follow; without it the newest push run of ANY
+/// workflow would supply the names, and a repository whose newest push run is
+/// a linter would suggest nothing a deploy marker could match.
 pub async fn suggest_deploy_markers(
     client: &dyn CiClient,
     project: &ProjectRef,
     ref_name: &str,
+    workflow: Option<&str>,
 ) -> Result<MarkerSuggestions, WizardError> {
     let rows = client
-        .list_pipelines(project, &ListQuery::exact(ref_name, None, 20))
+        .list_pipelines(
+            project,
+            &ListQuery::exact(ref_name, None, 20).for_workflow(workflow),
+        )
         .await
         .map_err(|e| WizardError::from_client(e, format!("pipelines of {project}")))?;
     let Some(pipeline) = representative(&rows).cloned() else {
@@ -848,6 +1037,11 @@ pub struct NotifyAnswers {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WizardAnswers {
+    /// Which provider the account talks to.
+    ///
+    /// ⛔ Defaults to `gitlab`, so answers written before this key existed (and
+    /// a UI that does not send it) mean exactly what they always did.
+    pub provider: Provider,
     /// The `[accounts.<name>]` key. [`suggest_account_name`] offers one.
     pub account: String,
     /// Instance root, e.g. `https://gitlab.com`.
@@ -860,6 +1054,9 @@ pub struct WizardAnswers {
     pub watch_id: String,
     /// The branch to watch, usually the default branch.
     pub ref_name: String,
+    /// GitHub only: the one workflow to follow, by file name (`ci.yml`) or
+    /// numeric id. `None` or empty is every workflow.
+    pub workflow: Option<String>,
     /// Pipeline sources to accept. `["push"]` by default.
     pub sources: Vec<String>,
     /// Deploy markers; empty is "none".
@@ -879,12 +1076,14 @@ pub struct WizardAnswers {
 impl Default for WizardAnswers {
     fn default() -> Self {
         Self {
+            provider: Provider::Gitlab,
             account: "gitlab".into(),
             base_url: "https://gitlab.com".into(),
             token: TokenSource::Own(true),
             project: None,
             watch_id: "main".into(),
             ref_name: "main".into(),
+            workflow: None,
             sources: vec!["push".into()],
             deploy_markers: Vec::new(),
             schedule_watch: false,
@@ -896,23 +1095,26 @@ impl Default for WizardAnswers {
     }
 }
 
-/// An account key for an instance: `gitlab` for gitlab.com, else the host's
-/// first label (`gitlab.example.com` → `gitlab`, `code.acme.io` → `code`).
-pub fn suggest_account_name(base_url: &str) -> String {
-    let host = glab_service_for(base_url)
-        .and_then(|s| {
-            s.strip_prefix("glab:")
-                .and_then(|h| h.strip_suffix(":token"))
-                .map(str::to_string)
-        })
-        .unwrap_or_default();
+/// An account key for an instance: `gitlab` for gitlab.com, `github` for
+/// github.com, else the host's first label (`gitlab.example.com` → `gitlab`,
+/// `code.acme.io` → `code`, `ghe.acme.com` → `ghe`).
+///
+/// ⚠️ A GitHub account's `base_url` is the API host, so the first label of
+/// `api.github.com` is `api`, which names nothing. One leading `api.` is
+/// stripped first, exactly as [`gh_service_for`] does and for the same reason.
+pub fn suggest_account_name(provider: Provider, base_url: &str) -> String {
+    let host = host_of(base_url).unwrap_or_default();
+    let host = match provider {
+        Provider::Gitlab => host.as_str(),
+        Provider::Github => host.strip_prefix("api.").unwrap_or(&host),
+    };
     let first = host.split(['.', ':']).next().unwrap_or("");
     let clean: String = first
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .collect();
     if clean.is_empty() {
-        "gitlab".into()
+        provider.as_str().to_string()
     } else {
         clean
     }
@@ -963,6 +1165,27 @@ pub fn find_token_prefix(text: &str) -> Option<&'static str> {
     TOKEN_PREFIXES.iter().copied().find(|p| text.contains(p))
 }
 
+/// Prefixes GitHub puts on its tokens: classic (`ghp_`), fine-grained
+/// (`github_pat_`), OAuth (`gho_`), user-to-server (`ghu_`), installation
+/// (`ghs_`) and refresh (`ghr_`).
+///
+/// ⚠️ A separate list, checked only for GitHub answers, so a GitLab file is
+/// judged by exactly the prefixes it always was: `ghs_` or `gho_` in a GitLab
+/// branch pattern or comment must not start refusing a file that saved fine
+/// yesterday.
+pub const GITHUB_TOKEN_PREFIXES: &[&str] = &["ghp_", "github_pat_", "gho_", "ghu_", "ghs_", "ghr_"];
+
+/// [`find_token_prefix`], plus [`GITHUB_TOKEN_PREFIXES`] for a GitHub account.
+pub fn find_token_prefix_for(provider: Provider, text: &str) -> Option<&'static str> {
+    find_token_prefix(text).or_else(|| match provider {
+        Provider::Gitlab => None,
+        Provider::Github => GITHUB_TOKEN_PREFIXES
+            .iter()
+            .copied()
+            .find(|p| text.contains(p)),
+    })
+}
+
 /// Check every answer, returning every problem at once.
 pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
     let mut out = Vec::new();
@@ -979,17 +1202,21 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
         issue(
             Account,
             "account",
-            "the account needs a name, e.g. gitlab".into(),
+            format!(
+                "the account needs a name, e.g. {}",
+                answers.provider.as_str()
+            ),
         );
     }
     let url = answers.base_url.trim();
-    if !(url.starts_with("https://") || url.starts_with("http://"))
-        || glab_service_for(url).is_none()
-    {
+    if !(url.starts_with("https://") || url.starts_with("http://")) || host_of(url).is_none() {
         issue(
             Account,
             "base_url",
-            format!("{url:?} is not an instance URL; use e.g. https://gitlab.com"),
+            format!(
+                "{url:?} is not an instance URL; use e.g. {}",
+                answers.provider.default_base_url()
+            ),
         );
     }
     let token_text = match &answers.token {
@@ -1034,7 +1261,7 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
             String::new()
         }
     };
-    if let Some(prefix) = find_token_prefix(&token_text) {
+    if let Some(prefix) = find_token_prefix_for(answers.provider, &token_text) {
         issue(
             Account,
             "token",
@@ -1053,6 +1280,24 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
     {
         issue(Project, "project", "the project path is empty".into());
     }
+    // ⛔ Refused here as well as in `parse_project_input`, because the answers
+    // can arrive by a route that never went through it: a re-run pre-filled
+    // from a file, or a caller that built them itself. `config::validate` calls
+    // the same thing an ERROR, so a wizard that wrote it would produce a file
+    // its own final check refuses, with a message about a key the user never
+    // saw a field for.
+    if answers.provider == Provider::Github
+        && let Some(ProjectRef::Id(id)) = &answers.project
+    {
+        issue(
+            Project,
+            "project",
+            format!(
+                "GitHub addresses a repository as owner/repo and has no endpoint for the \
+                 numeric id {id}; type e.g. acme-corp/monorepo"
+            ),
+        );
+    }
 
     if answers.watch_id.trim().is_empty() {
         issue(Watch, "watch_id", "the watch needs an id".into());
@@ -1062,17 +1307,62 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
     } else if let Err(e) = RefMatcher::parse(&answers.ref_name) {
         issue(Watch, "ref_name", e.to_string());
     }
+    // ⚠️ The vocabularies overlap in exactly one value, `push`. A GitLab source
+    // on a github watch is answered `200 {"total_count": 0}` rather than
+    // refused, so the watch would show nothing while the API agreed with it.
     for s in &answers.sources {
-        if !KNOWN_PIPELINE_SOURCES.contains(&s.as_str()) {
+        let known = match answers.provider {
+            Provider::Gitlab => KNOWN_PIPELINE_SOURCES.contains(&s.as_str()),
+            Provider::Github => KNOWN_GITHUB_EVENTS.contains(&s.as_str()),
+        };
+        if !known {
             issue(
                 Watch,
                 "sources",
-                format!("{s:?} is not a pipeline source GitLab sends; push is the usual one"),
+                match answers.provider {
+                    Provider::Gitlab => format!(
+                        "{s:?} is not a pipeline source GitLab sends; push is the usual one"
+                    ),
+                    Provider::Github => {
+                        format!("{s:?} is not a workflow event GitHub sends; push is the usual one")
+                    }
+                },
             );
         }
     }
+    // A GitLab project has no workflows to choose between, and `config::validate`
+    // warns about the key on a gitlab watch. The wizard never has to write one
+    // it knows is inert.
+    if answers.provider == Provider::Gitlab
+        && answers
+            .workflow
+            .as_deref()
+            .is_some_and(|w| !w.trim().is_empty())
+    {
+        issue(
+            Watch,
+            "workflow",
+            "a workflow names one GitHub Actions workflow; a GitLab project has no such \
+             subdivision, so leave it empty"
+                .into(),
+        );
+    }
     if let Some(glob) = &answers.preflight_ref {
-        if glob.trim().is_empty() {
+        // A preflight watch is this repository's GitLab idiom (push a `pf/*`
+        // branch, read its pipeline, deploy nothing). On GitHub every one of
+        // those branches would be one more list request a tick out of a budget
+        // 24 times smaller, for a convention a GitHub repository has no reason
+        // to follow. Refused rather than silently dropped, so the CLI's
+        // `--preflight` says why instead of printing a file without it.
+        if answers.provider == Provider::Github {
+            issue(
+                Watch,
+                "preflight_ref",
+                "a preflight watch is offered for GitLab only; add a watch for that branch \
+                 pattern in Settings if you want one on GitHub"
+                    .into(),
+            );
+        } else if glob.trim().is_empty() {
             issue(
                 Watch,
                 "preflight_ref",
@@ -1181,9 +1471,51 @@ fn new_watch(
     })
 }
 
+/// The live poll interval a new GitHub watch starts at, in seconds.
+///
+/// ⛔ Slower than GitLab's 5 s on purpose, and it is a budget rather than
+/// politeness. gitlab.com allows about 2,000 authenticated requests a MINUTE;
+/// GitHub allows 5,000 an HOUR per token, roughly 83 a minute, some 24 times
+/// less. A watch at 5 s is 720 list requests an hour before a single job
+/// fetch, and the budget is shared with whatever else uses the same token,
+/// `gh` included. 30 s costs 120.
+pub const GITHUB_LIVE_SECS: u64 = 30;
+
+/// The idle poll interval a new GitHub watch starts at, in seconds.
+/// See [`GITHUB_LIVE_SECS`]; this is the interval it spends most of its life at.
+pub const GITHUB_IDLE_SECS: u64 = 120;
+
+/// The API prefix for a GitHub host that is not github.com.
+///
+/// ⛔ The two enterprise shapes differ STRUCTURALLY and a hostname swap covers
+/// only one: GitHub Enterprise Server mounts the API under `/api/v3` on the
+/// same host, while GHEC with data residency uses an `api.` subdomain and no
+/// prefix at all, exactly as github.com does. The leading `api.` is therefore
+/// the discriminator, and it is the only one available offline.
+pub fn github_api_path_for(base_url: &str) -> String {
+    match host_of(base_url) {
+        Some(host) if host.starts_with("api.") => String::new(),
+        _ => "/api/v3".to_string(),
+    }
+}
+
 /// Keys of a new watch that are always written, even at their default,
 /// because a reader needs them to know what the watch is.
 const ALWAYS_WRITTEN: &[&str] = &["id", "account", "project", "ref", "role"];
+
+/// Give a NEW watch its provider's starting poll intervals.
+///
+/// ⛔ New watches only. On a re-run an existing watch keeps whatever its file
+/// says: these are a sensible place to start, not a policy, and silently
+/// re-timing a watch somebody had tuned would be a change nothing on screen
+/// announced. GitLab's are the schema defaults and are left alone here so the
+/// keys stay out of the file entirely.
+fn apply_poll_defaults(watch: &mut Watch, answers: &WizardAnswers) {
+    if answers.provider == Provider::Github {
+        watch.poll.live_secs = GITHUB_LIVE_SECS;
+        watch.poll.idle_secs = GITHUB_IDLE_SECS;
+    }
+}
 
 /// Append `watch` through [`Edit::AddWatch`] (the settings window's path), then
 /// remove every key and inline sub-key that equals the schema default.
@@ -1283,11 +1615,57 @@ pub fn build_config(
         .as_ref()
         .and_then(|c| c.accounts.get(&answers.account));
     let base_url = answers.base_url.trim().trim_end_matches('/');
-    if current_account.map(|a| a.base_url.as_str()) != Some(base_url) {
+    // `provider` is written only when it is not the default, so a GitLab file
+    // gains no line it did not have before and every existing one round-trips
+    // untouched. First in the list so it lands above `base_url`: `toml_edit`
+    // appends a key it has never seen, in the order it is asked for.
+    if answers.provider != Provider::default()
+        && current_account.map(|a| a.provider) != Some(answers.provider)
+    {
         edits.push(Edit::Set {
-            path: format!("{acct}.base_url"),
-            value: s(base_url),
+            path: format!("{acct}.provider"),
+            value: s(answers.provider.as_str()),
         });
+    }
+    match answers.provider {
+        // Always written. It is the line a reader looks for first, every
+        // existing file has one, and its absence would change what those files
+        // look like.
+        Provider::Gitlab => {
+            if current_account.map(|a| a.base_url.as_str()) != Some(base_url) {
+                edits.push(Edit::Set {
+                    path: format!("{acct}.base_url"),
+                    value: s(base_url),
+                });
+            }
+        }
+        // ⛔ A github.com account is written with NO base_url, api_path or
+        // header line. All three default per provider, so writing them pins
+        // today's values into a file that would otherwise follow the code, and
+        // `header = "Authorization: Bearer"` in particular reads like a choice
+        // somebody made rather than the only value GitHub accepts. An
+        // enterprise host needs both of the first two, because `api_path` is
+        // what tells the two enterprise shapes apart.
+        Provider::Github => {
+            let default_base = Provider::Github.default_base_url();
+            if base_url == default_base {
+                edits.push(Edit::Unset {
+                    path: format!("{acct}.base_url"),
+                });
+                edits.push(Edit::Unset {
+                    path: format!("{acct}.api_path"),
+                });
+            } else {
+                edits.push(Edit::Set {
+                    path: format!("{acct}.base_url"),
+                    value: s(base_url),
+                });
+                edits.push(Edit::Set {
+                    path: format!("{acct}.api_path"),
+                    value: s(&github_api_path_for(base_url)),
+                });
+            }
+        }
     }
     if current_account.map(|a| &a.token) != Some(&answers.token) {
         edits.extend(token_edits(&acct, &answers.token));
@@ -1308,8 +1686,17 @@ pub fn build_config(
                 Role::Primary,
             )?;
             watch.deploy_markers = answers.deploy_markers.clone();
+            apply_poll_defaults(&mut watch, answers);
             if let Some(live) = answers.live_secs {
                 watch.poll.live_secs = live;
+            }
+            if answers.provider == Provider::Github {
+                watch.workflow = answers
+                    .workflow
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|w| !w.is_empty())
+                    .map(str::to_string);
             }
             if let Some(n) = answers.notify {
                 watch.notify.deployed = n.deployed;
@@ -1337,6 +1724,22 @@ pub fn build_config(
             }
             if w.sources != answers.sources {
                 set("sources", strings(&answers.sources));
+            }
+            // ⚠️ Written only when the answer HAS one. Nothing here is ever
+            // removed (the doc comment above says so), and an empty answer is
+            // "every workflow", which is also what an absent key means: the
+            // difference only matters on a re-run over a file that already
+            // names one, and there the file wins rather than being quietly
+            // widened to every workflow in the repository.
+            if answers.provider == Provider::Github
+                && let Some(workflow) = answers
+                    .workflow
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|wf| !wf.is_empty())
+                && w.workflow.as_deref() != Some(workflow)
+            {
+                set("workflow", s(workflow));
             }
             if w.deploy_markers != answers.deploy_markers {
                 set("deploy_markers", strings(&answers.deploy_markers));
@@ -1385,7 +1788,13 @@ pub fn build_config(
                 Role::Secondary,
             )?;
             // Stays cheap until something breaks, as the shipped example does.
+            // ⚠️ `only_when` is a bridge filter, so on GitHub it selects nothing
+            // and costs nothing: a run has no bridges to dive into yet. It is
+            // written anyway, because it is the value that becomes right the
+            // day a watch folds a commit's runs into one row, and
+            // `config::validate` does not warn about it.
             watch.dive.only_when = Some("failed".into());
+            apply_poll_defaults(&mut watch, answers);
             new_watches.push(watch);
         }
     }
@@ -1398,6 +1807,7 @@ pub fn build_config(
             let mut watch = new_watch(&id, &answers.account, &project, glob, &[], Role::Secondary)?;
             // A row per preflight, no dive: one request a tick.
             watch.dive.bridges = String::new();
+            apply_poll_defaults(&mut watch, answers);
             new_watches.push(watch);
         }
     }
@@ -1424,7 +1834,7 @@ pub fn build_config(
         None => format!("{NEW_FILE_HEADER}{}", editor.to_toml()),
     };
 
-    if let Some(prefix) = find_token_prefix(&toml) {
+    if let Some(prefix) = find_token_prefix_for(answers.provider, &toml) {
         return Err(WizardError::TokenInConfig { prefix });
     }
     let loaded = match config::parse_str(&toml, Path::new("config.toml")) {

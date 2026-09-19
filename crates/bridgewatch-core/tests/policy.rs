@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use bridgewatch_core::client::ClientError;
-use bridgewatch_core::config::{PollConfig, RateLimitBackoff};
+use bridgewatch_core::config::{PollConfig, Provider, RateLimitBackoff};
 use bridgewatch_core::poll::{PollNow, PollPolicy};
 
 fn policy() -> PollPolicy {
@@ -163,7 +163,10 @@ fn a_404_a_decode_failure_and_a_surprise_status_all_back_off() {
             status: 418,
             path: "/projects/1/pipelines".into(),
         },
-        ClientError::Auth { status: 401 },
+        ClientError::Auth {
+            status: 401,
+            provider: Provider::Gitlab,
+        },
     ] {
         let mut p = policy();
         assert!(

@@ -110,6 +110,30 @@ pub fn client_for(
     }
 }
 
+/// The sentence [`ClientError::Auth`] displays.
+///
+/// ⛔ GitLab's wording is byte for byte what it has always been. It is what a
+/// GitLab user has already seen and learned to act on, and only the GitHub arm
+/// is new; a "tidy" of the shared half would change an error message for people
+/// this packet is not about.
+///
+/// GitHub's names both credential kinds because the two look for different
+/// things: a classic token has a scope list with `repo` on it, a fine-grained
+/// token has repository permissions and no scope list, and `actions:read` is
+/// not a classic scope anybody will find on the token page.
+fn auth_message(status: &u16, provider: &Provider) -> String {
+    match provider {
+        Provider::Gitlab => format!(
+            "not authorised ({status}): check the token's scope (read_api) and that it can see this project"
+        ),
+        Provider::Github => format!(
+            "not authorised ({status}): check that the token can read Actions on this \
+             repository (a classic token needs the repo scope for a private repository; a \
+             fine-grained token needs Actions: read)"
+        ),
+    }
+}
+
 /// Everything a GitLab call can fail with.
 ///
 /// The variants are the ones the poller reacts to differently: `Auth` is worth
@@ -118,12 +142,17 @@ pub fn client_for(
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ClientError {
     /// 401 or 403: the token is missing, wrong, or lacks the scope.
-    #[error(
-        "not authorised ({status}): check the token's scope (read_api) and that it can see this project"
-    )]
+    ///
+    /// ⚠️ The advice differs per provider, so the provider travels with the
+    /// error rather than being looked up by whoever prints it: `read_api` is a
+    /// GitLab scope name that exists nowhere on GitHub, and a fine-grained
+    /// GitHub token has no scope list to check at all.
+    #[error("{}", auth_message(.status, .provider))]
     Auth {
         /// The status that was returned.
         status: u16,
+        /// Which provider refused it.
+        provider: Provider,
     },
     /// 404: the project, pipeline or job does not exist, or the token cannot
     /// see it, which GitLab deliberately does not distinguish.

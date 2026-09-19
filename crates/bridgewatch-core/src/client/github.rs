@@ -604,12 +604,18 @@ pub fn status_error(status: u16, path: &str, response: &HttpResponse) -> Option<
     let told_to_wait = response.retry_after.is_some();
     match status {
         200..=299 => None,
-        401 => Some(ClientError::Auth { status }),
+        401 => Some(ClientError::Auth {
+            status,
+            provider: Provider::Github,
+        }),
         403 if exhausted || told_to_wait => Some(ClientError::RateLimited {
             retry_after: response.retry_after,
             reset: response.ratelimit_reset,
         }),
-        403 => Some(ClientError::Auth { status }),
+        403 => Some(ClientError::Auth {
+            status,
+            provider: Provider::Github,
+        }),
         404 => Some(ClientError::NotFound {
             path: path.to_string(),
         }),

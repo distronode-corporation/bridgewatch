@@ -19,6 +19,8 @@
  * component may invent a path.
  */
 
+import type { Provider } from "../types";
+
 /** Which settings tab a key lives on. */
 export type Tab = "accounts" | "watches" | "icon" | "verdict" | "ui" | "log";
 
@@ -73,6 +75,18 @@ export interface RegistryEntry {
    * itself a value the user can mean.
    */
   emptyMeans?: EmptyMeans;
+  /**
+   * The one provider this key means something for. Absent: both.
+   *
+   * ⚠ Applicability is DATA, and it only ever de-emphasises. A key for the
+   * other provider is still rendered and still editable: config.toml is the
+   * source of truth, the GUI exposes every key, and somebody who moved a watch
+   * from one account to another has to be able to see the value that came with
+   * it and clear it. Hiding or disabling it would strand exactly that value.
+   */
+  provider?: Provider;
+  /** Why the key is inert on the other provider, in one line. Required with `provider`. */
+  providerNote?: string;
 }
 
 export const REGISTRY: RegistryEntry[] = [
@@ -153,6 +167,8 @@ export const REGISTRY: RegistryEntry[] = [
     control: "text",
     label: "Workflow",
     hint: "GitHub only: one workflow file (ci.yml) or id. Empty watches every workflow.",
+    provider: "github",
+    providerNote: "Ignored on a GitLab account: a GitLab project has no workflows to choose between.",
   },
   {
     path: "watches.*.sources",
@@ -197,9 +213,26 @@ export const REGISTRY: RegistryEntry[] = [
     // ⛔ The default is `"*"`. Removing the key to mean "none" would turn the
     // dive back on for every bridge, which is what the hint promises it stops.
     emptyMeans: "empty",
+    // The same three keys `config::validate` warns about on a github watch.
+    provider: "gitlab",
+    providerNote: "Ignored on a GitHub account: a workflow run has no bridges to dive into yet.",
   },
-  { path: "watches.*.dive.exclude", tab: "watches", control: "list", label: "Dive exclusions" },
-  { path: "watches.*.dive.depth", tab: "watches", control: "number", label: "Dive depth" },
+  {
+    path: "watches.*.dive.exclude",
+    tab: "watches",
+    control: "list",
+    label: "Dive exclusions",
+    provider: "gitlab",
+    providerNote: "Ignored on a GitHub account: a workflow run has no bridges to dive into yet.",
+  },
+  {
+    path: "watches.*.dive.depth",
+    tab: "watches",
+    control: "number",
+    label: "Dive depth",
+    provider: "gitlab",
+    providerNote: "Ignored on a GitHub account: GitHub has no nested runs to walk.",
+  },
   {
     path: "watches.*.dive.only_when",
     tab: "watches",
@@ -355,6 +388,21 @@ export const REGISTRY: RegistryEntry[] = [
     hint: "How many recent API calls the debug pane shows.",
   },
 ];
+
+/**
+ * Why `entry` is inert for an account of `provider`, or null when it applies
+ * (including when the provider is not known yet, since nothing is inert then).
+ */
+export function inapplicableNote(entry: RegistryEntry, provider: Provider | null | undefined): string | null {
+  if (!entry.provider || !provider || entry.provider === provider) return null;
+  return entry.providerNote ?? `Only used by ${entry.provider === "github" ? "GitHub" : "GitLab"} accounts.`;
+}
+
+/** The provider an account in the parsed document talks to; an account without the key is gitlab. */
+export function providerOf(account: unknown): Provider {
+  const p = (account as { provider?: unknown } | null | undefined)?.provider;
+  return p === "github" ? "github" : "gitlab";
+}
 
 /** The registry entries on one tab, in declaration order. */
 export function entriesFor(tab: Tab): RegistryEntry[] {

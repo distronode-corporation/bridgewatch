@@ -3,8 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use bridgewatch_core::config::ProjectRef;
+use bridgewatch_core::config::{Config, ProjectRef, Provider};
 use bridgewatch_core::poll::PollNow;
+use bridgewatch_core::verdict::WatchView;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
@@ -272,9 +273,38 @@ fn on_menu(app: &AppHandle, id: &str) {
 
 /// A pipeline's `web_url` minus its trailing id: the project's pipelines
 /// index. `None` when the URL does not end in an id.
-fn pipelines_index(web_url: &str) -> Option<String> {
+///
+/// GitLab's runs end `/-/pipelines/42`, so the parent directory is the index.
+fn gitlab_pipelines_index(web_url: &str) -> Option<String> {
     let (head, tail) = web_url.rsplit_once('/')?;
     (!tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit())).then(|| head.to_string())
+}
+
+/// A workflow run's `html_url` reduced to the repository's Actions page.
+///
+/// ⛔ GitHub's URL is `https://<host>/<owner>/<repo>/actions/runs/<id>`, and
+/// the two segments above the id are `runs` and `actions`, so GitLab's
+/// "strip the last segment" gives `.../actions/runs`, which is a 404 rather
+/// than a wrong-looking page. The shape is matched instead of trimmed: anything
+/// that is not exactly this is no link at all, which is the same answer the
+/// GitLab side gives a URL it does not recognise.
+fn github_actions_index(web_url: &str) -> Option<String> {
+    let (head, id) = web_url.rsplit_once('/')?;
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let repo = head.strip_suffix("/actions/runs")?;
+    // A bare origin has no owner/repo above it, so `https://github.com` alone
+    // must not become a link to github.com's front page.
+    (repo.matches('/').count() >= 4).then(|| format!("{repo}/actions"))
+}
+
+/// The provider's own index page for the row a `web_url` came from.
+fn runs_index(provider: Provider, web_url: &str) -> Option<String> {
+    match provider {
+        Provider::Gitlab => gitlab_pipelines_index(web_url),
+        Provider::Github => github_actions_index(web_url),
+    }
 }
 
 /// Where "Open pipelines page" goes.
@@ -287,36 +317,72 @@ fn pipelines_index(web_url: &str) -> Option<String> {
 /// `group/path` project — and returning nothing is better than opening a 404.
 pub fn pipelines_url(app: &AppHandle) -> Option<String> {
     let state = app.state::<Arc<AppState>>();
+    // ⛔ ONE lock, and the configuration read through the guard already held.
+    // `AppState::config()` takes the same (non-reentrant) mutex, so calling it
+    // while `inner` is alive would hang the menu handler on this very click.
+    let inner = state.lock();
+    index_for(&inner.snapshot.watches, inner.config.as_ref())
+}
 
-    let from_snapshot = {
-        let inner = state.lock();
-        let watches = &inner.snapshot.watches;
-        watches
-            .iter()
-            .find(|w| w.role.is_primary())
-            .or_else(|| watches.first())
-            .and_then(|w| w.rows.first())
-            .and_then(|r| r.web_url.as_deref())
-            .and_then(pipelines_index)
-    };
+/// [`pipelines_url`] without the app handle: the snapshot first, then the
+/// configuration.
+fn index_for(watches: &[WatchView], config: Option<&Config>) -> Option<String> {
+    // ⚠ Which provider the row belongs to is read from the CONFIGURATION, by
+    // the watch id the snapshot carries: a `web_url` alone cannot say, and
+    // guessing from the host would be wrong for GitHub Enterprise Server, whose
+    // web host looks like nothing in particular.
+    let from_snapshot = watches
+        .iter()
+        .find(|w| w.role.is_primary())
+        .or_else(|| watches.first())
+        .and_then(|w| {
+            let provider = config
+                .and_then(|c| {
+                    let cw = c.watches.iter().find(|cw| cw.id == w.id)?;
+                    c.accounts.get(&cw.account)
+                })
+                .map(|a| a.provider)
+                .unwrap_or_default();
+            w.rows
+                .first()
+                .and_then(|r| r.web_url.as_deref())
+                .and_then(|url| runs_index(provider, url))
+        });
     if from_snapshot.is_some() {
         return from_snapshot;
     }
 
-    let config = state.config()?;
+    let config = config?;
     let watch = config
         .watches
         .iter()
         .find(|w| w.role.is_primary())
         .or_else(|| config.watches.first())?;
     let account = config.accounts.get(&watch.account)?;
-    match &watch.project {
-        ProjectRef::Path(path) => Some(format!(
+    match (&watch.project, account.provider) {
+        // ⛔ GitHub's WEB host is not the account's `base_url`, which is the API
+        // host (`https://api.github.com`). One leading `api.` comes off, the
+        // same rule `wizard::gh_service_for` uses and for the same reason;
+        // GitHub Enterprise Server has no prefix to strip, because there the
+        // API is a path on the one host.
+        (ProjectRef::Path(path), Provider::Github) => {
+            let base = account.base_url.trim_end_matches('/');
+            let web = base
+                .split_once("://")
+                .map(|(scheme, rest)| {
+                    format!("{scheme}://{}", rest.strip_prefix("api.").unwrap_or(rest))
+                })
+                .unwrap_or_else(|| base.to_string());
+            Some(format!("{web}/{}/actions", path.trim_matches('/')))
+        }
+        (ProjectRef::Path(path), Provider::Gitlab) => Some(format!(
             "{}/{}/-/pipelines",
             account.base_url.trim_end_matches('/'),
             path.trim_matches('/')
         )),
-        ProjectRef::Id(_) => None,
+        // No URL can be constructed for a numeric id without asking the API
+        // what its path is, and nothing addresses a GitHub repository by one.
+        (ProjectRef::Id(_), _) => None,
     }
 }
 
@@ -333,17 +399,127 @@ mod tests {
         )
         .unwrap()
         .config;
-        let good = pipelines_index("https://gitlab.com/g/p/-/pipelines/42").unwrap();
+        let good = runs_index(Provider::Gitlab, "https://gitlab.com/g/p/-/pipelines/42").unwrap();
         assert_eq!(good, "https://gitlab.com/g/p/-/pipelines");
         assert!(crate::links::check(&good, Some(&config)).is_ok());
         for hostile in [
             "file:///etc/passwd/1",
             "https://evil.example/g/p/-/pipelines/1",
         ] {
-            let url = pipelines_index(hostile).unwrap();
+            let url = runs_index(Provider::Gitlab, hostile).unwrap();
             assert!(crate::links::check(&url, Some(&config)).is_err(), "{url}");
         }
-        assert_eq!(pipelines_index("https://gitlab.com/g/p"), None);
+        assert_eq!(runs_index(Provider::Gitlab, "https://gitlab.com/g/p"), None);
+    }
+
+    /// ⛔ A workflow run's URL has TWO segments above the id, so GitLab's
+    /// "strip the last one" would give `.../actions/runs`, a 404 that looks
+    /// like a link. Garbage yields nothing rather than a wrong page, and
+    /// whatever it yields still goes through the checked opener.
+    /// With nothing in the snapshot yet the configuration is the fallback, and
+    /// a github account's `base_url` is the API host, so the link needs the WEB
+    /// host: `api.` off github.com and off a data-residency host, nothing off
+    /// GHES, whose API is a path.
+    #[test]
+    fn with_no_rows_yet_the_link_is_built_from_the_configuration() {
+        let parse = |text: &str| {
+            bridgewatch_core::config::parse_str(text, Path::new("x.toml"))
+                .unwrap()
+                .config
+        };
+        let watch = |project: &str| {
+            format!(
+                "[[watches]]\nid = \"w\"\naccount = \"a\"\nproject = {project}\nref = \"main\"\n"
+            )
+        };
+        let cases = [
+            (
+                format!("[accounts.a]\nprovider = \"github\"\n{}", watch("\"o/r\"")),
+                Some("https://github.com/o/r/actions"),
+            ),
+            (
+                format!(
+                    "[accounts.a]\nprovider = \"github\"\nbase_url = \"https://ghe.acme.com\"\napi_path = \"/api/v3\"\n{}",
+                    watch("\"o/r\"")
+                ),
+                Some("https://ghe.acme.com/o/r/actions"),
+            ),
+            (
+                format!(
+                    "[accounts.a]\nprovider = \"github\"\nbase_url = \"https://api.acme.ghe.com\"\n{}",
+                    watch("\"o/r\"")
+                ),
+                Some("https://acme.ghe.com/o/r/actions"),
+            ),
+            (
+                format!(
+                    "[accounts.a]\nbase_url = \"https://gitlab.com\"\n{}",
+                    watch("\"g/p\"")
+                ),
+                Some("https://gitlab.com/g/p/-/pipelines"),
+            ),
+            (
+                format!(
+                    "[accounts.a]\nbase_url = \"https://gitlab.com\"\n{}",
+                    watch("42")
+                ),
+                None,
+            ),
+        ];
+        for (text, want) in cases {
+            let config = parse(&text);
+            assert_eq!(index_for(&[], Some(&config)).as_deref(), want, "{text}");
+        }
+        assert_eq!(index_for(&[], None), None);
+    }
+
+    #[test]
+    fn a_github_run_url_becomes_the_repository_s_actions_page() {
+        let config = bridgewatch_core::config::parse_str(
+            "[accounts.gh]\nprovider = \"github\"\n",
+            Path::new("x.toml"),
+        )
+        .unwrap()
+        .config;
+        let good = runs_index(
+            Provider::Github,
+            "https://github.com/acme-corp/monorepo/actions/runs/1234",
+        )
+        .unwrap();
+        assert_eq!(good, "https://github.com/acme-corp/monorepo/actions");
+        // GHES: the web host is the account host, and the shape is the same.
+        assert_eq!(
+            runs_index(Provider::Github, "https://ghe.acme.com/a/b/actions/runs/9").unwrap(),
+            "https://ghe.acme.com/a/b/actions"
+        );
+        for garbage in [
+            "https://github.com/acme/web/actions/runs/",
+            "https://github.com/acme/web/actions/runs/abc",
+            "https://github.com/acme/web/-/pipelines/42",
+            "https://github.com/1",
+            "https://github.com",
+            "",
+            "not a url at all",
+        ] {
+            assert_eq!(
+                runs_index(Provider::Github, garbage),
+                None,
+                "{garbage:?} produced a link"
+            );
+        }
+        // A hostile host still fails the opener's check, exactly as GitLab's does.
+        let hostile =
+            runs_index(Provider::Github, "https://evil.example/a/b/actions/runs/1").unwrap();
+        assert!(
+            crate::links::check(&hostile, Some(&config)).is_err(),
+            "{hostile}"
+        );
+        // ...and the provider is not interchangeable: a GitLab URL read as
+        // GitHub is no link, rather than a plausible wrong one.
+        assert_eq!(
+            runs_index(Provider::Github, "https://gitlab.com/g/p/-/pipelines/42"),
+            None
+        );
     }
 
     #[test]

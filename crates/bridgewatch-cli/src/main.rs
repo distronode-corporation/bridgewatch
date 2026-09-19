@@ -152,17 +152,43 @@ enum Command {
     /// nothing is written. When the config file already exists it is EDITED
     /// (comments and other watches kept) and the result printed; redirect it
     /// yourself once it reads right.
-    Init(InitArgs),
+    Init(Box<InitArgs>),
+}
+
+/// `--provider`, spelled exactly as the config key is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum ProviderArg {
+    Gitlab,
+    Github,
+}
+
+impl From<ProviderArg> for config::Provider {
+    fn from(p: ProviderArg) -> Self {
+        match p {
+            ProviderArg::Gitlab => config::Provider::Gitlab,
+            ProviderArg::Github => config::Provider::Github,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
 struct InitArgs {
-    /// Numeric project id or group/project path (a project URL works too).
+    /// Which CI provider the account talks to.
+    #[arg(long, value_enum, default_value_t = ProviderArg::Gitlab)]
+    provider: ProviderArg,
+    /// Numeric project id or group/project path for GitLab, owner/repo for
+    /// GitHub (a project or repository URL works too).
     #[arg(long)]
     project: String,
-    /// Instance root.
-    #[arg(long, default_value = "https://gitlab.com", value_name = "URL")]
-    base_url: String,
+    /// Instance root. Defaults to https://gitlab.com, or to
+    /// https://api.github.com with --provider github.
+    //
+    // ⚠ Not a clap `default_value`: the default depends on another flag, and a
+    // fixed one would put https://gitlab.com on a github account, where it
+    // parses, validates and then 404s every request against a host that has
+    // never heard of the API path.
+    #[arg(long, value_name = "URL")]
+    base_url: Option<String>,
     /// The [accounts.<name>] key. Defaults to one derived from the URL.
     #[arg(long)]
     account: Option<String>,
@@ -172,7 +198,12 @@ struct InitArgs {
     /// The watch id. Defaults to <project>-<ref>.
     #[arg(long, value_name = "ID")]
     watch_id: Option<String>,
-    /// Pipeline source to accept. May be repeated.
+    /// GitHub only: the one workflow to follow, by file name (ci.yml) or id.
+    /// Empty watches every workflow.
+    #[arg(long, value_name = "WORKFLOW")]
+    workflow: Option<String>,
+    /// Pipeline source (GitLab) or workflow event (GitHub) to accept. May be
+    /// repeated.
     #[arg(long = "source", default_value = "push", value_name = "SOURCE")]
     sources: Vec<String>,
     /// Deploy marker job name (or re:<regex>). May be repeated.
@@ -190,6 +221,9 @@ struct InitArgs {
     /// Use glab's keyring item for this instance (glab:<host>:token).
     #[arg(long, group = "token")]
     glab: bool,
+    /// Use gh's keyring item for this host (gh:<host>, active-account slot).
+    #[arg(long, group = "token")]
+    gh: bool,
     /// Read the token from this environment variable.
     #[arg(long, group = "token", value_name = "VAR")]
     token_env: Option<String>,
@@ -318,7 +352,7 @@ async fn run(cli: Cli) -> Outcome {
         Command::Check(args) => check(&config, args).await,
         Command::Watch(args) => watch(&config, args).await,
         Command::Fixture { action } => fixture(&config, action).await,
-        Command::Init(args) => init(&config, args),
+        Command::Init(args) => init(&config, *args),
     }
 }
 
@@ -328,9 +362,27 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
     use bridgewatch_core::wizard::{self, WizardAnswers, WizardError};
 
     let usage = |e: WizardError| Failure::new(exit::USAGE, e);
-    let project = wizard::parse_project_input(&args.project).map_err(usage)?;
-    let token = if args.glab {
-        let service = wizard::glab_service_for(&args.base_url)
+    let provider: config::Provider = args.provider.into();
+    let base_url = args.base_url.unwrap_or_else(|| provider.default_base_url());
+    let project = wizard::parse_project_input(&args.project, provider).map_err(usage)?;
+    // ⛔ The two CLI flags are not interchangeable and neither is a synonym for
+    // "the provider's CLI": `glab` and `gh` write different service names, so
+    // the wrong one names an item that does not exist and the failure arrives
+    // later as "no such entry" rather than here as a typo.
+    if args.glab && provider == config::Provider::Github {
+        return Err(Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!("--glab is gitlab's keyring item; use --gh for a github account"),
+        ));
+    }
+    if args.gh && provider == config::Provider::Gitlab {
+        return Err(Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!("--gh is github's keyring item; use --glab for a gitlab account"),
+        ));
+    }
+    let token = if args.glab || args.gh {
+        let service = wizard::cli_service_for(provider, &base_url)
             .ok_or_else(|| Failure::new(exit::USAGE, anyhow::anyhow!("--base-url has no host")))?;
         TokenSource::Keyring {
             service,
@@ -352,14 +404,16 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         .watch_id
         .unwrap_or_else(|| wizard::suggest_watch_id(&project.to_string(), &args.ref_name));
     let answers = WizardAnswers {
+        provider,
         account: args
             .account
-            .unwrap_or_else(|| wizard::suggest_account_name(&args.base_url)),
-        base_url: args.base_url,
+            .unwrap_or_else(|| wizard::suggest_account_name(provider, &base_url)),
+        base_url,
         token,
         project: Some(project),
         watch_id,
         ref_name: args.ref_name,
+        workflow: args.workflow,
         sources: args.sources,
         deploy_markers: args.deploy_markers,
         schedule_watch: args.schedule,
@@ -752,6 +806,26 @@ async fn fixture(config_args: &ConfigArgs, action: FixtureAction) -> Outcome {
         .accounts
         .get(&account_name)
         .with_context(|| format!("no account named {account_name:?}"))?;
+
+    // ⛔ Refused rather than recorded. The recorder below builds a GitLab
+    // client unconditionally, so a github account would send `/api/v4/...`
+    // paths to api.github.com; and even with the right client the fixture
+    // LAYOUT is GitLab's (list.json, bridges.json, child-*) and both PII
+    // allow-lists are GitLab's field names, so a GitHub run recorded through it
+    // would be written to a public repository with `head_commit.author.email`,
+    // `actor`, `runner_name` and the commit message in it, unscrubbed, because
+    // no rule names those keys yet.
+    if account_def.provider == config::Provider::Github {
+        return Err(Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!(
+                "account {account_name:?} is a github account, and fixture recording is \
+                 GitLab-only today. GitHub recording arrives with its own PII allow-list \
+                 for the run and job payloads, which carry author and committer names and \
+                 email addresses, the commit message, the actor, and runner names"
+            ),
+        ));
+    }
 
     let project_ref = match project {
         Some(p) => match p.parse::<u64>() {

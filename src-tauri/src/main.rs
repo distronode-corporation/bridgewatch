@@ -115,7 +115,7 @@ fn main() {
             commands::clear_own_token,
             commands::get_launch_at_login,
             commands::set_launch_at_login,
-            wizard::wizard_detect_glab,
+            wizard::wizard_detect_cli_token,
             wizard::wizard_test_connection,
             wizard::wizard_list_projects,
             wizard::wizard_resolve_project,

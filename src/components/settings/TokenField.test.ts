@@ -213,3 +213,62 @@ describe("TokenField, across an unrelated save", () => {
     expect(h.field("BRIDGEWATCH_TOKEN").value).toBe("BRIDGEWATCH_TOKEN_GITLAB");
   });
 });
+
+describe("TokenField, the provider's CLI preset", () => {
+  function renderFor(provider: "gitlab" | "github", baseUrl: string, value: unknown = KEYRING) {
+    host = document.createElement("div");
+    document.body.append(host);
+    const edits: Edit[][] = [];
+    const props = reactive({
+      account: "acct",
+      value,
+      provider,
+      baseUrl,
+      onedit: (e: Edit[]) => {
+        edits.push(e);
+        return Promise.resolve();
+      },
+    }) as ComponentProps<typeof TokenField>;
+    component = mount(TokenField, { target: host, props });
+    flushSync();
+    return { edits };
+  }
+
+  const presetButton = () => host.querySelector<HTMLButtonElement>("button.preset");
+  const input = (placeholder: string) => host.querySelector<HTMLInputElement>(`input[placeholder^="${placeholder}"]`)!;
+  const choiceLabels = () =>
+    [...host.querySelectorAll('[role="radiogroup"] label')].map((l) => l.textContent?.trim());
+
+  it("offers gh's active-account item on a GitHub account, named for the WEB host", () => {
+    const { edits } = renderFor("github", "https://api.github.com");
+    expect(choiceLabels()[0]).toBe("gh / OS keyring");
+    expect(presetButton()?.textContent).toContain("gh:github.com");
+    presetButton()!.click();
+    flushSync();
+    expect(input("service").value).toBe("gh:github.com");
+    expect(input("user").value).toBe("");
+    // Filling the fields writes nothing; "Use this source" does.
+    expect(edits).toEqual([]);
+    host.querySelector<HTMLButtonElement>("button.apply")!.click();
+    flushSync();
+    expect(edits[0]).toContainEqual({ op: "set", path: "accounts.acct.token.keyring.service", value: { string: "gh:github.com" } });
+    expect(edits[0]).toContainEqual({ op: "set", path: "accounts.acct.token.keyring.user", value: { string: "" } });
+  });
+
+  it("names a GitHub Enterprise Server item after its own host", () => {
+    renderFor("github", "https://ghe.acme.com");
+    expect(presetButton()?.textContent).toContain("gh:ghe.acme.com");
+  });
+
+  it("offers glab's item on a GitLab account, and never gh's", () => {
+    renderFor("gitlab", "https://gitlab.com");
+    expect(choiceLabels()[0]).toBe("glab / OS keyring");
+    expect(presetButton()?.textContent).toContain("glab:gitlab.com:token");
+    expect(host.textContent).not.toContain("gh:");
+  });
+
+  it("speaks GitHub in the placeholders of a GitHub account", () => {
+    renderFor("github", "https://api.github.com", { own: true });
+    expect(host.querySelector<HTMLInputElement>('input[type="password"]')?.placeholder).toContain("github_pat_");
+  });
+});

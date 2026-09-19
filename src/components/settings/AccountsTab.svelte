@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { concretePath, entriesFor } from "../../lib/settings/registry";
+  import { concretePath, entriesFor, providerOf } from "../../lib/settings/registry";
   import { getAt } from "../../lib/settings/values";
-  import type { Edit } from "../../lib/types";
+  import type { Edit, Provider } from "../../lib/types";
   import { Button } from "$lib/components/ui/button/index.js";
   import Field from "./Field.svelte";
-  import { INPUT } from "./styles";
+  import { INPUT, SELECT } from "./styles";
   import TokenField from "./TokenField.svelte";
 
   interface Props {
@@ -17,10 +17,29 @@
   const names = $derived(Object.keys((getAt(config, "accounts") ?? {}) as Record<string, unknown>));
   const fields = entriesFor("accounts").filter((e) => e.control !== "token");
   let newName = $state("");
+  /** GitLab first and the default, so adding an account works as it always did. */
+  let newProvider = $state<Provider>("gitlab");
+
+  const accountAt = (name: string) => getAt(config, concretePath("accounts.*", name));
 
   function addAccount() {
     const name = newName.trim();
     if (name === "") return;
+    const token: Edit = {
+      op: "set",
+      path: concretePath("accounts.*.token.own", name),
+      value: { boolean: true },
+    };
+    if (newProvider === "github") {
+      // ⛔ `provider` and the token, and nothing else. base_url, api_path and
+      // header all default per provider, so writing GitLab's values (or even
+      // today's GitHub ones) would pin them into a file that should follow the
+      // code, and https://gitlab.com with /api/v4 on a github account is a
+      // file that loads and then 404s every request.
+      onedit([{ op: "set", path: concretePath("accounts.*.provider", name), value: { string: "github" } }, token]);
+      newName = "";
+      return;
+    }
     // Enough keys to make the account valid on its own; everything else has a
     // default the core fills in.
     //
@@ -34,11 +53,7 @@
         path: concretePath("accounts.*.base_url", name),
         value: { string: "https://gitlab.com" },
       },
-      {
-        op: "set",
-        path: concretePath("accounts.*.token.own", name),
-        value: { boolean: true },
-      },
+      token,
     ]);
     newName = "";
   }
@@ -58,12 +73,18 @@
     <TokenField
       account={name}
       value={getAt(config, concretePath("accounts.*.token", name))}
+      provider={providerOf(accountAt(name))}
+      baseUrl={String(getAt(config, concretePath("accounts.*.base_url", name)) ?? "")}
       {onedit}
     />
   </section>
 {/each}
 
 <div class="add flex max-w-[420px] gap-1.5">
-  <input type="text" class={INPUT} placeholder="new account name" bind:value={newName} />
+  <input type="text" class={INPUT} placeholder="new account name" aria-label="New account name" bind:value={newName} />
+  <select class={[SELECT, "w-32 shrink-0"]} aria-label="New account's provider" bind:value={newProvider}>
+    <option value="gitlab">GitLab</option>
+    <option value="github">GitHub</option>
+  </select>
   <Button variant="outline" size="sm" onclick={addAccount} disabled={newName.trim() === ""}>Add account</Button>
 </div>

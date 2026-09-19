@@ -2,10 +2,15 @@
 //! `bridgewatch_core::wizard`, which holds every decision.
 //!
 //! What lives HERE is only what the core cannot do: turning the wizard's
-//! `Connection` into a `GitLabClient` (resolving a token, or taking a pasted
-//! one), the confirmation gate in front of that, and the write, which goes
-//! through the same `admit` + compare-and-swap path as every other write to
-//! the file.
+//! `Connection` into a client (resolving a token, or taking a pasted one), the
+//! confirmation gate in front of that, and the write, which goes through the
+//! same `admit` + compare-and-swap path as every other write to the file.
+//!
+//! ⛔ The client is built by `client::client_for`, the core's one factory, and
+//! never by naming a provider's type here. This built a `GitLabClient`
+//! outright, so a github account would have had `/api/v4/...` paths and a
+//! `PRIVATE-TOKEN` header sent to api.github.com on the wizard's very first
+//! step, and the 401 would have read as a bad token.
 //!
 //! ⛔ Two rules carried over from `guard`:
 //! - A `command` token source RUNS A PROGRAM, and a keyring or environment
@@ -22,12 +27,13 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use bridgewatch_core::client::{GitLabClient, RequestRing, ReqwestTransport};
-use bridgewatch_core::config::{Account, Config, ProjectRef, TokenSource};
+use bridgewatch_core::client::{CiClient, RequestRing, ReqwestTransport, client_for};
+use bridgewatch_core::config::{Account, Config, ProjectRef, Provider, TokenSource};
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider, TokenProvider};
 use bridgewatch_core::wizard::{
-    self, FailureKind, GlabDetection, Identity, MarkerSuggestions, ProjectListing, ResolvedProject,
-    StepIssue, SystemKeyringProbe, WizardAnswers, WizardError, WizardFailure, WizardStep,
+    self, CliTokenDetection, FailureKind, Identity, MarkerSuggestions, ProjectListing,
+    ResolvedProject, StepIssue, SystemKeyringProbe, WizardAnswers, WizardError, WizardFailure,
+    WizardStep,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -47,6 +53,10 @@ const UNNAMED: &str = "(setup wizard)";
 /// src/components/wizard/api.ts.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Connection {
+    /// Which provider the account talks to. Absent is `gitlab`, so a caller
+    /// that predates the key means what it always did.
+    #[serde(default)]
+    pub provider: Provider,
     /// Instance root.
     pub base_url: String,
     /// Where the token comes from.
@@ -155,12 +165,27 @@ pub fn connection_changes(conn: &Connection, running: Option<&Config>) -> Vec<St
     crate::guard::sensitive_changes(running, &candidate)
 }
 
+/// ⛔ `Account::for_provider`, never `Account::default()` with a provider
+/// assigned afterwards: the three provider-dependent defaults (`api_path`,
+/// `header` and `base_url`) are taken when the struct is built, so the obvious
+/// spelling yields a GitHub account carrying `/api/v4` and `PRIVATE-TOKEN`.
+/// `base_url` is overridden here because the wizard always has one.
+///
+/// ⛔ A GitHub `api_path` follows the host, exactly as the file the wizard
+/// writes will say (`wizard::github_api_path_for`): GitHub Enterprise Server
+/// serves its API under `/api/v3`, and the provider default of "" would send
+/// the wizard's own requests to the web UI's `/user` page instead.
 fn account_for(conn: &Connection) -> Account {
-    Account {
-        base_url: conn.base_url.trim().to_string(),
+    let base_url = conn.base_url.trim().to_string();
+    let mut account = Account {
         token: conn.token.clone(),
-        ..Account::default()
+        ..Account::for_provider(conn.provider)
+    };
+    if conn.provider == Provider::Github {
+        account.api_path = wizard::github_api_path_for(&base_url);
     }
+    account.base_url = base_url;
+    account
 }
 
 fn failure(kind: FailureKind, message: impl Into<String>) -> WizardFailure {
@@ -221,7 +246,7 @@ pub fn check_base_url(base_url: &str) -> Result<(), WizardFailure> {
 async fn connect(
     app: &AppHandle,
     conn: &Connection,
-) -> Result<Result<GitLabClient, ConfirmRequest>, WizardFailure> {
+) -> Result<Result<Arc<dyn CiClient>, ConfirmRequest>, WizardFailure> {
     check_base_url(&conn.base_url)?;
     let running = app.state::<Arc<AppState>>().config();
     if let Err(request) = app.state::<WizardSession>().gate(conn, running.as_ref()) {
@@ -237,12 +262,9 @@ async fn connect(
     let account = account_for(conn);
     let transport = ReqwestTransport::new(Duration::from_secs(account.timeout_secs))
         .map_err(|e| failure(FailureKind::Network, e.to_string()))?;
-    Ok(Ok(GitLabClient::new(
-        &account,
-        &secret,
-        Arc::new(transport),
-        RequestRing::new(16),
-    )))
+    client_for(&account, &secret, Arc::new(transport), RequestRing::new(16))
+        .map(Ok)
+        .map_err(|e| failure(FailureKind::Network, e.to_string()))
 }
 
 /// Every command rejects with the core's `WizardFailure` JSON,
@@ -252,15 +274,22 @@ fn fail(e: WizardError) -> WizardFailure {
     e.to_failure()
 }
 
-/// Is glab's keyring item present for this instance? Existence only; the
-/// token is never read.
+/// Is the provider CLI's keyring item present for this instance? Existence
+/// only; the token is never read.
+///
+/// ⛔ The probe cannot return a value: `KeyringProbe::exists` answers a bool,
+/// the macOS branch runs `security find-generic-password` WITHOUT `-w` or `-g`
+/// (which prints attributes and never the password) and the Linux branch
+/// discards `secret-tool`'s stdout. So no credential enters this process, and
+/// nothing that reaches the IPC payload, a log line or a test message could
+/// carry one even by mistake.
 #[tauri::command]
-pub async fn wizard_detect_glab(base_url: String) -> GlabDetection {
+pub async fn wizard_detect_cli_token(base_url: String, provider: Provider) -> CliTokenDetection {
     tauri::async_runtime::spawn_blocking(move || {
-        wizard::detect_glab_token(&SystemKeyringProbe, &base_url)
+        wizard::detect_cli_token(&SystemKeyringProbe, provider, &base_url)
     })
     .await
-    .unwrap_or_else(|e| GlabDetection::Unavailable {
+    .unwrap_or_else(|e| CliTokenDetection::Unavailable {
         reason: e.to_string(),
     })
 }
@@ -275,7 +304,7 @@ pub async fn wizard_test_connection(
         Ok(c) => c,
         Err(confirm) => return Ok(Confirmable::NeedsConfirm { confirm }),
     };
-    wizard::test_connection(&client)
+    wizard::test_connection(client.as_ref(), connection.provider)
         .await
         .map(Confirmable::Ready)
         .map_err(fail)
@@ -294,9 +323,11 @@ pub async fn wizard_list_projects(
     };
     // The token's kind decides whether listing is possible at all (a project
     // token cannot usefully list), so ask who it is first.
-    let identity = wizard::test_connection(&client).await.map_err(fail)?;
+    let identity = wizard::test_connection(client.as_ref(), connection.provider)
+        .await
+        .map_err(fail)?;
     let search = search.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    wizard::list_projects(&client, &identity.token, search)
+    wizard::list_projects(client.as_ref(), &identity.token, search)
         .await
         .map(Confirmable::Ready)
         .map_err(fail)
@@ -313,7 +344,7 @@ pub async fn wizard_resolve_project(
         Ok(c) => c,
         Err(confirm) => return Ok(Confirmable::NeedsConfirm { confirm }),
     };
-    wizard::resolve_project(&client, &id_or_path)
+    wizard::resolve_project(client.as_ref(), connection.provider, &id_or_path)
         .await
         .map(Confirmable::Ready)
         .map_err(fail)
@@ -325,13 +356,14 @@ pub async fn wizard_suggest_deploy_markers(
     connection: Connection,
     project: ProjectRef,
     ref_name: String,
+    workflow: Option<String>,
     app: AppHandle,
 ) -> Result<Confirmable<MarkerSuggestions>, WizardFailure> {
     let client = match connect(&app, &connection).await? {
         Ok(c) => c,
         Err(confirm) => return Ok(Confirmable::NeedsConfirm { confirm }),
     };
-    wizard::suggest_deploy_markers(&client, &project, &ref_name)
+    wizard::suggest_deploy_markers(client.as_ref(), &project, &ref_name, workflow.as_deref())
         .await
         .map(Confirmable::Ready)
         .map_err(fail)
@@ -494,6 +526,7 @@ mod tests {
 
     fn conn(base: &str, token: TokenSource) -> Connection {
         Connection {
+            provider: Provider::Gitlab,
             base_url: base.into(),
             token,
             secret: None,
@@ -668,6 +701,139 @@ mod tests {
         assert!(refused.confirm.is_some());
     }
 
+    /// Records the URL, the path and the header NAMES of every request. ⛔ No
+    /// value is ever kept: the token is the one thing a test fixture must not be
+    /// able to print, and a name is what a 401 investigation actually needs.
+    #[derive(Debug, Default)]
+    struct SpyTransport {
+        seen: Mutex<Vec<(String, String, Vec<String>)>>,
+    }
+
+    // Written out in the form `#[async_trait]` expands to, because this crate
+    // does not depend on `async-trait` and adding it for one test double would
+    // change Cargo.lock.
+    impl bridgewatch_core::client::Transport for SpyTransport {
+        fn execute<'life0, 'async_trait>(
+            &'life0 self,
+            request: bridgewatch_core::client::HttpRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            bridgewatch_core::client::HttpResponse,
+                            bridgewatch_core::client::ClientError,
+                        >,
+                    > + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            Self: 'async_trait,
+        {
+            self.seen.lock().unwrap().push((
+                request.url.clone(),
+                request.path.clone(),
+                request.headers.iter().map(|(n, _)| n.clone()).collect(),
+            ));
+            Box::pin(async move {
+                Ok(bridgewatch_core::client::HttpResponse {
+                    status: 200,
+                    body: r#"{"id":1,"login":"octo","type":"User"}"#.to_string(),
+                    next_page: None,
+                    ratelimit_remaining: None,
+                    ratelimit_reset: None,
+                    retry_after: None,
+                    etag: None,
+                    link: None,
+                    oauth_scopes: None,
+                })
+            })
+        }
+    }
+
+    /// ⛔ The composition `connect` performs, minus the `AppHandle` it cannot
+    /// have here: a `Connection` becomes an `Account`, and the account becomes
+    /// a client through the core's ONE factory. It built a `GitLabClient`
+    /// outright, so this same connection would have sent `/api/v4/user` with a
+    /// `PRIVATE-TOKEN` header to api.github.com, and the 401 would have read as
+    /// a bad token rather than as the wrong client.
+    #[tokio::test]
+    async fn a_github_connection_builds_a_github_client() {
+        let conn = Connection {
+            provider: Provider::Github,
+            base_url: "https://api.github.com".into(),
+            token: TokenSource::Own(true),
+            secret: None,
+            confirm: None,
+            account: None,
+        };
+        let account = account_for(&conn);
+        assert_eq!(account.provider, Provider::Github);
+        assert_eq!(
+            account.api_path, "",
+            "GitHub's paths start /repos, unprefixed"
+        );
+        assert_eq!(
+            account.header,
+            bridgewatch_core::config::AuthHeader::AuthorizationBearer,
+            "GitHub reads a credential from Authorization and nowhere else"
+        );
+
+        let spy = Arc::new(SpyTransport::default());
+        let client = bridgewatch_core::client::client_for(
+            &account,
+            &Secret::new("not-a-real-token"),
+            spy.clone(),
+            bridgewatch_core::client::RequestRing::new(4),
+        )
+        .unwrap();
+        let identity = bridgewatch_core::wizard::test_connection(client.as_ref(), conn.provider)
+            .await
+            .unwrap();
+        assert_eq!(identity.username, "octo");
+
+        let seen = spy.seen.lock().unwrap().clone();
+        assert!(!seen.is_empty(), "nothing was sent");
+        for (url, path, headers) in &seen {
+            assert!(
+                url.starts_with("https://api.github.com/"),
+                "the request left for another host: {url}"
+            );
+            assert!(!url.contains("/api/v4"), "a GitLab API path: {url}");
+            assert!(!path.contains("/api/v4"), "a GitLab API path: {path}");
+            assert!(headers.iter().any(|h| h == "Authorization"), "{headers:?}");
+            assert!(
+                !headers.iter().any(|h| h == "PRIVATE-TOKEN"),
+                "GitLab's header reached GitHub: {headers:?}"
+            );
+        }
+        assert_eq!(seen[0].1, "/user");
+
+        // GitHub Enterprise Server: the API is a path on the web host, and the
+        // wizard's own requests must use it, as the written file will.
+        let ghes = account_for(&Connection {
+            base_url: "https://ghe.acme.com".into(),
+            ..conn.clone()
+        });
+        assert_eq!(ghes.base_url, "https://ghe.acme.com");
+        assert_eq!(ghes.api_path, "/api/v3");
+
+        // ...and a gitlab connection is unchanged.
+        let gl = conn_gitlab();
+        let account = account_for(&gl);
+        assert_eq!(account.provider, Provider::Gitlab);
+        assert_eq!(account.api_path, "/api/v4");
+        assert_eq!(
+            account.header,
+            bridgewatch_core::config::AuthHeader::PrivateToken
+        );
+    }
+
+    fn conn_gitlab() -> Connection {
+        conn("https://gitlab.com", TokenSource::Own(true))
+    }
+
     #[test]
     fn the_wire_shapes_are_the_ones_api_ts_reads() {
         let ready: Confirmable<u32> = Confirmable::Ready(7);
@@ -699,5 +865,71 @@ mod tests {
         }))
         .unwrap();
         assert!(c.secret.is_none() && c.confirm.is_none() && c.account.is_none());
+        assert_eq!(c.provider, Provider::Gitlab, "absent is gitlab");
+        let c: Connection = serde_json::from_value(serde_json::json!({
+            "provider": "github", "base_url": "https://api.github.com", "token": {"own": true}
+        }))
+        .unwrap();
+        assert_eq!(c.provider, Provider::Github);
+    }
+
+    /// A stand-in for the OS credential store. It answers presence only, which
+    /// is all `KeyringProbe` can express, and records what it was asked.
+    #[derive(Default)]
+    struct FakeProbe {
+        present: Vec<(String, String)>,
+        asked: Mutex<Vec<(String, String)>>,
+    }
+
+    impl wizard::KeyringProbe for FakeProbe {
+        fn exists(&self, service: &str, user: &str) -> Result<bool, String> {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((service.to_string(), user.to_string()));
+            Ok(self.present.iter().any(|(s, u)| s == service && u == user))
+        }
+    }
+
+    /// What `wizard_detect_cli_token` hands the webview, per provider: the
+    /// source to write, never a value. The gh preset is the EMPTY-user item,
+    /// gh's active-account slot, looked up at the WEB host.
+    #[test]
+    fn detection_reaches_the_webview_as_a_source_and_never_a_value() {
+        let probe = FakeProbe {
+            present: vec![
+                ("glab:gitlab.com:token".into(), String::new()),
+                ("gh:github.com".into(), String::new()),
+            ],
+            ..FakeProbe::default()
+        };
+        let gitlab = wizard::detect_cli_token(&probe, Provider::Gitlab, "https://gitlab.com");
+        assert_eq!(
+            serde_json::to_value(&gitlab).unwrap(),
+            serde_json::json!({
+                "status": "found",
+                "source": {"keyring": {"service": "glab:gitlab.com:token", "user": ""}}
+            })
+        );
+        let github = wizard::detect_cli_token(&probe, Provider::Github, "https://api.github.com");
+        assert_eq!(
+            serde_json::to_value(&github).unwrap(),
+            serde_json::json!({
+                "status": "found",
+                "source": {"keyring": {"service": "gh:github.com", "user": ""}}
+            })
+        );
+        assert_eq!(
+            probe.asked.lock().unwrap().as_slice(),
+            [
+                ("glab:gitlab.com:token".to_string(), String::new()),
+                ("gh:github.com".to_string(), String::new()),
+            ]
+        );
+        let missing = wizard::detect_cli_token(&probe, Provider::Github, "https://ghe.acme.com");
+        assert_eq!(
+            serde_json::to_value(&missing).unwrap(),
+            serde_json::json!({"status": "not_found", "service": "gh:ghe.acme.com"})
+        );
     }
 }

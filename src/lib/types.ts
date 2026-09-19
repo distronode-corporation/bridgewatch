@@ -208,3 +208,6 @@ export type Edit =
   | { op: "remove_watch"; id: string }
   | { op: "set_watch"; id: string; path: string; value: EditValue }
   | { op: "add_watch"; watch: Record<string, unknown> };
+
+/** `Provider`: which CI provider an account talks to. An account without the key is `gitlab`. */
+export type Provider = "gitlab" | "github";

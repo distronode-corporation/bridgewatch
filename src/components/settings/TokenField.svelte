@@ -3,8 +3,9 @@
 
   import { Button } from "$lib/components/ui/button/index.js";
   import { setOwnToken, clearOwnToken } from "../../lib/ipc";
-  import type { Edit } from "../../lib/types";
+  import type { Edit, Provider } from "../../lib/types";
   import { concretePath, entry as registryEntry } from "../../lib/settings/registry";
+  import { cliKeyringService } from "../wizard/model";
   import { CHECK, FIELD_LABEL, FIELD_ROW, HINT, INPUT } from "./styles";
 
   interface Props {
@@ -12,9 +13,31 @@
     /** The `token` value as the core serialised it. */
     value: unknown;
     onedit: (edits: Edit[]) => void | Promise<void>;
+    /** The account's provider: which CLI's keyring item the preset names. */
+    provider?: Provider;
+    /** The account's `base_url`, which the preset's service is derived from. */
+    baseUrl?: string;
   }
 
-  let { account, value, onedit }: Props = $props();
+  let { account, value, onedit, provider = "gitlab", baseUrl = "" }: Props = $props();
+
+  const github = $derived(provider === "github");
+  /** glab for a GitLab account, gh for a GitHub one: never offered across. */
+  const cli = $derived(github ? "gh" : "glab");
+  const preset = $derived(cliKeyringService(provider, baseUrl));
+  const kinds = $derived<[Kind, string][]>([
+    ["keyring", `${cli} / OS keyring`],
+    ["env", "Environment variable"],
+    ["command", "Command"],
+    ["own", "bridgewatch's own entry"],
+  ]);
+
+  /** Fill the keyring pair with the CLI's item. Nothing is written until "Use this source". */
+  function usePreset() {
+    if (!preset) return;
+    service = preset;
+    user = "";
+  }
 
   const meta = registryEntry("accounts.*.token");
   // ⛔ `accounts.${account}.token` was a template string, and an account called
@@ -182,7 +205,7 @@
   <div class={["label", FIELD_LABEL]}>{meta.label}</div>
   <div class="body flex flex-col gap-1.5">
     <div class="choices flex flex-wrap gap-x-3 gap-y-1 pt-1" role="radiogroup" aria-label={meta.label}>
-      {#each [["keyring", "glab / OS keyring"], ["env", "Environment variable"], ["command", "Command"], ["own", "bridgewatch's own entry"]] as [id, label] (id)}
+      {#each kinds as [id, label] (id)}
         <label class="choice flex cursor-pointer items-center gap-1.5 text-[13px]">
           <input
             type="radio"
@@ -199,18 +222,36 @@
 
     {#if kind === "keyring"}
       <div class="pair flex gap-1.5">
-        <input type="text" class={INPUT} placeholder="service" bind:value={service} />
-        <input type="text" class={INPUT} placeholder="user (may be empty)" bind:value={user} />
+        <input type="text" class={INPUT} placeholder="service" aria-label="Keyring service" bind:value={service} />
+        <input type="text" class={INPUT} placeholder="user (may be empty)" aria-label="Keyring user" bind:value={user} />
       </div>
-      <p class={["hint m-0", HINT]}>
-        An empty user is legal and is what <code>glab</code> writes. The core shells out to
-        <code>security</code> / <code>secret-tool</code> for that case, because the keyring crate
-        refuses it before reaching the store.
-      </p>
+      {#if preset}
+        <Button variant="outline" size="sm" class="preset self-start" onclick={usePreset}>
+          Fill in {cli}'s item ({preset})
+        </Button>
+      {/if}
+      {#if github}
+        <p class={["hint m-0", HINT]}>
+          <code>gh</code> keeps two items per host; the one with an empty user is its active account,
+          which follows <code>gh auth switch</code>. The command <code>gh auth token</code> is the
+          portable alternative.
+        </p>
+      {:else}
+        <p class={["hint m-0", HINT]}>
+          An empty user is legal and is what <code>glab</code> writes. The core shells out to
+          <code>security</code> / <code>secret-tool</code> for that case, because the keyring crate
+          refuses it before reaching the store.
+        </p>
+      {/if}
     {:else if kind === "env"}
-      <input type="text" class={INPUT} placeholder="BRIDGEWATCH_TOKEN_GITLAB" bind:value={envVar} />
+      <input
+        type="text"
+        class={INPUT}
+        placeholder={github ? "BRIDGEWATCH_TOKEN_GITHUB" : "BRIDGEWATCH_TOKEN_GITLAB"}
+        bind:value={envVar}
+      />
     {:else if kind === "command"}
-      <input type="text" class={INPUT} placeholder="pass gitlab/pat" bind:value={command} />
+      <input type="text" class={INPUT} placeholder={github ? "gh auth token" : "pass gitlab/pat"} bind:value={command} />
       <p class={["hint m-0", HINT]}>
         Runs on every token refresh. A program that prints anything besides the token is refused at
         resolve time, with advice.
@@ -221,7 +262,13 @@
         to write it; it is never put in the configuration file.
       </p>
       <div class="pair flex gap-1.5">
-        <input type="password" class={INPUT} placeholder="glpat-…" bind:value={pasted} autocomplete="off" />
+        <input
+          type="password"
+          class={INPUT}
+          placeholder={github ? "ghp_… or github_pat_…" : "glpat-…"}
+          bind:value={pasted}
+          autocomplete="off"
+        />
         <Button variant="outline" size="sm" onclick={saveToken} disabled={pasted.trim() === ""}>Save token</Button>
         <Button variant="ghost" size="sm" onclick={forgetToken}>Forget</Button>
       </div>

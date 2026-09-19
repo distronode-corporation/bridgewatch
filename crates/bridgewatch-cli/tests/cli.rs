@@ -756,3 +756,167 @@ fn init_refuses_to_edit_a_file_that_is_not_toml() {
     assert_eq!(code(&out), 78, "{}", stderr(&out));
     assert!(stdout(&out).is_empty());
 }
+
+/// `--provider github` prints a config the validator accepts with zero
+/// diagnostics, and it carries none of GitLab's account keys: `base_url`,
+/// `api_path` and `header` all default per provider on github.com.
+#[test]
+fn init_for_github_prints_a_config_that_validates_with_nothing_to_say() {
+    let dir = TempDir::new("init-github");
+    let path = dir.0.join("config.toml");
+    let out = run(bin().args(["--config"]).arg(&path).args([
+        "init",
+        "--provider",
+        "github",
+        "--project",
+        "acme-corp/monorepo",
+        "--gh",
+        "--workflow",
+        "ci.yml",
+        "--deploy-marker",
+        "publish",
+        "--schedule",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(!path.exists(), "init prints; it never writes");
+    let text = stdout(&out);
+    for wanted in [
+        "provider = \"github\"",
+        "service = \"gh:github.com\"",
+        "project = \"acme-corp/monorepo\"",
+        "workflow = \"ci.yml\"",
+        "id = \"monorepo-main\"",
+        "id = \"monorepo-main-schedule\"",
+    ] {
+        assert!(text.contains(wanted), "{wanted} missing:\n{text}");
+    }
+    for absent in ["base_url", "api_path", "header", "glab"] {
+        assert!(!text.contains(absent), "{absent} was written:\n{text}");
+    }
+
+    let written = dir.write("printed.toml", &text);
+    let check = run(bin()
+        .args(["--config"])
+        .arg(&written)
+        .args(["config", "validate"]));
+    assert_eq!(code(&check), 0, "{}", stderr(&check));
+    let said = format!("{}{}", stdout(&check), stderr(&check));
+    assert!(
+        said.contains("ok (1 account(s), 2 watch(es), 0 warning(s))"),
+        "the validator had something to say about the wizard's own output:\n{said}"
+    );
+}
+
+/// GitHub Enterprise Server needs its host and `/api/v3` written; the gh
+/// keyring item is named for that host.
+#[test]
+fn init_for_github_enterprise_writes_the_host_and_the_api_prefix() {
+    let dir = TempDir::new("init-ghes");
+    let path = dir.0.join("config.toml");
+    let out = run(bin().args(["--config"]).arg(&path).args([
+        "init",
+        "--provider",
+        "github",
+        "--base-url",
+        "https://ghe.acme.com",
+        "--project",
+        "https://ghe.acme.com/platform/api/actions",
+        "--gh",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    for wanted in [
+        "[accounts.ghe]",
+        "base_url = \"https://ghe.acme.com\"",
+        "api_path = \"/api/v3\"",
+        "service = \"gh:ghe.acme.com\"",
+        "project = \"platform/api\"",
+    ] {
+        assert!(text.contains(wanted), "{wanted} missing:\n{text}");
+    }
+    let written = dir.write("printed.toml", &text);
+    let check = run(bin()
+        .args(["--config"])
+        .arg(&written)
+        .args(["config", "validate"]));
+    assert_eq!(code(&check), 0, "{}", stderr(&check));
+}
+
+/// The answers a github account cannot mean are usage errors, each named: a
+/// numeric project, the other CLI's keyring item, a GitLab-only source and a
+/// preflight watch. And a gitlab account refuses the gh item and a workflow.
+#[test]
+fn init_refuses_answers_that_do_not_fit_the_provider() {
+    let dir = TempDir::new("init-mismatch");
+    let path = dir.0.join("config.toml");
+    let github = |extra: &[&str]| {
+        let mut cmd = bin();
+        cmd.args(["--config"])
+            .arg(&path)
+            .args(["init", "--provider", "github"])
+            .args(extra);
+        run(&mut cmd)
+    };
+
+    let out = github(&["--project", "82468124"]);
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(stderr(&out).contains("owner/repo"), "{}", stderr(&out));
+
+    let out = github(&["--project", "acme/web", "--glab"]);
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(stderr(&out).contains("--gh"), "{}", stderr(&out));
+
+    let out = github(&["--project", "acme/web", "--source", "merge_request_event"]);
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(stderr(&out).contains("Watch sources"), "{}", stderr(&out));
+
+    let out = github(&["--project", "acme/web", "--preflight", "pf/*"]);
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(stderr(&out).contains("preflight"), "{}", stderr(&out));
+
+    let out = run(bin()
+        .args(["--config"])
+        .arg(&path)
+        .args(["init", "--project", "g/p", "--gh"]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(stderr(&out).contains("--glab"), "{}", stderr(&out));
+
+    let out = run(bin().args(["--config"]).arg(&path).args([
+        "init",
+        "--project",
+        "g/p",
+        "--workflow",
+        "ci.yml",
+    ]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(stderr(&out).contains("workflow"), "{}", stderr(&out));
+
+    assert!(!path.exists());
+}
+
+/// ⛔ D3. `fixture record` against a github account is refused BEFORE a token
+/// is resolved or a request is built: the recorder and both PII allow-lists are
+/// GitLab's, so a GitHub run would be written unscrubbed. The account names a
+/// keyring item that does not exist, so reaching the resolver would fail
+/// differently, which is what proves the refusal comes first.
+#[test]
+fn fixture_record_refuses_a_github_account_before_touching_a_token() {
+    let dir = TempDir::new("record-github");
+    let path = dir.write(
+        "config.toml",
+        "[accounts.gh]\nprovider = \"github\"\ntoken = { env = \"BW_TEST_TOKEN_THAT_IS_NEVER_SET\" }\n\n\
+         [[watches]]\nid = \"w\"\naccount = \"gh\"\nproject = \"acme/web\"\nref = \"main\"\n",
+    );
+    let out = run(bin()
+        .env_remove("BW_TEST_TOKEN_THAT_IS_NEVER_SET")
+        .args(["--config"])
+        .arg(&path)
+        .args(["fixture", "record", "1"])
+        .current_dir(&dir.0));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("github account"), "{err}");
+    assert!(err.contains("PII allow-list"), "{err}");
+    assert!(!err.contains("token"), "the resolver was reached: {err}");
+    assert!(!dir.0.join("1").exists(), "a fixture directory was created");
+}

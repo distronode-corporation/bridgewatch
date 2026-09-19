@@ -13,11 +13,14 @@
  * rendered back.
  */
 
-import type { ConfirmRequest, DiagnosticView, Validation } from "../../lib/types";
+import type { ConfirmRequest, DiagnosticView, Provider, Validation } from "../../lib/types";
 
 // ---------------------------------------------------------------------------
 // Wire shapes (core mirrors)
 // ---------------------------------------------------------------------------
+
+/** `Provider`: which CI provider an account talks to. Absent on the wire is `gitlab`. */
+export type { Provider } from "../../lib/types";
 
 /** `WizardStep`: which page an issue sends the user back to. */
 export type WizardStepId = "account" | "project" | "watch" | "deploy" | "preferences";
@@ -25,7 +28,7 @@ export type WizardStepId = "account" | "project" | "watch" | "deploy" | "prefere
 /** `StepIssue`. */
 export interface StepIssue {
   step: WizardStepId;
-  /** `account | base_url | token | project | watch_id | ref_name | sources | preflight_ref | deploy_markers | live_secs` */
+  /** `account | base_url | token | project | watch_id | ref_name | workflow | sources | preflight_ref | deploy_markers | live_secs` */
   field: string;
   message: string;
 }
@@ -37,7 +40,7 @@ export type TokenSource =
   | { command: string[] }
   | { own: boolean };
 
-/** `ProjectRef`, untagged: a numeric id or a `group/project` path. */
+/** `ProjectRef`, untagged: a numeric id or a `group/project` (GitHub: `owner/repo`) path. */
 export type ProjectRef = number | string;
 
 /** `TokenKind`, tagged by `kind`. */
@@ -59,8 +62,8 @@ export interface Identity {
   warnings: string[];
 }
 
-/** `GlabDetection`, tagged by `status`. */
-export type GlabDetection =
+/** `CliTokenDetection`, tagged by `status`: glab's or gh's keyring item. Presence only, never a value. */
+export type CliTokenDetection =
   | { status: "found"; source: TokenSource }
   | { status: "not_found"; service: string }
   | { status: "unavailable"; reason: string };
@@ -83,6 +86,12 @@ export type ProjectListing =
 export interface ResolvedProject {
   id: number;
   path: string;
+  /**
+   * What to write as the watch's `project`: the id on GitLab (it survives a
+   * rename), the `owner/repo` path on GitHub (no endpoint takes an id).
+   * Optional only so an older shell's answer still reads; absent means `id`.
+   */
+  project?: ProjectRef;
   default_branch: string | null;
   web_url: string | null;
 }
@@ -113,14 +122,22 @@ export interface NotifyAnswers {
   finished: boolean;
 }
 
-/** `WizardAnswers`: everything the wizard collected. Never a token. */
+/**
+ * `WizardAnswers`: everything the wizard collected. Never a token.
+ *
+ * `provider` and `workflow` are sent only for GitHub: absent is `gitlab` and
+ * no workflow in the core, so a GitLab payload is exactly what it always was.
+ */
 export interface WizardAnswers {
+  provider?: Provider;
   account: string;
   base_url: string;
   token: TokenSource;
   project: ProjectRef | null;
   watch_id: string;
   ref_name: string;
+  /** GitHub only: the workflow file name (`ci.yml`) or id; absent or null is every workflow. */
+  workflow?: string | null;
   sources: string[];
   deploy_markers: string[];
   schedule_watch: boolean;
@@ -175,6 +192,8 @@ export interface WizardFailure {
 
 /** How to reach the instance for the live steps (1, 2 and 4). */
 export interface Connection {
+  /** Sent only for GitHub; the shell reads absent as `gitlab`. */
+  provider?: Provider;
   base_url: string;
   token: TokenSource;
   /** A pasted token, for `{ own: true }` before it has been stored. */
@@ -208,19 +227,24 @@ export interface WizardSaveResult extends Validation {
  * the step at fault; `diagnostics` are listed on the review step.
  */
 export interface WizardApi {
-  /** Is glab's keyring item present for this instance? Existence only. Optional. */
-  detectGlab?(baseUrl: string): Promise<GlabDetection>;
+  /** Is the provider CLI's keyring item (glab's or gh's) present for this instance? Existence only. Optional. */
+  detectCliToken?(baseUrl: string, provider: Provider): Promise<CliTokenDetection>;
   /** Step 1: who is this token? */
   testConnection(connection: Connection): Promise<Confirmable<Identity>>;
   /** Step 2: the projects this token can pick from. */
   listProjects(connection: Connection, search?: string): Promise<Confirmable<ProjectListing>>;
   /** Step 2: resolve a typed id, path or pasted project URL. */
   resolveProject(connection: Connection, idOrPath: string): Promise<Confirmable<ResolvedProject>>;
-  /** Step 4: deploy-marker suggestions from the ref's latest pipeline. */
+  /**
+   * Step 4: deploy-marker suggestions from the ref's latest pipeline. On
+   * GitHub `workflow` narrows it to the run the watch will follow; it is
+   * passed only when there is one.
+   */
   suggestDeployMarkers(
     connection: Connection,
     project: ProjectRef,
     refName: string,
+    workflow?: string,
   ): Promise<Confirmable<MarkerSuggestions>>;
   /** Step 6: the config.toml the answers produce (editing an existing file in place). */
   previewConfig(answers: WizardAnswers): Promise<WizardPreview>;

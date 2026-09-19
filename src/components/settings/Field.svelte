@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { Edit } from "../../lib/types";
-  import type { RegistryEntry } from "../../lib/settings/registry";
+  import type { Edit, Provider } from "../../lib/types";
+  import { inapplicableNote, type RegistryEntry } from "../../lib/settings/registry";
   import { linesToList, set, stringList, unset } from "../../lib/settings/values";
   import { CHECK, FIELD_LABEL, FIELD_ROW, HINT, INPUT, SELECT, TEXTAREA } from "./styles";
 
@@ -13,9 +13,18 @@
     options?: string[];
     /** Resolves once the core has answered AND the document has been re-read. */
     onedit: (edits: Edit[]) => void | Promise<void>;
+    /** The provider of the account this key belongs to, when there is one. */
+    provider?: Provider | null;
   }
 
-  let { entry, path, value, options, onedit }: Props = $props();
+  let { entry, path, value, options, onedit, provider = null }: Props = $props();
+
+  /**
+   * Set when the key means nothing for this account's provider. The field is
+   * dimmed and says why, but stays enabled: it is still in the file, and a
+   * value carried over from another account has to be visible to be cleared.
+   */
+  const inapplicable = $derived(inapplicableNote(entry, provider));
 
   const choices = $derived(options ?? entry.options ?? []);
 
@@ -116,7 +125,7 @@
   const asLines = $derived(Array.isArray(value) ? value.join("\n") : "");
 </script>
 
-<label class={["field", FIELD_ROW]}>
+<label class={["field", FIELD_ROW, inapplicable && "opacity-60"]} data-inapplicable={inapplicable ? "true" : undefined}>
   <span class={["label", FIELD_LABEL]}>{entry.label}</span>
 
   {#if entry.control === "boolean"}
@@ -139,6 +148,9 @@
     <input type="text" class={INPUT} value={asText} onchange={commitText} />
   {/if}
 
+  {#if inapplicable}
+    <span class={["provider-note col-start-2", HINT]} data-slot="provider-note">{inapplicable}</span>
+  {/if}
   {#if entry.hint}
     <span class={["hint col-start-2", HINT]}>{entry.hint}</span>
   {/if}

@@ -21,6 +21,8 @@
   let { draft = $bindable(), errors, suggestions, loading, loadError }: Props = $props();
 
   let custom = $state("");
+  /** GitHub's unit is a workflow run; GitLab's a pipeline. */
+  const run = $derived(draft.provider === "github" ? "workflow run" : "pipeline");
 
   const byName = $derived(new Map((suggestions?.suggestions ?? []).map((s) => [s.name, s] as const)));
   /** Suggested names first (in rank order), then any the draft already holds. */
@@ -46,8 +48,8 @@
 
 <div class="flex flex-col gap-4">
   <p class="text-muted-foreground text-sm" data-slot="marker-explainer">
-    A deploy marker is the job whose success means "this commit is live"; bridgewatch shows the pipeline as deployed
-    once it passes.
+    A deploy marker is the job whose success means "this commit is live"; bridgewatch shows the {run} as deployed once
+    it passes.
   </p>
 
   <fieldset class="flex flex-col gap-2" aria-describedby="wizard-markers-msg">
@@ -66,17 +68,17 @@
 
     <div class="flex flex-col gap-2 pl-6">
       {#if loading}
-        <p class="text-muted-foreground text-sm" aria-live="polite">Reading the latest pipeline…</p>
+        <p class="text-muted-foreground text-sm" aria-live="polite">Reading the latest {run}…</p>
       {:else if loadError}
         <Alert.Root variant="destructive">
-          <Alert.Title>Could not read the latest pipeline</Alert.Title>
+          <Alert.Title>Could not read the latest {run}</Alert.Title>
           <Alert.Description>{loadError} You can still type a job name.</Alert.Description>
         </Alert.Root>
       {:else if suggestions && suggestions.suggestions.length === 0}
         <p class="text-muted-foreground text-sm" data-slot="no-suggestions">
           {suggestions.pipeline_id === null
-            ? "No pipeline on this branch yet, so nothing to suggest."
-            : "No job in the latest pipeline looks like a deploy."}
+            ? `No ${run} on this branch yet, so nothing to suggest.`
+            : `No job in the latest ${run} looks like a deploy.`}
         </p>
       {/if}
 
@@ -140,7 +142,7 @@
         checked={draft.noMarker}
         onchange={() => (draft.noMarker = true)}
       />
-      No deploy marker (a green pipeline is the end of the story)
+      No deploy marker (a green {run} is the end of the story)
     </label>
     <FieldMessage id="wizard-markers-msg" message={errors.deploy_markers} />
   </fieldset>

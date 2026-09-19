@@ -193,6 +193,19 @@ describe("debug pane formatting", () => {
     expect(sourceBadge("something_gitlab_added_later")).toBe("something_gitlab_added_later");
     expect(sourceBadge(null)).toBe("");
   });
+
+  it("shortens GitHub's workflow events, and still passes an unknown one through", () => {
+    expect(sourceBadge("push")).toBe("push");
+    expect(sourceBadge("pull_request")).toBe("PR");
+    expect(sourceBadge("pull_request_target")).toBe("PR");
+    expect(sourceBadge("schedule")).toBe("sched");
+    expect(sourceBadge("workflow_dispatch")).toBe("manual");
+    expect(sourceBadge("workflow_run")).toBe("chained");
+    expect(sourceBadge("release")).toBe("release");
+    expect(sourceBadge("merge_group")).toBe("queue");
+    expect(sourceBadge("dynamic")).toBe("auto");
+    expect(sourceBadge("something_github_added_later")).toBe("something_github_added_later");
+  });
 });
 
 describe("the error strip's lines (H9)", () => {

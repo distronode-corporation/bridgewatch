@@ -105,3 +105,58 @@ describe("WatchesTab", () => {
     expect(h.openWatch()).toBe("main-push");
   });
 });
+
+describe("WatchesTab, keys for the other provider", () => {
+  function renderMixed() {
+    host = document.createElement("div");
+    document.body.append(host);
+    const props = reactive({
+      config: {
+        accounts: { lab: { provider: "gitlab" }, hub: { provider: "github" } },
+        watches: [
+          { id: "lab-main", account: "lab", project: 1, ref: "main", workflow: "ci.yml" },
+          { id: "hub-main", account: "hub", project: "acme/web", ref: "main", workflow: "ci.yml" },
+        ],
+      },
+      jobOrder: [[], []],
+      onedit: () => Promise.resolve(),
+      onremove: () => {},
+      onmove: () => {},
+      onadd: () => {},
+    }) as ComponentProps<typeof WatchesTab>;
+    component = mount(WatchesTab, { target: host, props });
+    flushSync();
+  }
+
+  /** The field row whose label reads `label`, in the open panel. */
+  const row = (label: string) =>
+    [...host.querySelectorAll<HTMLLabelElement>("section.watch .body label.field")].find(
+      (l) => l.querySelector(".label")?.textContent === label,
+    )!;
+
+  it("dims workflow on a GitLab watch and says why, but leaves it editable with its value", () => {
+    renderMixed();
+    const workflow = row("Workflow");
+    expect(workflow.dataset.inapplicable).toBe("true");
+    expect(workflow.querySelector('[data-slot="provider-note"]')?.textContent).toMatch(/GitLab project has no workflows/);
+    const input = workflow.querySelector<HTMLInputElement>("input")!;
+    // ⛔ Not hidden and not disabled: the value came with the watch and has to
+    // be visible to be cleared.
+    expect(input.disabled).toBe(false);
+    expect(input.value).toBe("ci.yml");
+    // A dive key is GitLab's and is left alone here.
+    expect(row("Dive depth").dataset.inapplicable).toBeUndefined();
+  });
+
+  it("dims the dive keys on a GitHub watch and not its workflow", () => {
+    renderMixed();
+    host.querySelectorAll<HTMLButtonElement>("header button.disclosure")[1].click();
+    flushSync();
+    expect(row("Workflow").dataset.inapplicable).toBeUndefined();
+    for (const label of ["Dive into bridges", "Dive exclusions", "Dive depth"]) {
+      expect(row(label).dataset.inapplicable, label).toBe("true");
+      expect(row(label).querySelector("input, textarea")?.hasAttribute("disabled"), label).toBe(false);
+    }
+    expect(row("Dive only when").dataset.inapplicable).toBeUndefined();
+  });
+});

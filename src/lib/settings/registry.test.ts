@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import schema from "../config.schema.json" with { type: "json" };
-import { REGISTRY } from "./registry";
+import { REGISTRY, entry, inapplicableNote, providerOf } from "./registry";
 import { leafPaths, type JsonSchema } from "./schema";
 
 // ⚠ Through `unknown`: TypeScript infers the imported JSON as its exact literal
@@ -144,5 +144,38 @@ describe("leafPaths", () => {
     // ...while an array of scalars is one leaf.
     expect(paths).toContain("watches.*.sources");
     expect(paths.filter((p) => p.startsWith("watches.*.sources."))).toEqual([]);
+  });
+});
+
+describe("provider applicability", () => {
+  it("is data on the entry, and every provider-specific key says why in one line", () => {
+    const marked = REGISTRY.filter((e) => e.provider);
+    expect(marked.map((e) => e.path).sort()).toEqual([
+      "watches.*.dive.bridges",
+      "watches.*.dive.depth",
+      "watches.*.dive.exclude",
+      "watches.*.workflow",
+    ]);
+    for (const e of marked) expect(e.providerNote, e.path).toMatch(/^Ignored on a (GitLab|GitHub) account: /);
+  });
+
+  it("marks a key inert only for the OTHER provider, and never when the provider is unknown", () => {
+    const workflow = entry("watches.*.workflow");
+    expect(inapplicableNote(workflow, "gitlab")).toMatch(/no workflows/);
+    expect(inapplicableNote(workflow, "github")).toBeNull();
+    expect(inapplicableNote(workflow, null)).toBeNull();
+    const depth = entry("watches.*.dive.depth");
+    expect(inapplicableNote(depth, "github")).toMatch(/no nested runs/);
+    expect(inapplicableNote(depth, "gitlab")).toBeNull();
+    // A key both providers use is never dimmed.
+    expect(inapplicableNote(entry("watches.*.ref"), "github")).toBeNull();
+    expect(inapplicableNote(entry("watches.*.ref"), "gitlab")).toBeNull();
+  });
+
+  it("reads an account's provider as the core serialises it, absent being gitlab", () => {
+    expect(providerOf({ provider: "github" })).toBe("github");
+    expect(providerOf({ provider: "gitlab" })).toBe("gitlab");
+    expect(providerOf({})).toBe("gitlab");
+    expect(providerOf(undefined)).toBe("gitlab");
   });
 });

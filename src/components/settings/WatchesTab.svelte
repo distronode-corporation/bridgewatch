@@ -2,7 +2,7 @@
   import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 
   import { Button } from "$lib/components/ui/button/index.js";
-  import { concretePath, entriesFor } from "../../lib/settings/registry";
+  import { concretePath, entriesFor, providerOf } from "../../lib/settings/registry";
   import { getAt } from "../../lib/settings/values";
   import type { Edit } from "../../lib/types";
   import Field from "./Field.svelte";
@@ -24,6 +24,13 @@
   const accounts = $derived(
     Object.keys((getAt(config, "accounts") ?? {}) as Record<string, unknown>),
   );
+
+  /** A watch's provider is its account's; an unknown account has none, so nothing is dimmed. */
+  function providerFor(watch: Record<string, unknown>) {
+    const all = (getAt(config, "accounts") ?? {}) as Record<string, unknown>;
+    const name = typeof watch.account === "string" ? watch.account : "";
+    return Object.hasOwn(all, name) ? providerOf(all[name]) : null;
+  }
 
   const fields = entriesFor("watches").filter((e) => !e.path.endsWith("jobs.*"));
   const jobsEntry = entriesFor("watches").find((e) => e.path.endsWith("jobs.*"))!;
@@ -97,6 +104,7 @@
             {path}
             value={getAt(config, path)}
             options={entry.path === "watches.*.account" ? accounts : undefined}
+            provider={providerFor(watch)}
             {onedit}
           />
         {/each}
