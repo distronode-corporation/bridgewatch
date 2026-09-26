@@ -21,7 +21,10 @@ pub use conditional::ConditionalTransport;
 pub use fixture::FixtureTransport;
 pub use github::GitHubClient;
 pub use gitlab::{GitLabClient, ListQuery};
-pub use http::{HttpRequest, HttpResponse, RequestLog, RequestRing, ReqwestTransport, Transport};
+pub use http::{
+    HttpRequest, HttpResponse, InFlight, MAX_IN_FLIGHT, RequestLog, RequestRing, ReqwestTransport,
+    Transport, in_order, in_order2,
+};
 pub use script::ScriptTransport;
 
 use crate::config::{Account, ProjectRef, Provider};
@@ -68,9 +71,10 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
     /// A LISTED pipeline's own jobs and its bridges: what the poller fetches
     /// for every row it refreshes.
     ///
-    /// The default is [`Self::pipeline_jobs`] then [`Self::pipeline_bridges`],
-    /// in that order, which is GitLab's answer and exactly the two requests the
-    /// poller made before this method existed.
+    /// The default is [`Self::pipeline_jobs`] and [`Self::pipeline_bridges`],
+    /// which is GitLab's answer and exactly the two requests the poller made
+    /// before this method existed. They are sent together, and recorded in the
+    /// ring in that order (see [`in_order2`]).
     ///
     /// ⛔ It takes the row and the query that listed it, not an id, because a
     /// provider may SYNTHESISE rows. GitHub's commit group is one: a group's id
@@ -83,9 +87,16 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
         row: &Pipeline,
         _query: &ListQuery,
     ) -> Result<(Vec<Job>, Vec<Bridge>), ClientError> {
-        let jobs = self.pipeline_jobs(project, row.id).await?;
-        let bridges = self.pipeline_bridges(project, row.id).await?;
-        Ok((jobs, bridges))
+        // Side by side, and recorded in this order whichever answers first.
+        // ⚠ Both are asked even when the first fails, which the sequential
+        // version did not do: one extra request on a failing tick, against
+        // one round trip saved on every tick that does not fail.
+        let (jobs, bridges) = in_order2(
+            self.pipeline_jobs(project, row.id),
+            self.pipeline_bridges(project, row.id),
+        )
+        .await;
+        Ok((jobs?, bridges?))
     }
 
     /// The jobs of a child pipeline, which may live in another project.

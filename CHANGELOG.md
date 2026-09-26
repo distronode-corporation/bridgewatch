@@ -15,6 +15,12 @@ body line with a bracket.
 
 ### Added
 
+- **A log file.** The app now writes its log to a daily file as well as to stderr, in
+  `~/Library/Logs/bridgewatch` on macOS and `$XDG_STATE_HOME/bridgewatch` (by default
+  `~/.local/state/bridgewatch`) on Linux, keeping the last 7 days. A macOS app started
+  from Finder or the Dock sends stderr nowhere, so until now it left no log at all. The
+  tray menu's new **Open log folder** opens it. The level is unchanged: `RUST_LOG`
+  still wins, then `[log].level`, then `warn`.
 - **Linux arm64 and `.rpm` release assets.** Every release now ships a `.deb`, an `.rpm`
   and an `.AppImage` for both x86_64 and arm64 Linux, each built on Ubuntu 22.04 (the
   oldest GitHub runner per architecture), so the glibc floor stays 2.35 on both. The
@@ -23,6 +29,16 @@ body line with a bracket.
 
 ### Changed
 
+- **A tick's requests run side by side.** A watch's pipelines, each pipeline's jobs and
+  bridges, the child pipelines behind them, and the watches themselves are fetched
+  concurrently, at most 4 requests at a time per account, instead of one after another.
+  Measured with `bridgewatch check` on one watch with a deep bridge fan-out, the
+  requests after the pipeline list took 11 to 12 s one after another and 3.1 s now. Rows, notifications, the error a watch reports and the order of the
+  Debug section's request list are exactly what the one-at-a-time poller produced.
+- **Only the accounts a watch uses have their token resolved.** `bridgewatch check
+  --watch <id>` no longer reads a credential (or raises a Keychain prompt) for an account
+  that watch does not use, and a broken credential on such an account no longer fails
+  it.
 - **One universal macOS `.dmg`** (`bridgewatch_<version>_universal.dmg`) replaces the
   separate Apple Silicon and Intel downloads. It is signed and notarised as before, and
   the release checks that its binary carries both architectures.
@@ -52,6 +68,10 @@ Four of these were seen on real pushes to a GitLab parent/child project.
 - **The setup wizard offered check jobs as deploy markers.** A job whose name or stage
   leads with `verify`, `test`, `lint`, `check`, `validate` or `smoke` (for example
   `verify:origins_deploy_script`) is no longer offered.
+- **A keyring lookup that never answers no longer stalls polling.** Reading another
+  tool's credential (glab's or gh's empty-user item) now has the same 10 s limit as a
+  token command, and running out of it is reported as the store not answering rather
+  than as a missing credential.
 
 ## [1.0.0] - 2026-09-19
 

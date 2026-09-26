@@ -12,7 +12,7 @@ pub use cache::{CacheEntry, PipelineCache};
 pub use planner::{PipelinePlan, Plan};
 pub use policy::{MAX_RETRY_AFTER, POLL_NOW_MIN_GAP, PollNow, PollPolicy};
 
-use crate::client::{CiClient, ClientError, ListQuery, RequestRing};
+use crate::client::{CiClient, ClientError, ListQuery, RequestRing, in_order};
 use crate::config::{Config, JobsMode, ProjectRef, Provider, Role, Watch, WatchRules};
 use crate::model::{Bridge, Pipeline, PipelineDetail};
 use crate::notify::{Notification, NotifyLedger, notifications_for};
@@ -138,8 +138,8 @@ impl Poller {
         })
     }
 
-    /// Build a poller from a configuration, resolving each account's token and
-    /// creating a real HTTP transport for it.
+    /// Build a poller from a configuration, resolving the token of each account
+    /// a watch uses and creating a real HTTP transport for it.
     ///
     /// ⚠️ An account that signs in (`token = { oauth = .. }`) resolves nothing
     /// here: its client is built on an [`crate::oauth::OAuthTransport`], which
@@ -155,7 +155,19 @@ impl Poller {
         let ring = RequestRing::new(config.log.keep_requests);
         let mut clients = BTreeMap::new();
         let store: Arc<dyn crate::token::TokenProvider> = Arc::new(provider.clone());
-        for (name, account) in &config.accounts {
+        // ⛔ Only the accounts a watch polls through. Every configured account
+        // used to be resolved, so `bridgewatch check --watch x` read the
+        // keychain (or ran the token command, or raised a macOS prompt) for
+        // accounts `x` never touches, one after another, and an account with a
+        // broken token failed a check that did not need it. An account no
+        // watch names has no client, which is exactly what a watch naming an
+        // account that does not exist already gets.
+        let used: HashSet<&str> = config.watches.iter().map(|w| w.account.as_str()).collect();
+        for (name, account) in config
+            .accounts
+            .iter()
+            .filter(|(name, _)| used.contains(name.as_str()))
+        {
             let transport: Arc<dyn crate::client::Transport> = Arc::new(
                 crate::client::ReqwestTransport::new(std::time::Duration::from_secs(
                     account.timeout_secs,
@@ -223,47 +235,90 @@ impl Poller {
         let mut notifications = Vec::new();
         let mut errors = Vec::new();
 
-        for state in &mut self.watches {
-            let Some(client) = self.clients.get(&state.watch.account) else {
-                errors.push(format!(
-                    "watch {:?} refers to unknown account {:?}",
-                    state.watch.id, state.watch.account
-                ));
-                views.push(WatchView {
-                    id: state.watch.id.clone(),
-                    role: state.watch.role,
-                    icon_state: None,
-                    rows: Vec::new(),
-                    error: Some(format!("unknown account {:?}", state.watch.account)),
-                    jobs: state.jobs_mode,
-                    provider: state.provider,
-                });
-                continue;
-            };
+        // What each watch does this tick, decided before anything is sent.
+        enum Turn {
+            UnknownAccount,
+            SitOut,
+            Poll,
+        }
+        let turns: Vec<Turn> = self
+            .watches
+            .iter()
+            .map(|state| {
+                if !self.clients.contains_key(&state.watch.account) {
+                    Turn::UnknownAccount
+                } else if state.policy.should_defer(self.last_any_live) {
+                    // A watch that is backing off sits the tick out. The sleep
+                    // between ticks is the `min` over every watch, so a healthy
+                    // watch on a fast interval would otherwise drag a 429'd one
+                    // back to the API at its cadence and make `Retry-After`
+                    // decorative. Nothing changed for this watch, so nothing is
+                    // notified either.
+                    Turn::SitOut
+                } else {
+                    Turn::Poll
+                }
+            })
+            .collect();
 
-            // A watch that is backing off sits the tick out. The sleep between
-            // ticks is the `min` over every watch, so a healthy watch on a fast
-            // interval would otherwise drag a 429'd one back to the API at its
-            // cadence and make `Retry-After` decorative. Nothing changed for
-            // this watch, so nothing is notified either.
-            if state.policy.should_defer(self.last_any_live) {
-                if let Some(view) = &state.last_view {
+        // ⛔ Every polled watch runs at once, and everything a watch's result
+        // touches outside its own state (the errors, the transition log, the
+        // notifications and the ledger they are recorded in) is applied
+        // afterwards, one watch at a time in configuration order. That order is
+        // what the popover's rows, the notification order and the debug pane's
+        // ring all follow; it must not become the order the responses arrived
+        // in. Two watches on one account share that client's in-flight bound.
+        let clients = &self.clients;
+        let script = self.script.as_deref();
+        let polled = in_order(
+            self.watches
+                .iter_mut()
+                .zip(&turns)
+                .filter(|(_, turn)| matches!(turn, Turn::Poll))
+                .filter_map(|(state, _)| {
+                    let client = clients.get(&state.watch.account)?;
+                    Some(async move { poll_watch(client.as_ref(), state, script).await })
+                }),
+        )
+        .await;
+        let mut polled = polled.into_iter();
+
+        for (state, turn) in self.watches.iter_mut().zip(turns) {
+            match turn {
+                Turn::UnknownAccount => {
+                    errors.push(format!(
+                        "watch {:?} refers to unknown account {:?}",
+                        state.watch.id, state.watch.account
+                    ));
+                    views.push(WatchView {
+                        id: state.watch.id.clone(),
+                        role: state.watch.role,
+                        icon_state: None,
+                        rows: Vec::new(),
+                        error: Some(format!("unknown account {:?}", state.watch.account)),
+                        jobs: state.jobs_mode,
+                        provider: state.provider,
+                    });
+                }
+                Turn::SitOut => {
+                    if let Some(view) = &state.last_view {
+                        if let Some(e) = &view.error {
+                            errors.push(format!("{}: {e}", state.watch.id));
+                        }
+                        views.push(view.clone());
+                    }
+                }
+                Turn::Poll => {
+                    let Some(view) = polled.next() else { continue };
                     if let Some(e) = &view.error {
                         errors.push(format!("{}: {e}", state.watch.id));
                     }
-                    views.push(view.clone());
+                    log_transition(&state.watch.id, state.last_view.as_ref(), &view);
+                    notifications.extend(notifications_for(&state.watch, &view, &mut self.ledger));
+                    state.last_view = Some(view.clone());
+                    views.push(view);
                 }
-                continue;
             }
-
-            let view = poll_watch(client.as_ref(), state, self.script.as_deref()).await;
-            if let Some(e) = &view.error {
-                errors.push(format!("{}: {e}", state.watch.id));
-            }
-            log_transition(&state.watch.id, state.last_view.as_ref(), &view);
-            notifications.extend(notifications_for(&state.watch, &view, &mut self.ledger));
-            state.last_view = Some(view.clone());
-            views.push(view);
         }
 
         if let Some(path) = &self.ledger_path
@@ -424,11 +479,26 @@ async fn poll_watch(
     // an empty job list reads as "nothing failed".
     let mut unavailable: HashSet<u64> = HashSet::new();
 
-    for pipeline_plan in &plan.pipelines {
-        let Some(row) = selected.iter().find(|r| r.id == pipeline_plan.id) else {
-            continue;
-        };
-        match fetch_detail(client, &project, row, &query, state).await {
+    // ⛔ Fetched side by side, then applied one at a time in the plan's order,
+    // which is the order the sequential loop used. Nothing below may move into
+    // the fetch: the first error to be kept, the backoff and the cache all
+    // have to see the pipelines in the same order on every tick, whichever
+    // response arrived first. The fetch only reads `state`, which is what lets
+    // every pipeline borrow it at once.
+    let rows: Vec<&Pipeline> = plan
+        .pipelines
+        .iter()
+        .filter_map(|p| selected.iter().find(|r| r.id == p.id))
+        .collect();
+    let shared: &WatchState = state;
+    let results = in_order(
+        rows.iter()
+            .map(|row| fetch_detail(client, &project, row, &query, shared)),
+    )
+    .await;
+
+    for (row, result) in rows.into_iter().zip(results) {
+        match result {
             Ok(fetched) => {
                 for e in &fetched.errors {
                     // ⛔ A failed child request used to be logged at `debug` and
@@ -440,6 +510,7 @@ async fn poll_watch(
                     error.get_or_insert_with(|| e.to_string());
                 }
                 let incomplete = !fetched.errors.is_empty();
+                state.last_bridges.insert(row.id, fetched.bridges);
                 state.cache.insert_partial(row, fetched.detail, incomplete);
             }
             Err(e) => {
@@ -499,6 +570,27 @@ async fn poll_watch(
 struct FetchedDetail {
     detail: PipelineDetail,
     errors: Vec<ClientError>,
+    /// The pipeline's own bridges, for `last_bridges` once it is applied.
+    bridges: Vec<Bridge>,
+}
+
+/// One child pipeline the dive reached this level, and what to ask about it.
+struct ChildFetch {
+    id: u64,
+    project: ProjectRef,
+    /// Its jobs are due: the planner says they may have moved.
+    jobs: bool,
+    /// Its own bridges are wanted: the dive goes deeper, and they are due or
+    /// were never read.
+    bridges: bool,
+    /// Its bridges as of the previous tick, for the next level's planner.
+    previous: Option<Vec<Bridge>>,
+}
+
+/// What asking about one [`ChildFetch`] returned.
+struct ChildFetched {
+    jobs: Option<Result<Vec<crate::model::Job>, ClientError>>,
+    bridges: Option<Result<Vec<Bridge>, ClientError>>,
 }
 
 /// Fetch one pipeline's jobs, bridges and the children the dive rules select,
@@ -513,7 +605,7 @@ async fn fetch_detail(
     project: &ProjectRef,
     row: &Pipeline,
     query: &ListQuery,
-    state: &mut WatchState,
+    state: &WatchState,
 ) -> Result<FetchedDetail, ClientError> {
     // Through the row and its query rather than the id: see
     // `CiClient::listed_detail`. GitLab's answer is the same two requests.
@@ -545,7 +637,15 @@ async fn fetch_detail(
     let mut reached: HashSet<u64> = HashSet::new();
 
     for level in 1..=depth {
-        let mut next = Vec::new();
+        // Decide the whole level first, in bridge order, then ask for all of it
+        // at once and apply the answers in that same order.
+        //
+        // ⚠ One difference from asking one child at a time, and it is on the
+        // side of fewer requests: a child two bridges point at is asked about
+        // once per tick even when that one ask fails. The one-at-a-time walk
+        // forgot a failed child before reaching the second bridge and asked
+        // again straight away, which against a rate limit is the wrong reflex.
+        let mut wanted: Vec<ChildFetch> = Vec::new();
         for (level_bridges, level_project, previous) in std::mem::take(&mut frontier) {
             let held: HashSet<u64> = child_jobs.keys().copied().collect();
             let due: HashSet<u64> =
@@ -564,54 +664,79 @@ async fn fetch_detail(
                 if !reached.insert(down.id) {
                     continue;
                 }
-                let child_project = down
-                    .project_id
-                    .map(ProjectRef::Id)
-                    .unwrap_or_else(|| level_project.clone());
-
-                if due.contains(&down.id) {
-                    match client.child_jobs(&child_project, down.id).await {
-                        Ok(jobs) => {
-                            child_jobs.insert(down.id, jobs);
-                        }
-                        Err(e) => {
-                            // A child in another project the token cannot see is
-                            // a real configuration outcome, not a bug — but it
-                            // is still an outcome the user has to be told about,
-                            // and the entry is dropped so the next tick asks
-                            // again rather than remembering the gap forever.
-                            tracing::debug!(child = down.id, error = %e, "child jobs unavailable");
-                            child_jobs.remove(&down.id);
-                            child_bridges.remove(&down.id);
-                            errors.push(e);
-                            reached.remove(&down.id);
-                            continue;
-                        }
-                    }
-                }
-
-                if level >= depth {
-                    continue;
-                }
                 let nested_previous = cached
                     .as_ref()
                     .and_then(|d| d.child_bridges.get(&down.id).cloned());
-                if due.contains(&down.id) || nested_previous.is_none() {
-                    match client.pipeline_bridges(&child_project, down.id).await {
-                        Ok(nested) => {
-                            child_bridges.insert(down.id, nested);
-                        }
-                        Err(e) => {
-                            tracing::debug!(child = down.id, error = %e, "child bridges unavailable");
-                            child_bridges.remove(&down.id);
-                            errors.push(e);
-                            continue;
-                        }
-                    }
+                let is_due = due.contains(&down.id);
+                wanted.push(ChildFetch {
+                    id: down.id,
+                    project: down
+                        .project_id
+                        .map(ProjectRef::Id)
+                        .unwrap_or_else(|| level_project.clone()),
+                    jobs: is_due,
+                    bridges: level < depth && (is_due || nested_previous.is_none()),
+                    previous: nested_previous,
+                });
+            }
+        }
+
+        let answers = in_order(wanted.iter().map(|child| async move {
+            let jobs = match child.jobs {
+                true => Some(client.child_jobs(&child.project, child.id).await),
+                false => None,
+            };
+            // A child whose jobs could not be read is not walked any deeper
+            // this tick, so its bridges are not asked for either.
+            let bridges = match (child.bridges, &jobs) {
+                (true, None | Some(Ok(_))) => {
+                    Some(client.pipeline_bridges(&child.project, child.id).await)
                 }
-                if let Some(nested) = child_bridges.get(&down.id) {
-                    next.push((nested.clone(), child_project, nested_previous));
+                _ => None,
+            };
+            ChildFetched { jobs, bridges }
+        }))
+        .await;
+
+        let mut next = Vec::new();
+        for (child, answer) in wanted.into_iter().zip(answers) {
+            match answer.jobs {
+                Some(Ok(jobs)) => {
+                    child_jobs.insert(child.id, jobs);
                 }
+                Some(Err(e)) => {
+                    // A child in another project the token cannot see is a
+                    // real configuration outcome, not a bug — but it is still
+                    // an outcome the user has to be told about, and the entry
+                    // is dropped so the next tick asks again rather than
+                    // remembering the gap forever.
+                    tracing::debug!(child = child.id, error = %e, "child jobs unavailable");
+                    child_jobs.remove(&child.id);
+                    child_bridges.remove(&child.id);
+                    errors.push(e);
+                    reached.remove(&child.id);
+                    continue;
+                }
+                None => {}
+            }
+
+            if level >= depth {
+                continue;
+            }
+            match answer.bridges {
+                Some(Ok(nested)) => {
+                    child_bridges.insert(child.id, nested);
+                }
+                Some(Err(e)) => {
+                    tracing::debug!(child = child.id, error = %e, "child bridges unavailable");
+                    child_bridges.remove(&child.id);
+                    errors.push(e);
+                    continue;
+                }
+                None => {}
+            }
+            if let Some(nested) = child_bridges.get(&child.id) {
+                next.push((nested.clone(), child.project, child.previous));
             }
         }
         frontier = next;
@@ -621,17 +746,16 @@ async fn fetch_detail(
     child_jobs.retain(|id, _| reached.contains(id));
     child_bridges.retain(|id, _| reached.contains(id));
 
-    state.last_bridges.insert(row.id, bridges.clone());
-
     Ok(FetchedDetail {
         detail: PipelineDetail {
             pipeline: row.clone(),
             jobs,
-            bridges,
+            bridges: bridges.clone(),
             child_jobs,
             child_bridges,
         },
         errors,
+        bridges,
     })
 }
 

@@ -54,6 +54,7 @@ const ID_PIPELINES: &str = "pipelines";
 const ID_REFRESH: &str = "refresh";
 const ID_RELOAD: &str = "reload";
 const ID_OPEN_CONFIG: &str = "open-config";
+const ID_OPEN_LOGS: &str = "open-logs";
 const ID_SETTINGS: &str = "settings";
 const ID_WIZARD: &str = "wizard";
 const ID_AUTOSTART: &str = "autostart";
@@ -135,6 +136,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let reload = MenuItem::with_id(app, ID_RELOAD, "Reload config", true, None::<&str>)?;
     let open_config =
         MenuItem::with_id(app, ID_OPEN_CONFIG, "Open config file", true, None::<&str>)?;
+    let open_logs = MenuItem::with_id(app, ID_OPEN_LOGS, "Open log folder", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, ID_SETTINGS, "Settings…", true, None::<&str>)?;
     let wizard = MenuItem::with_id(app, ID_WIZARD, "Setup wizard…", true, None::<&str>)?;
     let autostart = CheckMenuItem::with_id(
@@ -156,6 +158,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &reload,
             &open_config,
+            &open_logs,
             &settings,
             &wizard,
             &PredefinedMenuItem::separator(app)?,
@@ -255,6 +258,23 @@ fn on_menu(app: &AppHandle, id: &str) {
             let path = app.state::<Arc<AppState>>().config_path.clone();
             if let Err(e) = app.opener().open_path(path.to_string_lossy(), None::<&str>) {
                 tracing::warn!(error = %e, "could not open the config file");
+            }
+        }
+        ID_OPEN_LOGS => {
+            // A local directory this process chose, never a URL, so it goes
+            // straight to `open_path` as "Open config file" does and never near
+            // `links::open`, whose allowlist is about hosts. Keeping the two
+            // doors apart means neither can be used to open what the other
+            // refuses.
+            let Some(dir) = crate::logging::folder() else {
+                tracing::warn!("there is no log folder: no home directory was found");
+                return;
+            };
+            // It exists unless the file layer failed to create it, and then
+            // this is a second try whose failure is logged like any other.
+            let _ = std::fs::create_dir_all(&dir);
+            if let Err(e) = app.opener().open_path(dir.to_string_lossy(), None::<&str>) {
+                tracing::warn!(error = %e, dir = %dir.display(), "could not open the log folder");
             }
         }
         ID_SETTINGS => windows::show_settings(app, None),

@@ -211,7 +211,7 @@ impl TokenProvider for SystemTokenProvider {
         // `keyring` rejects an empty user in its own client layer, so for the
         // entries other tools actually wrote there is nothing to try first.
         let raw = if user.is_empty() {
-            empty_user_lookup(service).ok_or_else(|| TokenError::NoEntry {
+            empty_user_lookup(service)?.ok_or_else(|| TokenError::NoEntry {
                 service: service.to_string(),
                 user: String::new(),
             })?
@@ -305,72 +305,34 @@ pub fn run_bounded(
     timeout: std::time::Duration,
     max_stdout: usize,
 ) -> Result<String, TokenError> {
-    use std::process::{Command, Stdio};
-
-    let Some((program, args)) = argv.split_first() else {
+    if argv.is_empty() {
         return Err(TokenError::Command {
             command: String::new(),
             message: "empty command".into(),
         });
-    };
+    }
     let failed = |message: String| TokenError::Command {
         command: argv.join(" "),
         message,
     };
 
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| failed(e.to_string()))?;
-
-    // Both pipes are drained on their own threads. Reading them in sequence
-    // deadlocks the moment a program writes more to the pipe we are not reading
-    // than its buffer holds, and a program that writes a lot to stderr is
-    // exactly the one whose stdout we are trying to bound.
-    //
-    // ⛔ And the threads are never JOINED. A pipe reaches EOF when every holder
-    // of its write end has closed it, not when the child exits: a helper that
-    // starts an agent, or any stray `&`, leaves a grandchild holding stdout,
-    // and a join waited for that grandchild however long it lived — deadline or
-    // no deadline. Each drain fills a shared buffer and reports EOF on a
-    // channel; the wait for EOF is bounded by the same deadline as the child.
-    let stdout = Drain::start(child.stdout.take(), max_stdout);
-    // Four bytes per char is UTF-8's ceiling, so this cannot cut short of the
-    // characters the error is allowed to show.
-    let stderr = Drain::start(child.stderr.take(), MAX_STDERR_CHARS * 4);
-
-    let deadline = std::time::Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait().map_err(|e| failed(e.to_string()))? {
-            Some(status) => break status,
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(failed(format!(
-                    "timed out after {}s and was killed. A token command must return without \
-                     waiting for anybody: a pinentry or a passphrase prompt has nowhere to \
-                     appear when bridgewatch runs it",
-                    timeout.as_secs_f32().round()
-                )));
-            }
-            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+    let (status, out, out_complete, err) = match run_captured(argv, timeout, max_stdout) {
+        Ran::Exited {
+            status,
+            out,
+            out_complete,
+            err,
+        } => (status, out, out_complete, err),
+        Ran::NotStarted(message) => return Err(failed(message)),
+        Ran::TimedOut => {
+            return Err(failed(format!(
+                "timed out after {}s and was killed. A token command must return without \
+                 waiting for anybody: a pinentry or a passphrase prompt has nowhere to \
+                 appear when bridgewatch runs it",
+                timeout.as_secs_f32().round()
+            )));
         }
     };
-
-    // Whatever the child wrote before exiting is already in the pipe, so once
-    // it has exited a second is ample: waiting out the rest of the deadline
-    // would charge every poll ten seconds for a grandchild that is never going
-    // to close its copy. The floor covers a child that exited right at the
-    // deadline.
-    let now = std::time::Instant::now();
-    let settle = (now + std::time::Duration::from_secs(1))
-        .min(deadline)
-        .max(now + std::time::Duration::from_millis(200));
-    let (out, out_complete) = stdout.finish(settle);
-    let (err, _) = stderr.finish(settle);
 
     if !status.success() {
         let text = String::from_utf8_lossy(&err);
@@ -401,6 +363,96 @@ pub fn run_bounded(
         ));
     }
     Ok(String::from_utf8_lossy(&out).to_string())
+}
+
+/// How a bounded run of a program ended.
+enum Ran {
+    /// It could not be started at all (not installed, not executable).
+    NotStarted(String),
+    /// It was still running at the deadline, and was killed.
+    TimedOut,
+    /// It exited: its status, what it printed, whether stdout reached EOF, and
+    /// the start of its stderr.
+    Exited {
+        status: std::process::ExitStatus,
+        out: Vec<u8>,
+        out_complete: bool,
+        err: Vec<u8>,
+    },
+}
+
+/// Run `argv` under a deadline with bounded output, and say how it ended.
+///
+/// The one place a program is started for a credential: [`run_bounded`] (a
+/// token command) and [`empty_user_lookup`] (the keychain's empty account) put
+/// different readings on the same four outcomes. `argv` must not be empty.
+fn run_captured(argv: &[String], timeout: std::time::Duration, max_stdout: usize) -> Ran {
+    use std::process::{Command, Stdio};
+
+    let Some((program, args)) = argv.split_first() else {
+        return Ran::NotStarted("empty command".into());
+    };
+    let mut child = match Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => return Ran::NotStarted(e.to_string()),
+    };
+
+    // Both pipes are drained on their own threads. Reading them in sequence
+    // deadlocks the moment a program writes more to the pipe we are not reading
+    // than its buffer holds, and a program that writes a lot to stderr is
+    // exactly the one whose stdout we are trying to bound.
+    //
+    // ⛔ And the threads are never JOINED. A pipe reaches EOF when every holder
+    // of its write end has closed it, not when the child exits: a helper that
+    // starts an agent, or any stray `&`, leaves a grandchild holding stdout,
+    // and a join waited for that grandchild however long it lived — deadline or
+    // no deadline. Each drain fills a shared buffer and reports EOF on a
+    // channel; the wait for EOF is bounded by the same deadline as the child.
+    let stdout = Drain::start(child.stdout.take(), max_stdout);
+    // Four bytes per char is UTF-8's ceiling, so this cannot cut short of the
+    // characters the error is allowed to show.
+    let stderr = Drain::start(child.stderr.take(), MAX_STDERR_CHARS * 4);
+
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ran::TimedOut;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(e) => {
+                let _ = child.kill();
+                return Ran::NotStarted(e.to_string());
+            }
+        }
+    };
+
+    // Whatever the child wrote before exiting is already in the pipe, so once
+    // it has exited a second is ample: waiting out the rest of the deadline
+    // would charge every poll ten seconds for a grandchild that is never going
+    // to close its copy. The floor covers a child that exited right at the
+    // deadline.
+    let now = std::time::Instant::now();
+    let settle = (now + std::time::Duration::from_secs(1))
+        .min(deadline)
+        .max(now + std::time::Duration::from_millis(200));
+    let (out, out_complete) = stdout.finish(settle);
+    let (err, _) = stderr.finish(settle);
+    Ran::Exited {
+        status,
+        out,
+        out_complete,
+        err,
+    }
 }
 
 /// One output pipe, read on its own thread into a bounded buffer.
@@ -530,7 +582,7 @@ pub fn decode_keyring_envelope(raw: &str) -> Result<String, TokenError> {
 
 /// Read a credential stored with an empty account, which the `keyring` crate
 /// will not address. Returns `None` when there is nothing there.
-fn empty_user_lookup(service: &str) -> Option<String> {
+fn empty_user_lookup(service: &str) -> Result<Option<String>, TokenError> {
     #[cfg(target_os = "macos")]
     let command = ("security", security_lookup_args(service));
     #[cfg(target_os = "linux")]
@@ -538,20 +590,55 @@ fn empty_user_lookup(service: &str) -> Option<String> {
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let command: (&str, Vec<&str>) = {
         let _ = service;
-        return None;
+        return Ok(None);
     };
 
-    let out = std::process::Command::new(command.0)
-        .args(&command.1)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    let argv: Vec<String> = std::iter::once(command.0)
+        .chain(command.1)
+        .map(str::to_string)
+        .collect();
+    lookup_outcome(
+        service,
+        run_captured(&argv, COMMAND_TIMEOUT, MAX_STDOUT_BYTES),
+        COMMAND_TIMEOUT,
+    )
+}
+
+/// What an empty-account lookup's run means.
+///
+/// ⛔ The lookup had no deadline at all, unlike every token command, and it
+/// runs on the same poll task: a `security` call that sat on a Keychain prompt
+/// nobody could see, or a `secret-tool` waiting on a locked collection's
+/// unlock dialog, held the whole tray (and `bridgewatch check`) for as long as
+/// the dialog stayed up. It now gets [`COMMAND_TIMEOUT`], and running out of
+/// it is an error that says so rather than "no entry", which would send
+/// somebody hunting for a credential that is there.
+///
+/// Not starting and exiting non-zero both still mean "not there": the tool is
+/// not installed, or has no such item (`security` exits 44).
+fn lookup_outcome(
+    service: &str,
+    ran: Ran,
+    timeout: std::time::Duration,
+) -> Result<Option<String>, TokenError> {
+    match ran {
+        Ran::NotStarted(_) => Ok(None),
+        Ran::TimedOut => Err(TokenError::Store {
+            service: service.to_string(),
+            message: format!(
+                "the credential store did not answer within {}s and the lookup was killed. \
+                 A Keychain or keyring unlock prompt may be waiting; answer it and refresh",
+                timeout.as_secs_f32().round()
+            ),
+        }),
+        Ran::Exited { status, .. } if !status.success() => Ok(None),
+        Ran::Exited { out, .. } => {
+            let secret = String::from_utf8_lossy(&out)
+                .trim_end_matches(['\n', '\r'])
+                .to_string();
+            Ok((!secret.is_empty()).then_some(secret))
+        }
     }
-    let secret = String::from_utf8_lossy(&out.stdout)
-        .trim_end_matches(['\n', '\r'])
-        .to_string();
-    (!secret.is_empty()).then_some(secret)
 }
 
 /// `security`'s arguments for an empty-account lookup of `service`.
@@ -685,7 +772,63 @@ pub fn clear_own_token(account: &str, provider: &dyn TokenProvider) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{secret_tool_lookup_args, security_lookup_args};
+    use super::{
+        MAX_STDOUT_BYTES, TokenError, lookup_outcome, run_captured, secret_tool_lookup_args,
+        security_lookup_args,
+    };
+
+    fn lookup(script: &str, timeout_ms: u64) -> Result<Option<String>, TokenError> {
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+        let argv = ["sh", "-c", script].map(String::from);
+        lookup_outcome(
+            "glab:gitlab.com:token",
+            run_captured(&argv, timeout, MAX_STDOUT_BYTES),
+            timeout,
+        )
+    }
+
+    /// ⛔ A lookup that never answers (a Keychain prompt nobody can see) is
+    /// killed at the deadline and reported as the store not answering, never
+    /// as "no entry", which would send somebody looking for a credential that
+    /// is there.
+    #[cfg(unix)]
+    #[test]
+    fn a_keychain_lookup_that_hangs_is_killed_and_says_so_rather_than_no_entry() {
+        let started = std::time::Instant::now();
+        let err = lookup("sleep 30", 150).expect_err("a hung lookup is an error");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "killed at the deadline, not waited out: {:?}",
+            started.elapsed()
+        );
+        match err {
+            TokenError::Store { service, message } => {
+                assert_eq!(service, "glab:gitlab.com:token");
+                assert!(message.contains("did not answer"), "{message}");
+            }
+            other => panic!("expected a store error, got {other:?}"),
+        }
+    }
+
+    /// The other three outcomes keep their old meanings: a found item is its
+    /// first line, a non-zero exit (`security` exits 44 for "no such item") and
+    /// a tool that is not installed are both "nothing there".
+    #[cfg(unix)]
+    #[test]
+    fn a_keychain_lookup_that_answers_reads_as_before() {
+        assert_eq!(
+            lookup("printf 'secret\\n'", 5_000).unwrap(),
+            Some("secret".to_string())
+        );
+        assert_eq!(lookup("exit 44", 5_000).unwrap(), None);
+        assert_eq!(lookup("printf ''", 5_000).unwrap(), None);
+        let argv = ["bridgewatch-no-such-program-anywhere".to_string()];
+        let timeout = std::time::Duration::from_secs(5);
+        assert_eq!(
+            lookup_outcome("s", run_captured(&argv, timeout, MAX_STDOUT_BYTES), timeout).unwrap(),
+            None
+        );
+    }
 
     /// ⛔ The empty ACCOUNT is asked for explicitly. `gh` keeps two items under
     /// one service, the login's, and an empty-account copy that is the active

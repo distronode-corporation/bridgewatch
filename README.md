@@ -412,8 +412,8 @@ as a first run: bridgewatch reports it and creates nothing.
 - **Many Linux tray hosts deliver no left-click** (GNOME's extension included), so the
   first menu item, **Show status**, opens the popover. The menu also has **Open pipelines
   page** (the repository's Actions page on GitHub), **Refresh now**, **Reload config**,
-  **Open config file**, **Settings…**, **Setup wizard…**, **Launch at login** and **Quit
-  bridgewatch**.
+  **Open config file**, **Open log folder**, **Settings…**, **Setup wizard…**, **Launch
+  at login** and **Quit bridgewatch**.
 - **Config problems** appear in a strip at the top of the popover, with a button that
   opens Settings. A file that fails validation does not take effect; the last good
   configuration keeps running.
@@ -426,9 +426,18 @@ as a first run: bridgewatch reports it and creates nothing.
 - **Arguments.** `--config <path>` (also `-c <path>` or `--config=<path>`), `--help`,
   `--version`. `BRIDGEWATCH_CONFIG` names the config file too; an empty value counts as
   unset.
-- **Logging** goes to stderr. A non-empty `RUST_LOG` wins; otherwise `[log].level`
-  applies (to bridgewatch's own crates; everything else stays at `warn`) and is
-  re-applied on reload; with neither, the level is `warn`.
+- **Logging** goes to stderr and to a log file, one per day as
+  `bridgewatch.<date>.log`, of which the last 7 are kept. The folder is
+  `~/Library/Logs/bridgewatch` on macOS (Console.app lists it) and
+  `$XDG_STATE_HOME/bridgewatch` on Linux (by default `~/.local/state/bridgewatch`);
+  **Open log folder** in the tray menu opens it. On macOS the file is the only log an
+  app started from Finder, the Dock or a login item has, because its stderr goes
+  nowhere. If the folder cannot be created or written, the app keeps running with stderr
+  alone and says so once, at `warn`. The level is the same for both: a non-empty
+  `RUST_LOG` wins for the life of the process; otherwise `[log].level` applies (to
+  bridgewatch's own crates; everything else stays at `warn`) and is re-applied on
+  reload; with neither, the level is `warn`, so the file stays nearly empty until you
+  raise it. The `bridgewatch` CLI logs to stderr only.
 - **Not Mac App Store eligible.** The popover's transparent window uses Tauri's
   `macos-private-api` feature.
 

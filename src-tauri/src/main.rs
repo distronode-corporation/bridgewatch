@@ -60,8 +60,10 @@ fn main() {
         }
     };
 
-    // stderr only: a tray app has nowhere else to write. `RUST_LOG` wins when
-    // set; otherwise `[log].level` applies once the file has loaded.
+    // stderr and a daily file (see `logging::log_dir`): launched from Finder
+    // or the Dock, stderr goes nowhere, and the file is the only log there is.
+    // `RUST_LOG` wins when set; otherwise `[log].level` applies once the file
+    // has loaded.
     logging::init();
 
     // Nothing is written here. A first launch (no file at the default path)
@@ -195,7 +197,11 @@ fn main() {
             }
             // Linux: the tray's image files live in a per-run directory that
             // only this removes (a killed run's is swept at the next start).
-            tauri::RunEvent::Exit => tray::remove_icon_dir(app),
+            // Everywhere: the log file's queued lines are written out.
+            tauri::RunEvent::Exit => {
+                tray::remove_icon_dir(app);
+                logging::flush();
+            }
             _ => {}
         });
 }
@@ -272,6 +278,12 @@ ENVIRONMENT:
     BRIDGEWATCH_CONFIG     Same as --config, lower precedence.
     RUST_LOG               Tracing filter. When set and non-empty it wins over
                            [log].level in the file; with neither, `warn`.
+
+LOGS:
+    Written to stderr and to a daily file, bridgewatch.<date>.log, a week of
+    which is kept: ~/Library/Logs/bridgewatch on macOS, and
+    $XDG_STATE_HOME/bridgewatch (by default ~/.local/state/bridgewatch) on
+    Linux. \"Open log folder\" in the tray menu opens it.
 
 The command-line companion with subcommands is `bridgewatch` from
 bridgewatch-cli; this binary is the tray application.",

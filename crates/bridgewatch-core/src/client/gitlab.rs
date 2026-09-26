@@ -149,6 +149,8 @@ pub struct GitLabClient {
     header_value: String,
     transport: Arc<dyn Transport>,
     ring: RequestRing,
+    /// At most [`super::MAX_IN_FLIGHT`] of this client's requests at a time.
+    in_flight: super::InFlight,
 }
 
 impl std::fmt::Debug for GitLabClient {
@@ -178,6 +180,7 @@ impl GitLabClient {
             header_value: account.header.header_value(token.expose()),
             transport,
             ring,
+            in_flight: super::InFlight::new(),
         }
     }
 
@@ -349,6 +352,8 @@ impl GitLabClient {
             body: None,
         };
 
+        // Before the clock starts: `ms` is the request, not the queue.
+        let _slot = self.in_flight.acquire().await;
         let started = std::time::Instant::now();
         let result = self.transport.execute(request).await;
         let ms = started.elapsed().as_millis() as u64;

@@ -824,3 +824,39 @@ fn a_github_account_builds_a_poller() {
         .map(|_| ())
         .expect("a GitHub poller builds");
 }
+
+/// Only the accounts a watch uses have their token resolved.
+///
+/// ⛔ Every configured account used to be resolved, one after another, before
+/// anything was polled: `bridgewatch check --watch x` read the keychain for
+/// accounts `x` never touches, and an account whose credential was missing
+/// failed a check that did not need it. Here `idle` would fail to resolve
+/// (`OneVariable` has nothing in the keyring), and the poller builds anyway
+/// because no watch names it.
+#[test]
+fn an_account_no_watch_uses_is_never_resolved() {
+    let raw = r#"
+        [accounts.used]
+        token = { env = "TOK" }
+
+        [accounts.idle]
+        token = { keyring = { service = "nothing-here", user = "u" } }
+
+        [[watches]]
+        id = "x"
+        account = "used"
+        project = 1
+        "#;
+    let config: bridgewatch_core::Config = toml::from_str(raw).expect("the table deserialises");
+    bridgewatch_core::poll::Poller::from_config(&config, &OneVariable)
+        .map(|_| ())
+        .expect("the idle account's missing credential is never asked for");
+
+    // And the same account IS resolved, and fails, the moment a watch uses it.
+    let raw = raw.replace("account = \"used\"", "account = \"idle\"");
+    let config: bridgewatch_core::Config = toml::from_str(&raw).expect("the table deserialises");
+    let err = bridgewatch_core::poll::Poller::from_config(&config, &OneVariable)
+        .map(|_| ())
+        .expect_err("a used account with no credential still fails the build");
+    assert!(err.to_string().contains("idle"), "{err}");
+}

@@ -179,7 +179,24 @@ impl RequestRing {
     }
 
     /// Append an entry, evicting the oldest when full.
+    ///
+    /// Inside [`in_order`] the entry is held back instead, and appended when
+    /// that scope's turn comes: see [`in_order`] for why.
     pub fn record(&self, entry: RequestLog) {
+        let mut entry = Some(entry);
+        let held = HELD.try_with(|held| {
+            if let Some(entry) = entry.take() {
+                held.borrow_mut().push((self.clone(), entry));
+            }
+        });
+        if held.is_ok() {
+            return;
+        }
+        let Some(entry) = entry else { return };
+        self.append(entry);
+    }
+
+    fn append(&self, entry: RequestLog) {
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
@@ -225,6 +242,115 @@ impl RequestRing {
                 inner.entries.pop_front();
             }
         }
+    }
+}
+
+tokio::task_local! {
+    /// What [`RequestRing::record`] was handed inside an [`in_order`] scope,
+    /// with the ring it was meant for.
+    static HELD: std::cell::RefCell<Held>;
+}
+
+/// Run `futures` concurrently, returning their outputs in the order given and
+/// recording their requests in that order too.
+///
+/// ⛔ The order is the point, and not only of the outputs. The poller used to
+/// await every request in turn, so the debug pane's ring read in the order the
+/// tick was written: a watch's list, then each pipeline's jobs and bridges,
+/// then its children. Run concurrently, the ring would record in COMPLETION
+/// order, which is whichever response the network happened to deliver first,
+/// and the same tick would read differently every time. So each future's
+/// entries are held back while it runs and appended, whole and in turn, once
+/// they have all finished. Nested calls compose: an inner scope hands its
+/// entries to the enclosing one rather than to the ring, so a tick reads
+/// exactly as the sequential poller wrote it however deep the concurrency
+/// goes.
+///
+/// ⚠ This bounds nothing. How many requests are in flight at once is each
+/// client's [`InFlight`], which is per account and so also covers two watches
+/// on one account running side by side.
+pub async fn in_order<F>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output>
+where
+    F: std::future::Future,
+{
+    futures_util::future::join_all(futures.into_iter().map(held_back))
+        .await
+        .into_iter()
+        .map(|(output, held)| {
+            release(held);
+            output
+        })
+        .collect()
+}
+
+/// [`in_order`] for exactly two futures of different types.
+pub async fn in_order2<A, B>(a: A, b: B) -> (A::Output, B::Output)
+where
+    A: std::future::Future,
+    B: std::future::Future,
+{
+    let ((a, held_a), (b, held_b)) = tokio::join!(held_back(a), held_back(b));
+    release(held_a);
+    release(held_b);
+    (a, b)
+}
+
+type Held = Vec<(RequestRing, RequestLog)>;
+
+/// `future`, with every entry it records held back and handed over with its
+/// output.
+async fn held_back<F: std::future::Future>(future: F) -> (F::Output, Held) {
+    HELD.scope(std::cell::RefCell::new(Vec::new()), async move {
+        let output = future.await;
+        (output, HELD.with(|held| held.take()))
+    })
+    .await
+}
+
+/// Record what a [`held_back`] future held, which goes to the enclosing scope
+/// when there is one and to the ring when there is not.
+fn release(held: Held) {
+    for (ring, entry) in held {
+        ring.record(entry);
+    }
+}
+
+/// How many requests one client has in flight at once.
+///
+/// ⚠ Four, because the poller now fetches a tick's pipelines, their children
+/// and its watches side by side, and gitlab.com's own guidance for API clients
+/// is a handful of concurrent connections, not dozens. A deep bridge fan-out is
+/// 20 to 30 requests a tick; at four at a time that is a few seconds of wall
+/// time instead of one request after another for ten.
+pub const MAX_IN_FLIGHT: usize = 4;
+
+/// The bound on one client's concurrent requests. Clones share it.
+///
+/// ⛔ One per CLIENT, and the poller builds one client per account, so this is
+/// the per-account limit whichever watch or pipeline is asking. The permit is
+/// taken before a request's clock starts, so a request's `ms` in the log and
+/// the ring is the request, not the queue in front of it.
+#[derive(Debug, Clone)]
+pub struct InFlight(Arc<tokio::sync::Semaphore>);
+
+impl InFlight {
+    /// A bound of [`MAX_IN_FLIGHT`].
+    pub fn new() -> Self {
+        Self(Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT)))
+    }
+
+    /// Wait for a slot. The slot is released when the permit is dropped.
+    ///
+    /// `None` only if the semaphore were closed, which nothing here ever does;
+    /// the request then goes ahead unbounded rather than failing.
+    pub async fn acquire(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
+        self.0.acquire().await.ok()
+    }
+}
+
+impl Default for InFlight {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

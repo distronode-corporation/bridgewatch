@@ -110,11 +110,12 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             continue;
         };
 
-        // ⚠ `Poller::from_config` resolves every account's token, which on
-        // macOS can raise a Keychain prompt. That is why this runs here, on the
-        // background task after the app is up, and not in `setup`: the core's
-        // README asks for resolution to happen in response to a user action
-        // having started the app, never on a timer with nobody watching.
+        // ⚠ `Poller::from_config` resolves the token of every account a watch
+        // uses, which on macOS can raise a Keychain prompt. That is why this
+        // runs here, on the background task after the app is up, and not in
+        // `setup`: the core's README asks for resolution to happen in response
+        // to a user action having started the app, never on a timer with
+        // nobody watching.
         let mut poller = match Poller::from_config(&config, &SystemTokenProvider) {
             Ok(p) => {
                 failed_builds = 0;

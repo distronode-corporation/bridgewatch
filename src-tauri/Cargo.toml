@@ -26,6 +26,14 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# The daily log file, its pruning and its non-blocking writer (`logging::init`).
+# Adds one crate besides itself, `symlink` 0.1.0 (MIT/Apache-2.0); the rest of
+# what it needs (crossbeam-channel, time, thiserror) was already in the tree.
+tracing-appender = "0.2.5"
+# Where that file goes: the same crate and version the core resolves the config
+# and ledger paths with, named here because a dependency's dependency cannot be
+# used directly.
+dirs = "7.0.0"
 
 # `tray-icon` and `image-png` are the two features this shell genuinely needs:
 # the tray, and `Image::from_bytes` on the PNG assets in icons/tray.

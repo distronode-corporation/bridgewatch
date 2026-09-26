@@ -159,15 +159,21 @@ async fn post(
         ],
         body: Some(body),
     };
+    let started = std::time::Instant::now();
     let result = transport.execute(request).await;
+    // `ms` for the same reason the API requests carry it: a slow first request
+    // on an expired sign-in is either this POST or the credential store, and
+    // without it the log cannot say which.
+    let ms = started.elapsed().as_millis() as u64;
     match &result {
         Ok(response) => tracing::debug!(
             method = "POST",
             path,
             status = response.status,
+            ms,
             "oauth request"
         ),
-        Err(e) => tracing::debug!(method = "POST", path, error = %e, "oauth request failed"),
+        Err(e) => tracing::debug!(method = "POST", path, error = %e, ms, "oauth request failed"),
     }
     result
 }

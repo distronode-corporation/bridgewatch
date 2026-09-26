@@ -23,6 +23,10 @@ async-trait = "0.1.90"
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
 dirs = "7.0.0"
+# `join_all`, for `client::http::in_order`. Already in the engine's graph with
+# this feature (hyper-util, tower and tower-http all use it), so naming it adds
+# no crate to Cargo.lock; `default-features = false` keeps it that way.
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 globset = "0.4.20"
 hex = "0.4.3"
 keyring = "4.2.0"

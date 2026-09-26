@@ -115,6 +115,8 @@ pub struct GitHubClient {
     header_value: String,
     transport: Arc<dyn Transport>,
     ring: RequestRing,
+    /// At most [`super::MAX_IN_FLIGHT`] of this client's requests at a time.
+    in_flight: super::InFlight,
     /// The commit groups the last grouped list presented. See [`group::Memo`].
     groups: Arc<Mutex<group::Memo>>,
     /// What `expect` measures a group's window against. The wall clock, except
@@ -149,6 +151,7 @@ impl GitHubClient {
             header_value: account.header.header_value(token.expose()),
             transport,
             ring,
+            in_flight: super::InFlight::new(),
             groups: Arc::new(Mutex::new(group::Memo::default())),
             clock: Arc::new(Utc::now),
         }
@@ -505,6 +508,8 @@ impl GitHubClient {
             body: None,
         };
 
+        // Before the clock starts: `ms` is the request, not the queue.
+        let _slot = self.in_flight.acquire().await;
         let started = std::time::Instant::now();
         let result = self.transport.execute(request).await;
         let ms = started.elapsed().as_millis() as u64;

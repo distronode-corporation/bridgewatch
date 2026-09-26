@@ -153,7 +153,20 @@ impl OAuthSession {
     /// Returns whether anything new was adopted.
     fn adopt_stored(&self, state: &mut State) -> bool {
         state.loaded = true;
-        match store::load(&self.account, self.store.as_ref()) {
+        // ⚠ Timed because it is the one step of a request that can take
+        // SECONDS on a machine that is otherwise fast: on macOS a Keychain item
+        // written by another program (the tray app and the CLI are two, and
+        // every rebuild of an unsigned binary is a new one) is read only after
+        // the "allow access" dialog is answered, and the request waits for
+        // that person the whole time.
+        let started = std::time::Instant::now();
+        let loaded = store::load(&self.account, self.store.as_ref());
+        tracing::debug!(
+            account = %self.account,
+            ms = started.elapsed().as_millis() as u64,
+            "read the stored sign-in"
+        );
+        match loaded {
             Ok(Some(set)) if self.fits(&set) => {
                 if state.current.as_ref() == Some(&set) {
                     return false;
