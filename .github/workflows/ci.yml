@@ -10,7 +10,7 @@ name: CI
 # chain: advisories and licences for the dependency tree, and the workflows themselves.
 #
 # `installers` is off unless asked for: a manual run with `build_installers` ticked
-# builds the four unsigned bundles a release would ship and keeps them for 3 days,
+# builds the seven unsigned bundles a release would ship and keeps them for 3 days,
 # which is how a build gets tested from a private staging repo without a tag.
 on:
   push:
@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       build_installers:
-        description: Also build unsigned installers (dmg x2, deb, AppImage), kept 3 days
+        description: Also build unsigned installers (universal dmg; deb, rpm, AppImage on x86_64 and arm64), kept 3 days
         type: boolean
         default: false
 
@@ -62,18 +62,20 @@ env:
 
 jobs:
   # fmt, clippy -D warnings, the workspace tests and a check of the Tauri shell, on
-  # the two platforms a release builds on.
+  # the three runners a release builds on.
   #
-  # ⛔ LINUX RUNS ON ubuntu-22.04, NOT 24.04, BECAUSE 22.04 IS THE RELEASE FLOOR.
-  # glibc is forward- and not backward-compatible and 22.04 ships an older WebKitGTK,
-  # so release.yml links on 22.04 and this job is where that floor is exercised on
-  # every push rather than first at tag time. Moving it is a user-visible change.
+  # ⛔ LINUX RUNS ON ubuntu-22.04 AND ubuntu-22.04-arm, NOT 24.04, BECAUSE THE RUNNER
+  # IS THE RELEASE's glibc FLOOR. glibc is forward- and not backward-compatible and
+  # 22.04 ships an older WebKitGTK, so release.yml links on these two images (the
+  # oldest GitHub offers per architecture) and this job is where that floor is
+  # exercised on every push rather than first at tag time. Moving either is a
+  # user-visible change.
   rust:
     name: rust (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-latest]
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -92,7 +94,9 @@ jobs:
       # already names the channel and components, so no third-party action is needed.
       # The install is explicit anyway (it also UPDATES a stale preinstalled stable),
       # because recent rustup releases have gone back and forth on auto-installing
-      # from the toolchain file. The x86_64 target is for the Intel cross-check below.
+      # from the toolchain file. The x86_64 target is for the Intel cross-check below;
+      # macos-latest is arm64, so the native steps already cover the other half of the
+      # universal .dmg.
       - name: Install the stable toolchain
         shell: bash
         run: |
@@ -106,7 +110,7 @@ jobs:
 
       # Formatting does not depend on the platform; once is enough.
       - name: cargo fmt
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-22.04'
         run: cargo fmt --all --check
 
       # `--locked` on every cargo call that resolves: it fails if Cargo.lock would
@@ -126,9 +130,9 @@ jobs:
       - name: cargo check -p bridgewatch-app
         run: cargo check -p bridgewatch-app --locked
 
-      # release.yml cross-compiles the Intel .dmg from this same Apple Silicon image.
-      # That is the leg most likely to fail for a reason the native build cannot show,
-      # so it is checked here rather than first at tag time.
+      # release.yml's universal .dmg cross-compiles its Intel half from this same Apple
+      # Silicon image. That is the half most likely to fail for a reason the native
+      # build cannot show, so it is checked here rather than first at tag time.
       - name: cargo check -p bridgewatch-app (x86_64-apple-darwin)
         if: runner.os == 'macOS'
         run: cargo check -p bridgewatch-app --locked --target x86_64-apple-darwin
@@ -337,24 +341,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - id: macos-aarch64
+          # Kept in step with release.yml's matrix, including its glibc-floor runners.
+          - id: macos-universal
             platform: macos-latest
-            args: --target aarch64-apple-darwin
-            rust_target: aarch64-apple-darwin
-            bundle_dir: target/aarch64-apple-darwin/release/bundle
-            expected: 1
-          - id: macos-x86_64
-            platform: macos-latest
-            args: --target x86_64-apple-darwin
-            rust_target: x86_64-apple-darwin
-            bundle_dir: target/x86_64-apple-darwin/release/bundle
+            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin x86_64-apple-darwin
+            bundle_dir: target/universal-apple-darwin/release/bundle
             expected: 1
           - id: linux-x86_64
             platform: ubuntu-22.04
             args: ''
-            rust_target: ''
+            rust_targets: ''
             bundle_dir: target/release/bundle
-            expected: 2
+            expected: 3
+          - id: linux-aarch64
+            platform: ubuntu-22.04-arm
+            args: ''
+            rust_targets: ''
+            bundle_dir: target/release/bundle
+            expected: 3
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
     steps:
@@ -372,11 +377,12 @@ jobs:
       - name: Install the stable toolchain
         shell: bash
         env:
-          RUST_TARGET: ${{ matrix.rust_target }}
+          RUST_TARGETS: ${{ matrix.rust_targets }}
         run: |
           # Components match rust-toolchain.toml so rustup has nothing left to fetch.
           rustup toolchain install stable --profile minimal -c rustfmt -c clippy
-          if [ -n "$RUST_TARGET" ]; then rustup target add "$RUST_TARGET" --toolchain stable; fi
+          # Space-separated; empty on the native Linux legs.
+          for t in $RUST_TARGETS; do rustup target add "$t" --toolchain stable; done
           rustc --version
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -414,7 +420,7 @@ jobs:
           set -euo pipefail
           mkdir -p staging
           find "$BUNDLE_DIR" -maxdepth 2 -type f \
-            \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
+            \( -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
             -exec cp {} staging/ \;
           found="$(find staging -type f | wc -l | tr -d ' ')"
           if [ "$found" -ne "$EXPECTED" ]; then
@@ -424,15 +430,39 @@ jobs:
           fi
           ls -l staging
 
-      # The core shells out to `secret-tool` on Linux, so a .deb without this
+      # Unsigned here, so only the architecture half of release.yml's macOS check.
+      - name: The .app is universal
+        if: runner.os == 'macOS'
+        env:
+          BUNDLE_DIR: ${{ matrix.bundle_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$(find "$BUNDLE_DIR/macos" -maxdepth 1 -name '*.app' | head -1)"
+          [ -n "$app" ] || { echo "::error::no .app in the macOS bundle dir"; exit 1; }
+          exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          lipo -info "$app/Contents/MacOS/$exe"
+          # -archs prints the architectures alone; -info also echoes the path, which a
+          # word match could hit.
+          archs="$(lipo -archs "$app/Contents/MacOS/$exe")"
+          for arch in x86_64 arm64; do
+            grep -qw "$arch" <<<"$archs" || { echo "::error::$exe is not built for $arch (has: $archs)"; exit 1; }
+          done
+
+      # The core shells out to `secret-tool` on Linux, so a package without this
       # dependency installs cleanly and then cannot read a keyring token.
-      - name: The .deb depends on libsecret-tools
+      - name: The .deb and .rpm depend on secret-tool
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           depends="$(dpkg-deb -f staging/*.deb Depends)"
-          echo "Depends: $depends"
+          echo "deb Depends: $depends"
           grep -qw libsecret-tools <<<"$depends" || { echo "::error::the .deb does not depend on libsecret-tools"; exit 1; }
+          command -v rpm >/dev/null || { sudo apt-get update && sudo apt-get install -y rpm; }
+          requires="$(rpm -qpR staging/*.rpm)"
+          echo "rpm Requires:"
+          echo "$requires"
+          grep -qxF /usr/bin/secret-tool <<<"$requires" || { echo "::error::the .rpm does not require /usr/bin/secret-tool"; exit 1; }
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

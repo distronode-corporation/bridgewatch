@@ -16,6 +16,7 @@ use crate::client::{CiClient, ClientError, ListQuery, RequestRing};
 use crate::config::{Config, JobsMode, ProjectRef, Provider, Role, Watch, WatchRules};
 use crate::model::{Bridge, Pipeline, PipelineDetail};
 use crate::notify::{Notification, NotifyLedger, notifications_for};
+use crate::status::Status;
 use crate::verdict::{
     DetailSource, PipelineView, Snapshot, VerdictScript, WatchView, evaluate_pipeline,
 };
@@ -672,7 +673,17 @@ pub fn list_query(watch: &Watch, rules: &WatchRules) -> ListQuery {
 /// Filter and trim the list rows a watch should show.
 ///
 /// Every unsettled pipeline is kept, plus `show.settled` of the most recent
-/// settled ones, all bounded by `show.max_rows`.
+/// settled ones, all bounded by `show.max_rows`. A `skipped` pipeline is passed
+/// over entirely.
+///
+/// ⛔ GitLab creates a `skipped` pipeline for a push whose changes match no
+/// job's rules (a docs-only push on a project that gates every job on
+/// `changes:`), and on GitHub a commit whose every workflow run was skipped
+/// folds to one. It ran nothing and says nothing, but it is settled, so it took
+/// the `show.settled` slot, the real pipeline before it fell off the list, and
+/// the icon (the newest id) read the not-built parent as `canceled` and fired
+/// `finished: canceled` for a push that changed nothing. `canceled` is NOT
+/// passed over: somebody stopped that pipeline, and that is news.
 pub fn select_rows(rows: &[Pipeline], watch: &Watch, rules: &WatchRules) -> Vec<Pipeline> {
     let mut matching: Vec<Pipeline> = rows
         .iter()
@@ -688,6 +699,9 @@ pub fn select_rows(rows: &[Pipeline], watch: &Watch, rules: &WatchRules) -> Vec<
         if out.len() >= watch.show.max_rows {
             break;
         }
+        if row.status == Status::Skipped {
+            continue;
+        }
         if row.status.is_live() {
             out.push(row.clone());
         } else if settled_taken < watch.show.settled {
@@ -701,9 +715,16 @@ pub fn select_rows(rows: &[Pipeline], watch: &Watch, rules: &WatchRules) -> Vec<
     // running — or `max_rows = 0`, which the schema accepts — produced zero rows
     // and a tray reading `unknown` on a perfectly green estate. A secondary
     // watch has no icon and is left to show exactly what it was asked for.
+    //
+    // The newest pipeline that ran anything, when there is one. A watch whose
+    // every match was skipped still keeps the newest of those: it is the only
+    // answer there is, and `canceled` is truer than `unknown` for it.
     if out.is_empty()
         && watch.role.is_primary()
-        && let Some(newest) = matching.first()
+        && let Some(newest) = matching
+            .iter()
+            .find(|p| p.status != Status::Skipped)
+            .or_else(|| matching.first())
     {
         out.push(newest.clone());
     }

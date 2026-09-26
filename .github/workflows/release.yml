@@ -1,10 +1,10 @@
 name: Release
 
-# Fires on a `vX.Y.Z` tag and produces the four assets a 0.1 user can actually
-# install: a macOS .dmg per architecture and a Linux .deb + .AppImage. Windows is not
-# targeted in 0.1.
+# Fires on a `vX.Y.Z` tag and produces the seven assets a user can install: one
+# universal macOS .dmg (Apple Silicon and Intel in one binary), and a .deb, an .rpm and
+# an .AppImage for each of Linux x86_64 and arm64. Windows is not targeted.
 #
-# ⛔ THE RELEASE IS CREATED AS A DRAFT AND PUBLISHED ONLY ONCE ALL FOUR ASSETS ARE
+# ⛔ THE RELEASE IS CREATED AS A DRAFT AND PUBLISHED ONLY ONCE EVERY ASSET IS
 # PRESENT AND ATTESTED. Until 2026-09-17 each of the three build legs created or
 # looked up a PUBLIC release and uploaded its own bundle to it, with
 # `fail-fast: false`, so the first leg to finish published a release with one asset
@@ -14,11 +14,13 @@ name: Release
 # write permission at all, and `publish` is the only thing that can make a release
 # public, which it does after checking the asset set twice.
 #
-# Linux builds on ubuntu-22.04 on purpose. glibc is forward-compatible and not
-# backward-compatible, so a binary linked against 24.04's glibc refuses to start on
-# 22.04, while one linked on 22.04 runs on both. The runner image is therefore the
-# distribution floor, and moving it is a user-visible change. ci.yml's `installers`
-# and its `rust` job run on that same image so the floor is exercised before tag time.
+# ⛔ LINUX BUILDS ON ubuntu-22.04 AND ubuntu-22.04-arm ON PURPOSE: THE RUNNER IS THE
+# glibc FLOOR. glibc is forward-compatible and not backward-compatible, so a binary
+# linked against 24.04's glibc refuses to start on 22.04, while one linked on 22.04
+# runs on both. These are the oldest images GitHub offers for either architecture, so
+# "upgrading" either runner silently drops every user on an older distribution.
+# ci.yml's `installers` and its `rust` job run on the same images so the floor is
+# exercised before tag time.
 #
 # macOS builds are SIGNED with the "Developer ID Application: Distronode Corporation
 # (R935BA6767)" identity and NOTARISED, both by the Tauri CLI inside tauri-action:
@@ -27,7 +29,8 @@ name: Release
 # API key (APPLE_API_*) and staples the ticket before the .dmg is made. The key is a
 # dedicated Developer-role key used for nothing else, not the iOS app's key.
 # `Verify the macOS signature` below checks the result inside the .dmg, because a
-# build that silently fell back to unsigned would otherwise ship. Rehearsed locally
+# build that silently fell back to unsigned would otherwise ship, and also checks that
+# the binary really carries both architectures. Rehearsed locally
 # on 2026-09-18 before the first tag.
 on:
   push:
@@ -78,7 +81,7 @@ jobs:
           echo "$GITHUB_SHA is on main"
 
       # The three version literals agree with each other AND with the tag. Without
-      # this a `v0.1.1` tag on an unbumped tree ships four files named `_0.1.0_`,
+      # this a `v1.0.1` tag on an unbumped tree ships seven files named `1.0.0`,
       # because Tauri names every bundle after tauri.conf.json and nothing compares
       # the two.
       - name: Versions agree with the tag
@@ -135,38 +138,41 @@ jobs:
     # nothing here and would silently make the identity readable from every branch again.
     environment: release
     strategy:
-      # Surface all three failures in one run rather than one per re-run. Nothing
+      # Surface every leg's failure in one run rather than one per re-run. Nothing
       # public exists until `publish`, so a partially failed matrix costs only time.
       fail-fast: false
       matrix:
         include:
-          # Apple Silicon runner (macos-latest is macOS 26 arm64), native build.
-          - id: macos-aarch64
-            platform: macos-latest
-            args: --target aarch64-apple-darwin
-            rust_targets: aarch64-apple-darwin
-            bundle_dir: target/aarch64-apple-darwin/release/bundle
-            expected: 1
-          # Intel build, cross-compiled from the same Apple Silicon runner. This is
-          # what tauri-action's own README does, and it avoids depending on the
-          # macos-13 Intel image, which is on its way out.
-          - id: macos-x86_64
-            platform: macos-latest
-            args: --target x86_64-apple-darwin
-            rust_targets: x86_64-apple-darwin
-            bundle_dir: target/x86_64-apple-darwin/release/bundle
-            expected: 1
-          # No --target, so the bundles land in target/release/bundle rather than
-          # target/<triple>/release/bundle.
+          # ONE universal .dmg from the Apple Silicon runner (macos-latest is arm64).
+          # `tauri build --target universal-apple-darwin` builds the aarch64 and
+          # x86_64 binaries separately (both targets must be installed) and joins
+          # them with `lipo` before bundling, so signing and notarisation happen once,
+          # on the fat .app. Replaced the per-arch .dmg pair after 1.0.0.
           # ⚠️ `target/` is the WORKSPACE target dir at the repo root: src-tauri is a
           # workspace member, so there is no src-tauri/target/ (measured on the first
           # local `tauri build`; the paths said src-tauri/target/ until then).
+          - id: macos-universal
+            platform: macos-latest
+            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin x86_64-apple-darwin
+            bundle_dir: target/universal-apple-darwin/release/bundle
+            expected: 1
+          # ⛔ THE RUNNER IS THE glibc FLOOR (see the header): 22.04 is the oldest
+          # image GitHub offers on either architecture. Do not move either leg to a
+          # newer image. Both build natively with no --target, so the bundles land in
+          # target/release/bundle: a .deb, an .rpm and an .AppImage each.
           - id: linux-x86_64
             platform: ubuntu-22.04
             args: ''
             rust_targets: ''
             bundle_dir: target/release/bundle
-            expected: 2
+            expected: 3
+          - id: linux-aarch64
+            platform: ubuntu-22.04-arm
+            args: ''
+            rust_targets: ''
+            bundle_dir: target/release/bundle
+            expected: 3
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
     steps:
@@ -196,10 +202,11 @@ jobs:
       - name: Install the stable toolchain
         shell: bash
         env:
-          RUST_TARGET: ${{ matrix.rust_targets }}
+          RUST_TARGETS: ${{ matrix.rust_targets }}
         run: |
           rustup toolchain install stable --profile minimal -c rustfmt -c clippy
-          if [ -n "$RUST_TARGET" ]; then rustup target add "$RUST_TARGET" --toolchain stable; fi
+          # Space-separated; empty on the native Linux legs.
+          for t in $RUST_TARGETS; do rustup target add "$t" --toolchain stable; done
           rustc --version
 
       # ⛔ NO CACHES IN THIS WORKFLOW, DELIBERATELY (neither rust-cache nor setup-node's
@@ -239,7 +246,7 @@ jobs:
       - name: Build the bundles
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
-          # Signing and notarization, macOS legs only (the Linux leg never sees them).
+          # Signing and notarization, macOS leg only (the Linux legs never see them).
           APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
           APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
@@ -257,8 +264,8 @@ jobs:
           # nothing but build (verified in its src/index.ts at this pinned SHA). That
           # is what lets this job be read-only, and it is also what stops it uploading
           # the extra macOS asset it would otherwise produce: given a `.app` with no
-          # sibling `.app.tar.gz`, the action tars the bundle and uploads that too —
-          # under the SAME name from both macOS legs, and outside the attestation.
+          # sibling `.app.tar.gz`, the action tars the bundle and uploads that too,
+          # outside the attestation.
           args: ${{ matrix.args }}
           retryAttempts: 2
 
@@ -277,7 +284,7 @@ jobs:
           # -type f skips bundle/macos/*.app, which is a directory, and the name
           # filter is the whole of what this project ships.
           find "$BUNDLE_DIR" -maxdepth 2 -type f \
-            \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
+            \( -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
             -exec cp {} staging/ \;
           found="$(find staging -type f | wc -l | tr -d ' ')"
           if [ "$found" -ne "$EXPECTED" ]; then
@@ -314,17 +321,34 @@ jobs:
             || { echo "::error::not signed with the Distronode Developer ID"; exit 1; }
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
+          # ⛔ A universal build that quietly produced one architecture would still
+          # sign, notarise and pass Gatekeeper, and then refuse to start on the other
+          # half of the fleet. So the executable inside the .app must be fat.
+          exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          lipo -info "$app/Contents/MacOS/$exe"
+          # -archs prints the architectures alone; -info also echoes the path, which a
+          # word match could hit.
+          archs="$(lipo -archs "$app/Contents/MacOS/$exe")"
+          for arch in x86_64 arm64; do
+            grep -qw "$arch" <<<"$archs" || { echo "::error::$exe is not built for $arch (has: $archs)"; exit 1; }
+          done
 
       # The core shells out to `secret-tool` on Linux (tauri.conf.json declares the
-      # dependency). A .deb without it installs cleanly and then cannot read a keyring
-      # token, so it is asserted on the built package, not on the config.
-      - name: The .deb depends on libsecret-tools
+      # dependency). A package without it installs cleanly and then cannot read a
+      # keyring token, so it is asserted on the built packages, not on the config.
+      - name: The .deb and .rpm depend on secret-tool
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           depends="$(dpkg-deb -f staging/*.deb Depends)"
-          echo "Depends: $depends"
+          echo "deb Depends: $depends"
           grep -qw libsecret-tools <<<"$depends" || { echo "::error::the .deb does not depend on libsecret-tools"; exit 1; }
+          # `rpm` is on both 22.04 images today; installed if a future image drops it.
+          command -v rpm >/dev/null || { sudo apt-get update && sudo apt-get install -y rpm; }
+          requires="$(rpm -qpR staging/*.rpm)"
+          echo "rpm Requires:"
+          echo "$requires"
+          grep -qxF /usr/bin/secret-tool <<<"$requires" || { echo "::error::the .rpm does not require /usr/bin/secret-tool"; exit 1; }
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -368,26 +392,33 @@ jobs:
       # ⛔ THE ASSET SET IS THE THING BEING DESIGNED OUT, SO IT IS ASSERTED BY NAME.
       # A count is not enough: a leg that built the wrong architecture, or a tree
       # whose tauri.conf.json version drifted from the tag, both produce the right
-      # number of files with the wrong names. These four names are the ones README.md
-      # tells users to download.
-      - name: The four release assets are exactly what was expected
+      # number of files with the wrong names. These seven names are the ones README.md
+      # tells users to download, and each follows tauri-bundler's own scheme: .dmg
+      # `_universal`, .deb `_amd64`/`_arm64`, .AppImage `_amd64`/`_aarch64`, and .rpm
+      # `<name>-<version>-<release>.<arch>` with the default release `1`.
+      # The list is written once here and re-read by the check against GitHub below.
+      - name: The seven release assets are exactly what was expected
         run: |
           set -euo pipefail
-          expected="$(printf '%s\n' \
-            "bridgewatch_${VERSION}_aarch64.dmg" \
-            "bridgewatch_${VERSION}_amd64.AppImage" \
+          printf '%s\n' \
+            "bridgewatch_${VERSION}_universal.dmg" \
             "bridgewatch_${VERSION}_amd64.deb" \
-            "bridgewatch_${VERSION}_x64.dmg" | sort)"
+            "bridgewatch_${VERSION}_arm64.deb" \
+            "bridgewatch_${VERSION}_amd64.AppImage" \
+            "bridgewatch_${VERSION}_aarch64.AppImage" \
+            "bridgewatch-${VERSION}-1.x86_64.rpm" \
+            "bridgewatch-${VERSION}-1.aarch64.rpm" | sort > "$RUNNER_TEMP/expected-assets.txt"
+          expected="$(cat "$RUNNER_TEMP/expected-assets.txt")"
           actual="$(cd assets && find . -type f -printf '%f\n' | sort)"
           if [ "$expected" != "$actual" ]; then
-            echo "::error::built assets do not match the four names a release must carry"
+            echo "::error::built assets do not match the seven names a release must carry"
             diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
             exit 1
           fi
           printf '%s\n' "$actual"
 
       # Signed provenance over the bytes a user downloads, verifiable with:
-      #   gh attestation verify bridgewatch_0.1.0_amd64.deb --repo distronode-corporation/bridgewatch
+      #   gh attestation verify bridgewatch_1.0.0_amd64.deb --repo distronode-corporation/bridgewatch
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -447,14 +478,11 @@ jobs:
       # The same assertion again, this time against what GitHub actually stored. The
       # check above proves the files existed on this runner; only this one proves the
       # upload of each of them succeeded.
-      - name: GitHub holds all four assets
+      - name: GitHub holds all seven assets
         run: |
           set -euo pipefail
-          expected="$(printf '%s\n' \
-            "bridgewatch_${VERSION}_aarch64.dmg" \
-            "bridgewatch_${VERSION}_amd64.AppImage" \
-            "bridgewatch_${VERSION}_amd64.deb" \
-            "bridgewatch_${VERSION}_x64.dmg" | sort)"
+          expected="$(cat "$RUNNER_TEMP/expected-assets.txt")"
+          [ -n "$expected" ] || { echo "::error::the expected asset list is empty"; exit 1; }
           actual="$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)"
           if [ "$expected" != "$actual" ]; then
             echo "::error::the draft release does not hold the expected assets; leaving it as a draft"

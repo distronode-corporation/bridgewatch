@@ -865,7 +865,7 @@ fn a_marker_in_two_children_resolves_to_the_one_that_ran_first() {
         },
     ];
 
-    let outcome = deploy::outcome(&scopes, &rules, false);
+    let outcome = deploy::outcome(&scopes, &rules, false, None);
     let marker = outcome.marker().expect("something deployed");
     assert_eq!(marker.id, 20, "07:00 ran before 08:00");
     assert_eq!(marker.pipeline_id, 2);
@@ -966,7 +966,7 @@ fn a_failure_that_never_started_is_in_the_marker_s_scope_not_after_it() {
         jobs: &jobs,
     }];
 
-    let outcome = deploy::outcome(&scopes, &rules, false);
+    let outcome = deploy::outcome(&scopes, &rules, false, None);
     let marker = outcome.marker().expect("it deployed");
     assert!(
         deploy::post_deploy_failures(&scopes, &rules, marker).is_empty(),
@@ -1021,4 +1021,318 @@ async fn a_selection_with_no_primary_watch_is_answered_from_all_of_it() {
         "unknown"
     );
     assert_eq!(Snapshot::icon_from_selection(&[]).as_str(), "unknown");
+}
+
+// ---------------------------------------------------------------------------
+// "Deployed" only once no configured marker can still move
+// ---------------------------------------------------------------------------
+
+/// ⛔ A passed marker is not "deployed" while another configured marker is
+/// still queued. Recorded on a real push: `deploy:marketing` finished about
+/// 30 s in, `deploy:origins` sat `created` behind the website chain, and the
+/// tray drew the filled check (and fired `deployed`) twenty minutes before the
+/// fleet had the new code, because the first configured pattern with a
+/// success won without asking whether any other marker was still coming.
+#[test]
+fn a_passed_marker_does_not_read_live_while_another_configured_marker_is_still_queued() {
+    use bridgewatch_core::verdict::deploy::{self, JobScope};
+
+    let rules = rules_for(r#"deploy_markers = ["deploy:origins", "deploy:marketing"]"#);
+    let jobs = vec![
+        job(
+            10,
+            "deploy:marketing",
+            "success",
+            Some("2026-09-17T07:00:00Z"),
+        ),
+        job(11, "deploy:origins", "created", None),
+    ];
+    let scopes = [JobScope {
+        pipeline_id: 2,
+        pipeline_live: true,
+        jobs: &jobs,
+    }];
+
+    let outcome = deploy::outcome(&scopes, &rules, false, None);
+    assert_eq!(
+        outcome,
+        deploy::DeployOutcome::InProgress {
+            marker: "deploy:origins".into()
+        },
+        "the marker still to run is the one being waited on"
+    );
+}
+
+/// ⛔ The hold is about a marker that can still MOVE, and a job left `created`
+/// inside a pipeline that has settled cannot. GitLab does leave them: a job
+/// whose `needs:` names an optional manual job nobody pressed sits `created`
+/// for good. Holding on it would keep a finished pipeline from ever reading
+/// "deployed".
+#[test]
+fn a_marker_left_created_in_a_settled_pipeline_does_not_hold_back_a_passed_one() {
+    use bridgewatch_core::verdict::deploy::{self, JobScope};
+
+    let rules = rules_for(r#"deploy_markers = ["deploy:origins", "deploy:marketing"]"#);
+    let marketing = vec![job(
+        10,
+        "deploy:marketing",
+        "success",
+        Some("2026-09-17T07:00:00Z"),
+    )];
+    let origins = vec![job(20, "deploy:origins", "created", None)];
+    let scopes = |origins_live: bool| {
+        [
+            JobScope {
+                pipeline_id: 2,
+                pipeline_live: false,
+                jobs: &marketing,
+            },
+            JobScope {
+                pipeline_id: 3,
+                pipeline_live: origins_live,
+                jobs: &origins,
+            },
+        ]
+    };
+
+    let settled = deploy::outcome(&scopes(false), &rules, false, None);
+    assert_eq!(
+        settled.marker().map(|m| m.id),
+        Some(10),
+        "its pipeline finished, so the created job will never run: {settled:?}"
+    );
+
+    assert_eq!(
+        deploy::outcome(&scopes(true), &rules, false, None),
+        deploy::DeployOutcome::InProgress {
+            marker: "deploy:origins".into()
+        },
+        "while its pipeline is live, it is still coming"
+    );
+}
+
+/// The same hold for a marker whose status this build cannot read, inside a
+/// pipeline that is still live: it may yet succeed or fail, so the one that
+/// already passed cannot be the answer yet.
+#[test]
+fn a_passed_marker_does_not_read_live_beside_an_unreadable_marker_in_a_live_pipeline() {
+    use bridgewatch_core::verdict::deploy::{self, JobScope};
+
+    let rules = rules_for(r#"deploy_markers = ["deploy:origins", "deploy:marketing"]"#);
+    let jobs = vec![
+        job(
+            10,
+            "deploy:marketing",
+            "success",
+            Some("2026-09-17T07:00:00Z"),
+        ),
+        job(11, "deploy:origins", "some_future_status", None),
+    ];
+    let live = [JobScope {
+        pipeline_id: 2,
+        pipeline_live: true,
+        jobs: &jobs,
+    }];
+    assert_eq!(
+        deploy::outcome(&live, &rules, false, None).word(),
+        "in_progress"
+    );
+
+    // Settled, the unreadable one cannot move any more, and the success stands.
+    let settled = [JobScope {
+        pipeline_id: 2,
+        pipeline_live: false,
+        jobs: &jobs,
+    }];
+    assert_eq!(
+        deploy::outcome(&settled, &rules, false, None)
+            .marker()
+            .map(|m| m.name.as_str()),
+        Some("deploy:marketing")
+    );
+}
+
+/// A live bridge whose child has not been read yet can hold a marker nobody
+/// has seen, and the outcome waits for it. The caller names the bridge.
+#[test]
+fn a_passed_marker_does_not_read_live_while_a_bridge_that_could_carry_one_is_unread() {
+    use bridgewatch_core::verdict::deploy::{self, JobScope};
+
+    let rules = rules_for(r#"deploy_markers = ["deploy:origins", "deploy:marketing"]"#);
+    let jobs = vec![job(
+        10,
+        "deploy:marketing",
+        "success",
+        Some("2026-09-17T07:00:00Z"),
+    )];
+    let scopes = [JobScope {
+        pipeline_id: 2,
+        pipeline_live: false,
+        jobs: &jobs,
+    }];
+
+    assert_eq!(
+        deploy::outcome(&scopes, &rules, false, Some("trigger:website")),
+        deploy::DeployOutcome::InProgress {
+            marker: "trigger:website".into()
+        }
+    );
+    assert!(
+        deploy::outcome(&scopes, &rules, false, None).is_live(),
+        "and without one, a lone success is the deploy"
+    );
+}
+
+/// Once nothing can move, WHICH marker is reported keeps the old rule: config
+/// order first, then the earliest start. A gate or a skipped marker cannot
+/// move without a human, so it does not hold the answer back.
+#[test]
+fn once_every_marker_is_settled_config_order_still_picks_the_reported_one() {
+    use bridgewatch_core::verdict::deploy::{self, JobScope};
+
+    let rules = rules_for(r#"deploy_markers = ["deploy:origins", "deploy:marketing"]"#);
+    let jobs = vec![
+        job(
+            10,
+            "deploy:marketing",
+            "success",
+            Some("2026-09-17T07:00:00Z"),
+        ),
+        job(
+            11,
+            "deploy:origins",
+            "success",
+            Some("2026-09-17T08:00:00Z"),
+        ),
+        job(12, "deploy:origins", "manual", None),
+        job(13, "deploy:marketing", "skipped", None),
+    ];
+    let scopes = [JobScope {
+        pipeline_id: 2,
+        pipeline_live: true,
+        jobs: &jobs,
+    }];
+    let outcome = deploy::outcome(&scopes, &rules, false, None);
+    assert_eq!(
+        outcome.marker().map(|m| m.id),
+        Some(11),
+        "deploy:origins is listed first, so it wins although it ran later"
+    );
+}
+
+/// A pipeline detail built from JSON, for driving `evaluate_pipeline` directly
+/// with a shape no recording holds.
+fn detail_from(value: serde_json::Value) -> bridgewatch_core::model::PipelineDetail {
+    serde_json::from_value(value).expect("a pipeline detail")
+}
+
+fn bridge_json(id: u64, name: &str, status: &str, child: Option<(u64, &str)>) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "name": name,
+        "status": status,
+        "downstream_pipeline": child.map(|(cid, cstatus)| serde_json::json!({
+            "id": cid, "status": cstatus
+        })),
+    })
+}
+
+fn job_json(id: u64, name: &str, status: &str, started_at: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "name": name, "status": status, "started_at": started_at
+    })
+}
+
+/// End to end through the icon rules: a marketing child that already shipped
+/// and a website trigger that has not created its child yet. The website child
+/// is where `deploy:origins` will be, and nothing has read it.
+#[test]
+fn a_shipped_marker_beside_an_unborn_marker_lane_reads_running_not_deployed() {
+    use bridgewatch_core::verdict::{DetailSource, evaluate_pipeline};
+
+    let config = support::config_with(&[]);
+    let watch = &config.watches[0];
+    let rules = bridgewatch_core::config::WatchRules::compile(watch).unwrap();
+    let detail = detail_from(serde_json::json!({
+        "pipeline": { "id": 1, "ref": "main", "status": "running", "sha": "abc" },
+        "jobs": [],
+        "bridges": [
+            bridge_json(100, "trigger:marketing", "success", Some((2, "success"))),
+            bridge_json(101, "trigger:website", "created", None),
+        ],
+        "child_jobs": {
+            "2": [job_json(20, "deploy:marketing", "success", Some("2026-09-17T07:00:00Z"))]
+        }
+    }));
+
+    let (view, _) = evaluate_pipeline(&detail, DetailSource::Fetched, watch, &rules, None);
+    assert_eq!(view.deploy, "in_progress");
+    assert_eq!(view.state.as_str(), "running");
+    assert!(view.failures.is_empty(), "{:?}", view.failures);
+}
+
+// ---------------------------------------------------------------------------
+// A trigger job that has not created its child yet is not dead
+// ---------------------------------------------------------------------------
+
+/// ⛔ GitLab creates the trigger job first and its child a few seconds later.
+/// In that window `downstream_pipeline` is null, and reading "no child" as
+/// `dead` whatever the trigger's own status said turned every push red for
+/// its first poll and fired `blocking_failure` for a pipeline that was fine.
+#[test]
+fn a_trigger_job_that_has_not_created_its_child_yet_reads_by_its_own_status() {
+    use bridgewatch_core::verdict::bridge;
+
+    let rules = rules_for("");
+    let cases = [
+        ("created", "running"),
+        ("pending", "running"),
+        ("running", "running"),
+        ("waiting_for_resource", "running"),
+        ("manual", "awaiting_gate"),
+        ("skipped", "skipped"),
+        ("canceled", "canceled"),
+        // Settled with no child is the parse failure the verdict exists for,
+        // and its own status is frequently `success`.
+        ("success", "dead"),
+        ("failed", "dead"),
+        ("some_future_status", "dead"),
+    ];
+    for (status, want) in cases {
+        let b: bridgewatch_core::model::Bridge =
+            serde_json::from_value(bridge_json(1, "trigger:website", status, None)).unwrap();
+        let got = bridge::verdict(&b, None, &[], &rules);
+        assert_eq!(got.word(), want, "trigger status {status}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A skipped pipeline carries no news
+// ---------------------------------------------------------------------------
+
+/// ⛔ A push that touches only files no job's rules match makes GitLab create
+/// a `skipped` pipeline. It is settled, so it took the one `show.settled` slot,
+/// the real pipeline before it was dropped, and the icon (newest id) went grey
+/// and fired `finished: canceled` for a push that changed nothing.
+#[tokio::test]
+async fn a_skipped_pipeline_does_not_take_the_icon_from_the_real_one_before_it() {
+    let dir = support::fixtures_dir().join("synth-skipped-newest");
+    let snapshot = snapshot_for(&dir, &[]).await;
+    let watch = snapshot
+        .watches
+        .iter()
+        .find(|w| w.id == "main-push")
+        .unwrap();
+
+    let ids: Vec<u64> = watch.rows.iter().map(|r| r.id).collect();
+    assert_eq!(ids, [2859138213], "the skipped row is not listed");
+    assert_eq!(
+        watch.icon_state.map(|s| s.as_str().to_string()),
+        Some("succeeded_no_deploy".into()),
+        "the icon is the real pipeline's"
+    );
+    assert_eq!(
+        watch.row_state().map(|s| s.as_str()),
+        Some("succeeded_no_deploy")
+    );
 }

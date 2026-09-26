@@ -704,3 +704,112 @@ fn a_ledger_save_round_trips_and_leaves_no_temporary_file() {
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
+
+// ---------------------------------------------------------------------------
+// One push, one "deployed"
+// ---------------------------------------------------------------------------
+
+fn view_of(
+    watch: &bridgewatch_core::config::Watch,
+    row: bridgewatch_core::verdict::PipelineView,
+) -> WatchView {
+    WatchView {
+        id: watch.id.clone(),
+        role: watch.role,
+        icon_state: None,
+        rows: vec![row],
+        error: None,
+        jobs: Default::default(),
+        provider: Default::default(),
+    }
+}
+
+/// ⛔ `deployed` is about the PIPELINE, not about which marker happened to be
+/// reported. Keyed on the marker's name, a push whose winning marker changed
+/// between ticks (the config-order pick settling, or a second child's marker
+/// starting earlier) announced the same deploy a second time.
+#[test]
+fn a_change_of_winning_marker_does_not_announce_the_same_deploy_twice() {
+    let mut watch = support::config_with(&[]).watches.remove(0);
+    watch.notify.finished = false;
+    let mut ledger = NotifyLedger::default();
+    ledger.baseline(&watch.id);
+
+    let first = row_view("deployed", "live");
+    let said = notifications_for(&watch, &view_of(&watch, first.clone()), &mut ledger);
+    assert_eq!(
+        said.iter().map(|n| n.kind).collect::<Vec<_>>(),
+        [NotifyKind::Deployed]
+    );
+
+    let mut second = first;
+    second.deploy_marker.as_mut().unwrap().name = "deploy:marketing".into();
+    let again = notifications_for(&watch, &view_of(&watch, second), &mut ledger);
+    assert!(
+        again.is_empty(),
+        "the same pipeline deployed once: {:?}",
+        again.iter().map(|n| &n.key).collect::<Vec<_>>()
+    );
+}
+
+/// A ledger written before the key changed holds `"<pid>|deployed|<marker>"`.
+/// Upgrading must not read that as "never announced" and say it again.
+#[test]
+fn a_ledger_from_before_the_deployed_key_changed_is_not_announced_again() {
+    let mut watch = support::config_with(&[]).watches.remove(0);
+    watch.notify.finished = false;
+    let mut ledger = NotifyLedger::default();
+    ledger.baseline(&watch.id);
+    ledger.record("2856963900|deployed|deploy:origins".into());
+
+    let mut row = row_view("deployed", "live");
+    row.deploy_marker.as_mut().unwrap().name = "deploy:marketing".into();
+    let said = notifications_for(&watch, &view_of(&watch, row), &mut ledger);
+    assert!(
+        said.is_empty(),
+        "announced under the old key already: {:?}",
+        said.iter().map(|n| &n.key).collect::<Vec<_>>()
+    );
+
+    // A different pipeline is not covered by it: the prefix is the whole id.
+    let mut other = row_view("deployed", "live");
+    other.id = 285696390;
+    let said = notifications_for(&watch, &view_of(&watch, other), &mut ledger);
+    assert_eq!(said.len(), 1, "285696390 is not 2856963900");
+}
+
+/// ⛔ A trigger job that has not created its child yet is not a blocking
+/// failure. Reading its missing child as `dead` fired `blocking_failure`
+/// seconds after every push, for a pipeline that was fine.
+#[test]
+fn a_trigger_job_that_has_not_created_its_child_yet_raises_no_blocking_failure() {
+    use bridgewatch_core::verdict::{DetailSource, evaluate_pipeline};
+
+    let watch = support::config_with(&[]).watches.remove(0);
+    let rules = bridgewatch_core::config::WatchRules::compile(&watch).unwrap();
+    for status in ["created", "pending", "manual"] {
+        let detail: bridgewatch_core::model::PipelineDetail =
+            serde_json::from_value(serde_json::json!({
+                "pipeline": { "id": 7, "ref": "main", "status": "running", "sha": "abc" },
+                "jobs": [],
+                "bridges": [{
+                    "id": 70, "name": "trigger:website", "status": status,
+                    "downstream_pipeline": null
+                }],
+                "child_jobs": {}
+            }))
+            .unwrap();
+        let (row, _) = evaluate_pipeline(&detail, DetailSource::Fetched, &watch, &rules, None);
+        assert!(row.failures.is_empty(), "{status}: {:?}", row.failures);
+        assert_ne!(row.state.as_str(), "failed", "{status}");
+
+        let mut ledger = NotifyLedger::default();
+        ledger.baseline(&watch.id);
+        let said = notifications_for(&watch, &view_of(&watch, row), &mut ledger);
+        assert!(
+            !said.iter().any(|n| n.kind == NotifyKind::BlockingFailure),
+            "{status}: {:?}",
+            said.iter().map(|n| &n.key).collect::<Vec<_>>()
+        );
+    }
+}

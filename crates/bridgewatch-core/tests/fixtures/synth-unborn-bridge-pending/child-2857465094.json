@@ -1,0 +1,118 @@
+[
+  {
+    "allow_failure": false,
+    "created_at": "2026-09-17T09:23:31.778Z",
+    "finished_at": "2026-09-17T09:24:27.308Z",
+    "id": 16558670145,
+    "name": "verify:android_sast_coverage",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.633Z",
+      "id": 2857465094,
+      "iid": 13074,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "failed",
+      "updated_at": "2026-09-17T09:36:42.496Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465094"
+    },
+    "stage": "security",
+    "started_at": "2026-09-17T09:24:15.557Z",
+    "status": "success",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670145"
+  },
+  {
+    "allow_failure": true,
+    "created_at": "2026-09-17T09:23:31.778Z",
+    "finished_at": "2026-09-17T09:24:13.833Z",
+    "id": 16558670144,
+    "name": "semgrep-sast",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.633Z",
+      "id": 2857465094,
+      "iid": 13074,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "failed",
+      "updated_at": "2026-09-17T09:36:42.496Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465094"
+    },
+    "stage": "security",
+    "started_at": "2026-09-17T09:23:32.666Z",
+    "status": "success",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670144"
+  },
+  {
+    "allow_failure": true,
+    "created_at": "2026-09-17T09:23:31.778Z",
+    "finished_at": null,
+    "id": 16558670143,
+    "name": "android:smoke",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.633Z",
+      "id": 2857465094,
+      "iid": 13074,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "failed",
+      "updated_at": "2026-09-17T09:36:42.496Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465094"
+    },
+    "stage": "verify",
+    "started_at": null,
+    "status": "skipped",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670143"
+  },
+  {
+    "allow_failure": true,
+    "created_at": "2026-09-17T09:23:31.778Z",
+    "finished_at": null,
+    "id": 16558670142,
+    "name": "publish:android_bundle",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.633Z",
+      "id": 2857465094,
+      "iid": 13074,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "failed",
+      "updated_at": "2026-09-17T09:36:42.496Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465094"
+    },
+    "stage": "verify",
+    "started_at": null,
+    "status": "manual",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670142"
+  },
+  {
+    "allow_failure": false,
+    "created_at": "2026-09-17T09:23:31.778Z",
+    "failure_reason": "script_failure",
+    "finished_at": "2026-09-17T09:36:40.890Z",
+    "id": 16558670141,
+    "name": "verify:android",
+    "pipeline": {
+      "created_at": "2026-09-17T09:23:31.633Z",
+      "id": 2857465094,
+      "iid": 13074,
+      "project_id": 82468124,
+      "ref": "main",
+      "sha": "ca41ab285c888b276fb4fc798de9fd39f84ace41",
+      "source": "parent_pipeline",
+      "status": "failed",
+      "updated_at": "2026-09-17T09:36:42.496Z",
+      "web_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465094"
+    },
+    "stage": "verify",
+    "started_at": "2026-09-17T09:23:32.534Z",
+    "status": "failed",
+    "web_url": "https://gitlab.com/acme-corp/monorepo/-/jobs/16558670141"
+  }
+]

@@ -1505,19 +1505,36 @@ impl WatchRules {
 
     /// Should this bridge be walked into, given its name and current status?
     pub fn should_dive(&self, bridge_name: &str, bridge_status: &Status) -> bool {
-        let Some(dive) = &self.dive else {
-            return false;
-        };
-        if !dive.is_match(bridge_name) {
-            return false;
-        }
-        if self.dive_exclude.iter().any(|g| g.is_match(bridge_name)) {
+        if !self.dives_by_name(bridge_name) {
             return false;
         }
         match &self.dive_only_when {
             Some(want) => want == bridge_status,
             None => true,
         }
+    }
+
+    /// Do `dive.bridges` and `dive.exclude` select this bridge name?
+    fn dives_by_name(&self, bridge_name: &str) -> bool {
+        let Some(dive) = &self.dive else {
+            return false;
+        };
+        dive.is_match(bridge_name) && !self.dive_exclude.iter().any(|g| g.is_match(bridge_name))
+    }
+
+    /// Could a deploy marker in this bridge's child ever be read?
+    ///
+    /// Only when the dive rules walk into it once it has settled green: a
+    /// marker is collected from dived children alone. `only_when = "failed"`
+    /// (the shipped example's secondary watch) walks into a child only after it
+    /// broke, when a success in it no longer matters, so such a bridge carries
+    /// nothing worth waiting for.
+    pub fn may_carry_markers(&self, bridge_name: &str) -> bool {
+        self.dives_by_name(bridge_name)
+            && self
+                .dive_only_when
+                .as_ref()
+                .is_none_or(|want| want.is_success())
     }
 
     /// Does a pipeline's source pass the watch's `sources` filter?

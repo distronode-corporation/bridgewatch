@@ -459,7 +459,18 @@ pub fn evaluate_pipeline(
     }
 
     let any_dead_bridge = all_bridges.iter().any(|b| b.verdict == "dead");
-    let outcome = deploy::outcome(&scopes, rules, any_dead_bridge);
+    // A live bridge whose child has not been read cannot have contributed a
+    // marker yet: its child does not exist yet, or fetching it failed. When the
+    // dive rules would walk into it, a marker may well be in there, and a
+    // success elsewhere is not "deployed" until it has been looked at. A bridge
+    // the rules never walk into is left out, because nothing it holds could
+    // ever be read, and waiting on it would hold every deploy back for a lane
+    // the user said not to look at.
+    let unread_live_carrier = all_bridges
+        .iter()
+        .find(|b| b.verdict == "running" && !b.dived && rules.may_carry_markers(&b.name))
+        .map(|b| b.name.as_str());
+    let outcome = deploy::outcome(&scopes, rules, any_dead_bridge, unread_live_carrier);
 
     let post_deploy_failures = outcome
         .marker()

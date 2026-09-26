@@ -62,9 +62,11 @@ body:
     attributes:
       label: How did you install it?
       options:
-        - macOS .dmg (Apple Silicon)
-        - macOS .dmg (Intel)
+        - macOS .dmg (universal)
+        - macOS .dmg (Apple Silicon only, 1.0.0)
+        - macOS .dmg (Intel only, 1.0.0)
         - Linux .deb
+        - Linux .rpm
         - Linux .AppImage
         - Built from source
     validations:

@@ -860,6 +860,27 @@ fn words(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Words that, leading a job's name or its stage, mean the job CHECKS
+/// something rather than ships it.
+///
+/// ⛔ Without this the wizard offered `verify:origins_deploy_script` (a lint of
+/// the deploy script, in the `verify` stage) as a deploy marker on a real
+/// project, because "deploy" is one of its words. Accepted, that marker reads
+/// every push as deployed the moment the lint passes, minutes before anything
+/// shipped. Only the LEADING word counts: `deploy:smoke_check` is still a
+/// deploy, `smoke:deploy` is not.
+const CHECK_WORDS: &[&str] = &[
+    "verify",
+    "test",
+    "tests",
+    "lint",
+    "check",
+    "checks",
+    "validate",
+    "validation",
+    "smoke",
+];
+
 /// Score one job name and stage. Pure, so the ranking is testable on its own.
 fn score(name: &str, stage: Option<&str>, succeeded: bool) -> (u32, Vec<String>) {
     let mut total = 0;
@@ -867,6 +888,14 @@ fn score(name: &str, stage: Option<&str>, succeeded: bool) -> (u32, Vec<String>)
     let name_words = words(name);
     let stage_words = stage.map(words).unwrap_or_default();
     let has = |ws: &[String], keys: &[&str]| ws.iter().any(|w| keys.contains(&w.as_str()));
+    let leads = |ws: &[String]| {
+        ws.first()
+            .is_some_and(|w| CHECK_WORDS.contains(&w.as_str()))
+    };
+
+    if leads(&name_words) || leads(&stage_words) {
+        return (0, Vec::new());
+    }
 
     const DEPLOY: &[&str] = &["deploy", "deployment", "deploys", "rollout"];
     const RELEASE: &[&str] = &["release", "publish", "ship", "promote"];

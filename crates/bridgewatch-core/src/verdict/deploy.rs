@@ -35,9 +35,11 @@ pub enum DeployOutcome {
     /// No marker job exists anywhere that was looked. Either this pipeline does
     /// not deploy, or the lane that would have deployed never ran.
     Absent,
-    /// A marker is running, or is queued behind a live pipeline.
+    /// A marker is running, or is queued behind a live pipeline, or a lane that
+    /// could carry one has not been read yet.
     InProgress {
-        /// The marker being waited on.
+        /// The marker being waited on, or the trigger job whose unread child
+        /// could hold one.
         marker: String,
     },
     /// A marker succeeded. This is the only outcome that means "it is out".
@@ -113,10 +115,17 @@ pub struct JobScope<'a> {
 /// `any_dead_bridge` distinguishes "this pipeline does not deploy" from "the
 /// lane that deploys was never created", which look identical from the job list
 /// alone and mean opposite things.
+///
+/// `unread_live_carrier` names a bridge that is still live, that the dive rules
+/// would walk into, and whose child's jobs have not been read: its child has
+/// not been created yet, or the request for it failed. A marker in there is one
+/// nobody has seen, so it holds a success elsewhere back exactly as a marker
+/// that is seen and still queued does.
 pub fn outcome(
     scopes: &[JobScope<'_>],
     rules: &WatchRules,
     any_dead_bridge: bool,
+    unread_live_carrier: Option<&str>,
 ) -> DeployOutcome {
     if rules.deploy_markers.is_empty() {
         return DeployOutcome::Absent;
@@ -175,6 +184,29 @@ pub fn outcome(
             (a.0.started_at.as_deref(), a.0.id).cmp(&(b.0.started_at.as_deref(), b.0.id))
         });
         if let Some((marker, _, _)) = candidates.first() {
+            // ⛔ "It is out" only once no configured marker can still move.
+            // First-success-wins used to return here unconditionally, so on a
+            // real push with `["deploy:origins", "deploy:marketing"]` the
+            // marketing marker finished ~30 s in while `deploy:origins` sat
+            // `created` behind the website chain, and the tray drew the filled
+            // check and fired `deployed` twenty minutes before the fleet had the
+            // new code. Which marker is REPORTED is still decided above, by
+            // config order and then start time, once nothing is left to wait on.
+            // ⛔ Here a live-class marker holds the answer back only while
+            // its own pipeline is live. GitLab can leave a job `created` for
+            // good inside a pipeline that has SETTLED (a `needs:` on an
+            // optional manual job nobody pressed), and without this a finished
+            // pipeline with one such marker would never read "deployed".
+            if let Some(waiting) = still_moving(&found, scopes, true) {
+                return DeployOutcome::InProgress {
+                    marker: waiting.to_string(),
+                };
+            }
+            if let Some(bridge) = unread_live_carrier {
+                return DeployOutcome::InProgress {
+                    marker: bridge.to_string(),
+                };
+            }
             return DeployOutcome::Live {
                 marker: Box::new((*marker).clone()),
             };
@@ -182,25 +214,14 @@ pub fn outcome(
     }
 
     // Nothing succeeded. Is one on its way?
-    if let Some((marker, _, _)) = found.iter().find(|(_, c, _)| c.is_live()) {
+    // Unguarded on purpose: with nothing succeeded, a live-class marker is
+    // still the best answer there is, and every arm below it reads failed,
+    // cancelled or skipped markers only, so a stray `created` one would fall
+    // through to `unknown` instead. That is a separate question from the hold
+    // above and is left as it was.
+    if let Some(waiting) = still_moving(&found, scopes, false) {
         return DeployOutcome::InProgress {
-            marker: marker.name.clone(),
-        };
-    }
-    // ⛔ Only a marker whose own class is unreadable may be called "in progress"
-    // because its pipeline is still live. This arm used to accept any class,
-    // which meant a marker that had already FAILED read as `in_progress` for as
-    // long as the longest unrelated job in its pipeline kept running — so the
-    // icon said "running", `failures` was empty, and the `blocking_failure`
-    // notification was delayed by a job that had nothing to do with the deploy.
-    // README rule 5 says a failed marker outranks everything; this is the line
-    // that makes it true.
-    if let Some((marker, _, _)) = found
-        .iter()
-        .find(|(_, c, i)| *c == JobClass::Unknown && scopes[*i].pipeline_live)
-    {
-        return DeployOutcome::InProgress {
-            marker: marker.name.clone(),
+            marker: waiting.to_string(),
         };
     }
 
@@ -239,6 +260,40 @@ pub fn outcome(
     // A marker that is neither live, successful, failed nor cancelled is one
     // bridgewatch does not understand. Say so rather than guessing "deployed".
     DeployOutcome::Unknown
+}
+
+/// The first marker that can still change: one that is live, or one whose
+/// class this build cannot read inside a pipeline that is still live.
+///
+/// ⛔ Only a marker whose own class is unreadable may be called "in progress"
+/// because its pipeline is still live. That arm used to accept any class,
+/// which meant a marker that had already FAILED read as `in_progress` for as
+/// long as the longest unrelated job in its pipeline kept running — so the
+/// icon said "running", `failures` was empty, and the `blocking_failure`
+/// notification was delayed by a job that had nothing to do with the deploy.
+/// README rule 5 says a failed marker outranks everything; this is the line
+/// that makes it true.
+///
+/// A gate is not moving: it will sit there until a human presses it, and
+/// holding "deployed" back for it would never let a lane with an optional
+/// manual marker read as out.
+///
+/// `live_scope_only` makes a live-class marker count only when its own
+/// pipeline is live too; see the caller holding back a success.
+fn still_moving<'a>(
+    found: &'a [(MarkerJob, JobClass, usize)],
+    scopes: &[JobScope<'_>],
+    live_scope_only: bool,
+) -> Option<&'a str> {
+    found
+        .iter()
+        .find(|(_, c, i)| c.is_live() && (!live_scope_only || scopes[*i].pipeline_live))
+        .or_else(|| {
+            found
+                .iter()
+                .find(|(_, c, i)| *c == JobClass::Unknown && scopes[*i].pipeline_live)
+        })
+        .map(|(m, _, _)| m.name.as_str())
 }
 
 /// Blocking failures that started **after** the winning marker did.

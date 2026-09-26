@@ -593,6 +593,31 @@ fn deploy_like_names_and_stages_rank_first_and_the_rest_are_dropped() {
     assert!(ranked[0].reasons.iter().any(|r| r.contains("production")));
 }
 
+/// ⛔ A job that CHECKS a deploy is not a deploy. The wizard offered
+/// `verify:origins_deploy_script` (a lint of the deploy script, in the verify
+/// stage) as a marker on a real project, because "deploy" is one of its words;
+/// accepted, it would have read every push as deployed the moment the lint
+/// passed.
+#[test]
+fn a_verify_or_test_job_is_never_offered_as_a_deploy_marker_whatever_its_name_says() {
+    let jobs = vec![
+        job("verify:origins_deploy_script", "verify", "success"),
+        job("test:deploy_helpers", "build", "success"),
+        job("lint-deploy-manifests", "build", "success"),
+        job("smoke_deploy", "build", "success"),
+        job("check:rollout", "build", "success"),
+        job("deploy:dry_run", "validate", "success"),
+        job("deploy:config", "tests", "success"),
+        job("deploy:origins", "deploy", "success"),
+    ];
+    let ranked = wizard::rank_deploy_markers(&[MarkerScope {
+        label: "trigger:website",
+        jobs: &jobs,
+    }]);
+    let names: Vec<&str> = ranked.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["deploy:origins"]);
+}
+
 #[test]
 fn a_name_in_two_pipelines_is_offered_once_at_its_best() {
     let a = vec![job("deploy", "test", "failed")];

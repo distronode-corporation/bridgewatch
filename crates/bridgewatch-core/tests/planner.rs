@@ -660,3 +660,54 @@ fn per_minute_rounds_up() {
     assert_eq!(per_minute(7, 1), 9);
     assert_eq!(per_minute(0, 1), 60, "a zero interval is treated as 1 s");
 }
+
+/// ⛔ A `skipped` pipeline carries no news and must not take a row slot.
+///
+/// GitLab creates one for a push whose changes match no job's rules. It is
+/// settled, so it used the one `show.settled` slot, the real pipeline before it
+/// was dropped from the list, and the icon (newest id) turned `canceled` for a
+/// push that changed nothing.
+#[test]
+fn a_skipped_pipeline_is_passed_over_and_does_not_use_the_settled_budget() {
+    use bridgewatch_core::poll::select_rows;
+
+    let watch = watch_with(
+        r#"ref = "main"
+            show = { max_rows = 5, settled = 1 }"#,
+    );
+    let rules = WatchRules::compile(&watch).unwrap();
+    let ids = |rows: &[Pipeline]| {
+        select_rows(rows, &watch, &rules)
+            .iter()
+            .map(|r| r.id)
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        ids(&[row(8, "skipped", "t8"), row(7, "success", "t7")]),
+        [7]
+    );
+    assert_eq!(
+        ids(&[
+            row(9, "skipped", "t9"),
+            row(8, "running", "t8"),
+            row(7, "skipped", "t7"),
+            row(6, "failed", "t6"),
+        ]),
+        [8, 6],
+        "live rows are kept as ever, and the settled slot goes to real work"
+    );
+
+    // A pipeline somebody CANCELLED is information, and keeps its slot.
+    assert_eq!(
+        ids(&[row(8, "canceled", "t8"), row(7, "success", "t7")]),
+        [8]
+    );
+
+    // A primary watch with nothing but skipped pipelines still keeps its
+    // newest, so the icon has something to be computed from.
+    assert_eq!(
+        ids(&[row(8, "skipped", "t8"), row(7, "skipped", "t7")]),
+        [8]
+    );
+}

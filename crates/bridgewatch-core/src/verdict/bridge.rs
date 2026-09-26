@@ -16,7 +16,8 @@ use super::job::{classify, classify_parts};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "verdict", rename_all = "snake_case")]
 pub enum BridgeVerdict {
-    /// The trigger job exists but no child pipeline was ever created. Usually a
+    /// The trigger job has settled and no child pipeline was ever created. A
+    /// trigger job still on its way to creating one is `running`. Usually a
     /// child `.gitlab-ci.yml` that failed to parse, or a `needs:` on a job the
     /// child lane does not have. Nothing downstream ran, and the parent may
     /// still read green.
@@ -172,10 +173,8 @@ fn raw_verdict(
     nested: &[(String, BridgeVerdict)],
     rules: &WatchRules,
 ) -> BridgeVerdict {
-    // A bridge with no downstream pipeline is dead whatever its own status says,
-    // and its own status is frequently `success`.
     let Some(downstream) = &bridge.downstream_pipeline else {
-        return BridgeVerdict::Dead;
+        return unborn(bridge);
     };
 
     let Some(jobs) = child_jobs else {
@@ -263,6 +262,29 @@ fn raw_verdict(
         return BridgeVerdict::AwaitingGate { jobs };
     }
     from_status_only(&bridge.status, downstream)
+}
+
+/// The verdict for a trigger job that has no child pipeline.
+///
+/// ⛔ A SETTLED trigger job with no child is dead whatever its own status says,
+/// and its own status is frequently `success`: that is a child `.gitlab-ci.yml`
+/// that failed to parse. But GitLab creates the trigger job first and its child
+/// a few seconds later, and until 2026-09 "no child" read `dead` whatever the
+/// trigger's status was. So every push went red on its first poll, the deploy
+/// outcome went `dead`, and `blocking_failure` fired for a pipeline that was
+/// fine. The GitHub side already made this distinction: an expected workflow
+/// that is missing while its group is live is pending, not dead.
+fn unborn(bridge: &Bridge) -> BridgeVerdict {
+    match &bridge.status {
+        s if s.is_live() => BridgeVerdict::Running,
+        // A manual trigger job creates its child only once somebody presses it.
+        Status::Manual => BridgeVerdict::AwaitingGate {
+            jobs: vec![bridge.name.clone()],
+        },
+        Status::Skipped => BridgeVerdict::Skipped,
+        Status::Canceled => BridgeVerdict::Canceled,
+        _ => BridgeVerdict::Dead,
+    }
 }
 
 /// Derive a verdict from the trigger job's status alone, for a bridge that was

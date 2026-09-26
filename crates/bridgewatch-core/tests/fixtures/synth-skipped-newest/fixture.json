@@ -1,0 +1,5 @@
+{
+  "primary": 2859138300,
+  "project": 82468124,
+  "source": "SYNTHESISED from the real recording 9da437fd-parked-gate-stacked: its newer pipeline 2859138213 kept verbatim, plus a `skipped` pipeline 2859138300 above it with no jobs and no bridges, which is what GitLab creates for a push whose changes match no job's rules."
+}

@@ -159,6 +159,20 @@ impl NotifyLedger {
         self.seen.contains(key)
     }
 
+    /// Has any key starting with `prefix` been delivered?
+    ///
+    /// For keys whose format changed: `deployed` used to carry the marker's
+    /// name after the kind, and a ledger written then must still count.
+    pub fn contains_prefix(&self, prefix: &str) -> bool {
+        self.seen
+            .range::<str, _>((
+                std::ops::Bound::Included(prefix),
+                std::ops::Bound::Unbounded,
+            ))
+            .next()
+            .is_some_and(|k| k.starts_with(prefix))
+    }
+
     /// Record a key, trimming the oldest pipeline's keys when the ledger is
     /// full.
     ///
@@ -206,6 +220,36 @@ pub fn dedupe_key(pipeline_id: u64, kind: NotifyKind, jobs: &[String]) -> String
     format!("{pipeline_id}|{}|{}", kind.as_str(), sorted.join(","))
 }
 
+/// The key one event is recorded under.
+///
+/// ⛔ `deployed` is keyed on the pipeline alone. It used to carry the winning
+/// marker's name like every other kind, so when the reported marker changed
+/// between ticks (config order settling once a second marker passed, or a
+/// marker in another child that started earlier) the same push announced its
+/// deploy again. A pipeline deploys once; which job said so is in the body.
+/// `blocking_failure` and `finished` keep their names, because a new failure,
+/// or a different end state, IS news.
+fn event_key(pipeline_id: u64, kind: NotifyKind, jobs: &[String]) -> String {
+    match kind {
+        NotifyKind::Deployed => dedupe_key(pipeline_id, kind, &[]),
+        _ => dedupe_key(pipeline_id, kind, jobs),
+    }
+}
+
+/// Has this event been delivered already?
+///
+/// A `deployed` key is `"<pid>|deployed|"`, which is also the prefix of every
+/// key a ledger written before the change holds (`"<pid>|deployed|<marker>"`),
+/// so a prefix match honours both and upgrading does not re-announce every
+/// deploy still on screen. The trailing `|` keeps pipeline 12 from matching
+/// pipeline 123.
+fn already_said(ledger: &NotifyLedger, kind: NotifyKind, key: &str) -> bool {
+    match kind {
+        NotifyKind::Deployed => ledger.contains_prefix(key),
+        _ => ledger.contains(key),
+    }
+}
+
 /// Build the notifications one watch's rows imply, recording each in the ledger.
 ///
 /// Returns an empty list for a secondary watch, and for a watch that has not yet
@@ -242,8 +286,8 @@ pub fn notifications_for(
         let mut said_something = false;
 
         for (kind, jobs) in candidate_events(watch, row) {
-            let key = dedupe_key(row.id, kind, &jobs);
-            if ledger.contains(&key) {
+            let key = event_key(row.id, kind, &jobs);
+            if already_said(ledger, kind, &key) {
                 continue;
             }
             if baselining {

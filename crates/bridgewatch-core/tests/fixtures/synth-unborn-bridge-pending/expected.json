@@ -1,0 +1,52 @@
+{
+  "source": "SYNTHESISED from synth-dead-bridge (itself from the real recording ca41ab28-deployed-with-failure, pipeline 2857464986): trigger:website's status set to `pending` with its downstream_pipeline still null, and the parent pipeline set to `running`, which is what GitLab reports in the seconds between creating a trigger job and creating its child. Nothing else changed.",
+  "note": "A trigger job with no child is dead only once it has settled. A `pending` trigger has simply not spawned its child yet, and reading it as `dead` turned every push red for its first poll and fired `blocking_failure`. The icon stays `failed` here only because trigger:android's child really did fail.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "failed",
+      "watches": {
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "id": 2857464986,
+              "state": "failed",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [
+                "verify:android"
+              ],
+              "warnings": [],
+              "gates": [
+                "ios:smoke",
+                "test:ios:ui",
+                "test:ios:app",
+                "build:ios:sim",
+                "publish:android_bundle"
+              ],
+              "post_deploy_failures": [],
+              "sibling_failures": [
+                "trigger:android"
+              ],
+              "bridges": {
+                "trigger:ios": "passed",
+                "trigger:android": "failed",
+                "trigger:voice_agent": "canceled",
+                "trigger:website": "running"
+              }
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    }
+  ]
+}

@@ -66,6 +66,7 @@
     "targets": [
       "dmg",
       "deb",
+      "rpm",
       "appimage"
     ],
     "icon": [
@@ -87,6 +88,11 @@
       "deb": {
         "depends": [
           "libsecret-tools"
+        ]
+      },
+      "rpm": {
+        "depends": [
+          "/usr/bin/secret-tool"
         ]
       }
     }

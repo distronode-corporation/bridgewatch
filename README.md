@@ -41,7 +41,8 @@ So bridgewatch is:
   child pipelines (`dive.depth` levels deep, default 1). On GitHub it is a commit group
   (`group = "commit"`): every workflow run one push started, folded into one row with
   each run as a bridge. A bridge that never produced its downstream (a trigger job that
-  created no child, or a workflow listed in `expect` that never started) reads dead.
+  settled without creating a child, or a workflow listed in `expect` that never started)
+  reads dead; one still on its way to creating it reads running.
 - **source-aware.** A watch filters by pipeline source or workflow event (`push`,
   `schedule`, ...) and by ref, so pushes, schedules and preflight branches are separate
   watches on the same project. Only `primary` watches drive the tray icon and
@@ -56,9 +57,9 @@ So bridgewatch is:
 | --- | --- | --- |
 | `failed` | red octagon | The pipeline carrying the deploy marker failed before any marker succeeded, a bridge is dead (it never produced its downstream) and no marker exists, a blocking job in the parent failed, or (with no marker) a bridge failed. |
 | `deployed_with_failure` | amber triangle | A marker succeeded, and a sibling bridge failed or a blocking job failed around it, under the default `downgrade` policies. |
-| `deployed` | green filled check | A marker succeeded and nothing is holding it back. |
-| `running` | blue arrows | A marker is in flight, or (with no marker) something is still running. |
-| `canceled` | grey slash | The parent was canceled or skipped, or every marker was. |
+| `deployed` | green filled check | A marker succeeded, no other marker can still move, and nothing is holding it back. |
+| `running` | blue arrows | A marker is in flight (even after another one succeeded), or (with no marker) something is still running. |
+| `canceled` | grey slash | The parent was canceled, or every marker was. A skipped pipeline ran nothing and is not listed. |
 | `parked_gate` | amber hourglass | No marker, nothing running, nothing broken, and a manual job or bridge is waiting for a person. |
 | `succeeded_no_deploy` | green outline check | Everything settled green and no marker ran. Normal for a lane that does not deploy. |
 | `unknown` | grey question mark | No data yet, the pipeline's job lists could not be read, a marker is in a status this build does not know, or a verdict script failed. |
@@ -268,12 +269,13 @@ entry that `workflow` rules out, and about `expect` with an empty `sources`.
 | Platform | Status |
 | --- | --- |
 | macOS 10.15 or newer, Apple Silicon and Intel | Supported. Release builds are signed and notarised, see below. |
-| Linux x86_64, glibc 2.35 or newer (Ubuntu 22.04 or newer, and equivalents) | Supported. |
+| Linux x86_64 and arm64, glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or newer, and equivalents) | Supported. |
 | Windows | Not targeted. |
 
-Linux release builds are made on Ubuntu 22.04. glibc is forward-compatible but not
-backward-compatible, so that is the floor: the `.deb` and `.AppImage` run on 22.04 and
-newer, and not on older.
+Linux release builds are made on Ubuntu 22.04, on both x86_64 and arm64 (the oldest
+build machines GitHub offers). glibc is forward-compatible but not backward-compatible, so
+that is the floor: the `.deb`, `.rpm` and `.AppImage` need glibc 2.35 or newer, and do
+not start on older systems.
 
 On Linux the tray is a StatusNotifierItem through `libayatana-appindicator`. GNOME has no
 built-in host for that protocol, so on GNOME you need the AppIndicator/KStatusNotifierItem
@@ -285,13 +287,18 @@ Download from the [Releases page](https://github.com/distronode-corporation/brid
 
 | File | For |
 | --- | --- |
-| `bridgewatch_<version>_aarch64.dmg` | macOS, Apple Silicon |
-| `bridgewatch_<version>_x64.dmg` | macOS, Intel |
+| `bridgewatch_<version>_universal.dmg` | macOS, Apple Silicon and Intel |
 | `bridgewatch_<version>_amd64.deb` | Debian and Ubuntu, x86_64 |
+| `bridgewatch_<version>_arm64.deb` | Debian and Ubuntu, arm64 |
+| `bridgewatch-<version>-1.x86_64.rpm` | Fedora and openSUSE, x86_64 |
+| `bridgewatch-<version>-1.aarch64.rpm` | Fedora and openSUSE, arm64 |
 | `bridgewatch_<version>_amd64.AppImage` | Other glibc 2.35+ Linux, x86_64 |
+| `bridgewatch_<version>_aarch64.AppImage` | Other glibc 2.35+ Linux, arm64 |
 
-Each `.dmg` is single-architecture; pick the one for your Mac. Every asset carries a
-GitHub build provenance attestation:
+The `.dmg` is universal: one download runs natively on both Apple Silicon and Intel
+Macs. The Linux file names follow each format's own architecture spelling (`amd64` and
+`arm64` for Debian, `x86_64` and `aarch64` for RPM). Every asset carries a GitHub build
+provenance attestation:
 
 ```
 gh attestation verify bridgewatch_1.0.0_amd64.deb --repo distronode-corporation/bridgewatch
@@ -302,7 +309,7 @@ see [CLI](#cli).
 
 ### macOS: signed and notarised
 
-The `.app` inside each `.dmg` is signed with the Developer ID **Distronode Corporation
+The `.app` inside the `.dmg` is signed with the Developer ID **Distronode Corporation
 (R935BA6767)** and notarised by Apple, with the ticket stapled, so it opens like any other
 downloaded app. To check a copy yourself:
 
@@ -319,9 +326,23 @@ The second command should end with `source=Notarized Developer ID`.
 sudo apt install ./bridgewatch_1.0.0_amd64.deb
 ```
 
-The package depends on `libsecret-tools`, because bridgewatch runs `secret-tool` to read a
-keyring item that has an empty user name, which is how glab stores its token and how gh
-stores its active account's (see [Tokens](#tokens)).
+On arm64, use `bridgewatch_1.0.0_arm64.deb`. The package depends on `libsecret-tools`,
+because bridgewatch runs `secret-tool` to read a keyring item that has an empty user name,
+which is how glab stores its token and how gh stores its active account's (see
+[Tokens](#tokens)).
+
+### Linux: .rpm
+
+```
+sudo dnf install ./bridgewatch-1.0.0-1.x86_64.rpm      # Fedora
+sudo zypper install ./bridgewatch-1.0.0-1.x86_64.rpm   # openSUSE
+```
+
+On arm64, use `bridgewatch-1.0.0-1.aarch64.rpm`. The package requires the file
+`/usr/bin/secret-tool` rather than a package name, for the same reason as the `.deb`: the
+package that ships it is `libsecret` on Fedora but `secret-tool` on openSUSE, and
+a file dependency resolves to the right one on each. The package is not GPG-signed; the
+attestation above is how to check where it came from.
 
 ### Linux: AppImage
 
@@ -330,8 +351,9 @@ chmod +x bridgewatch_1.0.0_amd64.AppImage
 ./bridgewatch_1.0.0_amd64.AppImage
 ```
 
-An AppImage declares no dependencies. If you reuse glab's or gh's token, install
-`secret-tool` yourself (`sudo apt install libsecret-tools` on Debian and Ubuntu). A token stored in
+On arm64, use `bridgewatch_1.0.0_aarch64.AppImage`. An AppImage declares no dependencies.
+If you reuse glab's or gh's token, install `secret-tool` yourself (`sudo apt install
+libsecret-tools` on Debian and Ubuntu, `sudo dnf install libsecret` on Fedora). A token stored in
 bridgewatch's own keyring entry goes through the Secret Service over D-Bus and does not
 need it; either way a Secret Service (GNOME Keyring, KWallet) has to be running.
 
@@ -363,7 +385,9 @@ The wizard's steps:
    one workflow. Optionally add a secondary watch for scheduled pipelines on the same
    branch, and on GitLab one for a preflight ref glob such as `pf/*`.
 4. **Deploy detection.** Suggested marker jobs, ranked from the latest pipeline's (or
-   workflow run's) job names and stages (parent and direct children), or none.
+   workflow run's) job names and stages (parent and direct children), or none. A job
+   whose name or stage leads with a checking word (`verify`, `test`, `lint`, `check`,
+   `validate`, `smoke`) is never offered, whatever else its name says.
 5. **Notifications and polling.** Which events notify, launch at login, and the live
    poll interval (5 s for GitLab, 30 s for GitHub).
 6. **Review config.toml.** The exact file it will write, then **Finish**.
@@ -564,7 +588,7 @@ Accounts of both providers can sit in one file:
 | `expect` | GitHub only, with `group = "commit"`. Workflow file names every group must hold; one with no run is a dead bridge once the group has settled and its window has passed. See [`expect`](#expect-a-workflow-that-never-started) [`[]`]. |
 | `role` | `primary` (drives the icon, may notify) or `secondary` (rows only) [`primary`]. |
 | `show.max_rows` | Most rows this watch shows [5]. |
-| `show.settled` | Settled pipelines kept below the unsettled ones [1]. |
+| `show.settled` | Settled pipelines kept below the unsettled ones [1]. A `skipped` pipeline ran nothing, is not listed and does not count. |
 | `show.jobs` | `all` or `failures`; overrides `[ui].jobs` for this watch [unset]. |
 | `poll.live_secs` | Interval while anything is live [5; the wizard writes 30 for GitHub]. |
 | `poll.idle_secs` | Interval when everything has settled [60; the wizard writes 120 for GitHub]. |
@@ -572,7 +596,7 @@ Accounts of both providers can sit in one file:
 | `dive.exclude` | Trigger-job (or workflow) name globs to skip [`[]`]. |
 | `dive.depth` | Levels of child pipeline to walk [1]. GitLab only: GitHub runs do not nest. |
 | `dive.only_when` | Walk only into bridges in this status, e.g. `"failed"` [unset]. |
-| `deploy_markers` | Job names or `re:` patterns whose success means "deployed". With several, config order decides which success is reported [`[]`]. |
+| `deploy_markers` | Job names or `re:` patterns whose success means "deployed". With several, a success counts only once none of the others is still in flight; config order then decides which success is reported [`[]`]. |
 | `sibling_failure` | What a failed or dead bridge other than the marker's does to a deploy: `downgrade`, `fail` or `ignore` [`downgrade`]. |
 | `post_deploy_failure` | The same for a blocking failure after the marker, or in the marker's own pipeline [`downgrade`]. |
 | `[watches.jobs]` | Job-name pattern (literal or `re:`) to `gate`, `warning`, `blocking` or `ignore`. File order, first match wins. Applies to bridges too. On GitHub it is the only way to tolerate a failure. |
@@ -660,7 +684,8 @@ and failed. `ignore` removes the job from every verdict and list.
 
 ## Verdict rules
 
-For the newest pipeline of each watch that matches its `ref` and `sources`, bridgewatch
+For the newest pipeline of each watch that matches its `ref` and `sources` (a `skipped`
+pipeline, which ran nothing, is passed over), bridgewatch
 reads the parent's jobs and bridges, then the jobs of every child pipeline that `dive`
 selects, classifies each job, and looks for the `deploy_markers` across all of them. On
 GitHub the "parent" is a workflow run (with no bridges), or with `group = "commit"` the
@@ -675,14 +700,18 @@ both. The state is the first rule that matches:
    failed (unless it started after a successful marker, which rule 4 handles), or there
    is no marker and any bridge failed.
 3. **`unknown`** if a marker is in a status this build does not recognise.
-4. If a marker succeeded: **`failed`** when a sibling failure or post-deploy failure
+4. If a marker succeeded and no marker can still move: **`failed`** when a sibling failure or post-deploy failure
    applies with policy `fail`; **`deployed_with_failure`** when one applies with policy
    `downgrade`; otherwise **`deployed`**. A sibling failure is a failed or dead bridge
    other than the one carrying the marker; a post-deploy failure is a blocking job that
    started after the marker, or one in the marker's own pipeline.
 5. **`running`** if a marker is in flight, or there is no marker and something is live.
-   A job waiting on a manual gate is not live.
-6. **`canceled`** if the parent was canceled or skipped, or every marker was.
+   A job waiting on a manual gate is not live. A marker still queued after another one
+   succeeded counts as in flight, and so does a live trigger job that `dive` would walk
+   into whose child has not been read yet (it may not exist yet): a marker in there has
+   not been seen.
+6. **`canceled`** if the parent was canceled (or skipped, when a watch has nothing
+   newer to show), or every marker was.
 7. **`parked_gate`** if there is no marker, nothing is live, nothing blocking failed,
    and something is waiting on a manual gate. A marker that is itself a manual job counts
    as "no marker" here.
@@ -823,7 +852,10 @@ npm ci
 npm run tauri build
 ```
 
-Bundles land in `target/release/bundle/` at the repository root. For development, see
+Bundles land in `target/release/bundle/` at the repository root. On a Mac with both
+`aarch64-apple-darwin` and `x86_64-apple-darwin` installed through rustup,
+`npm run tauri build -- --target universal-apple-darwin` makes the universal `.dmg` the
+release ships, under `target/universal-apple-darwin/release/bundle/`. For development, see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Limitations

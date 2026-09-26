@@ -1,0 +1,39 @@
+{
+  "source": "SYNTHESISED from the real recording 9da437fd-parked-gate-stacked (pipeline 2859138213, kept verbatim) plus a `skipped` pipeline 2859138300 above it with no jobs and no bridges, the shape GitLab records for a push that touches only files no job's rules match.",
+  "note": "A skipped pipeline is settled, so it used to take the one show.settled slot, push the real pipeline off the list, and hand the icon (newest id) a not-built parent: `canceled`, plus a `finished: canceled` notification for a push that changed nothing. It carries no information and is passed over.",
+  "cases": [
+    {
+      "name": "default",
+      "icon_state": "succeeded_no_deploy",
+      "watches": {
+        "main-push": {
+          "icon_state": "succeeded_no_deploy",
+          "rows": [
+            {
+              "id": 2859138213,
+              "state": "succeeded_no_deploy",
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [],
+              "warnings": [
+                "dependency-scanning:python-resolution"
+              ],
+              "gates": [],
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "bridges": {}
+            }
+          ]
+        },
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    }
+  ]
+}

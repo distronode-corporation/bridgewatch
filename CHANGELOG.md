@@ -13,6 +13,46 @@ body line with a bracket.
 
 ## [Unreleased]
 
+### Added
+
+- **Linux arm64 and `.rpm` release assets.** Every release now ships a `.deb`, an `.rpm`
+  and an `.AppImage` for both x86_64 and arm64 Linux, each built on Ubuntu 22.04 (the
+  oldest GitHub runner per architecture), so the glibc floor stays 2.35 on both. The
+  `.rpm` requires `/usr/bin/secret-tool`, which resolves to `libsecret` on Fedora and to
+  `secret-tool` on openSUSE.
+
+### Changed
+
+- **One universal macOS `.dmg`** (`bridgewatch_<version>_universal.dmg`) replaces the
+  separate Apple Silicon and Intel downloads. It is signed and notarised as before, and
+  the release checks that its binary carries both architectures.
+
+### Fixed
+
+Four of these were seen on real pushes to a GitLab parent/child project.
+
+- **"Deployed" before anything shipped.** With several `deploy_markers`, the first one
+  to succeed read as deployed while the others were still queued, so a push showed the
+  filled check ~30 s in and ~20 minutes before the main deploy ran. A success now counts
+  only once no other marker can still move: none is queued or running in a live
+  pipeline, and no live trigger job that `dive` would walk into still has an unread
+  child.
+- **"Failed" at pipeline birth.** A trigger job that had not yet created its child
+  pipeline read as a dead bridge, so every push went red on its first poll and raised a
+  `blocking_failure` notification. It now reads by its own status (running, awaiting a
+  gate, skipped or canceled), and only a trigger that settled without a child is dead.
+- **"Deployed" announced more than once for one push.** The notification was keyed on
+  the winning marker's name, which changed as later markers passed. It is now keyed on
+  the pipeline, and a ledger written by 1.0.0 is still honoured, so upgrading does not
+  repeat a deploy already announced.
+- **A skipped pipeline hid the real verdict.** A push that matched no job's rules
+  created a `skipped` pipeline that took the newest row and turned the icon `canceled`.
+  Skipped pipelines are now passed over and do not count against `show.settled`. A
+  canceled pipeline still shows.
+- **The setup wizard offered check jobs as deploy markers.** A job whose name or stage
+  leads with `verify`, `test`, `lint`, `check`, `validate` or `smoke` (for example
+  `verify:origins_deploy_script`) is no longer offered.
+
 ## [1.0.0] - 2026-09-19
 
 ### Added
