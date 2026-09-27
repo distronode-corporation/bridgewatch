@@ -159,3 +159,35 @@ describe("WatchSection, the job view's mode", () => {
     expect(host.querySelector('[data-slot="pipeline-jobs"]')?.getAttribute("data-mode")).toBe("all");
   });
 });
+
+describe("PipelineRow, the deploy ETA", () => {
+  const primary = (row: PipelineView): WatchView => ({
+    id: "main-push",
+    role: "primary",
+    icon_state: "running",
+    rows: [row],
+    error: null,
+  });
+
+  it("shows the usual time and how far in the row is when the core sent an estimate", () => {
+    // `now` in `render` is 15:00:00, so a row created 14:53:30 is 6m 30s in.
+    render(
+      primary({
+        ...ROW,
+        live: true,
+        deploy: "in_progress",
+        created_at: "2026-09-17T14:53:30Z",
+        eta: { typical_secs: 660, elapsed_secs: 385 },
+      }),
+    );
+    expect(host.querySelector(".row .eta")?.textContent?.trim()).toBe("usually ~11m \u00b7 6m 30s in");
+  });
+
+  it("shows nothing for a row the core sent no estimate for", () => {
+    // The real recording is settled and predates the key: it must render no
+    // ETA line at all, not an empty one.
+    render(primary(ROW));
+    expect(host.querySelector(".row")).not.toBe(null);
+    expect(host.querySelector(".row .eta")).toBe(null);
+  });
+});

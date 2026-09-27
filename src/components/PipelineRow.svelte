@@ -13,7 +13,7 @@
   } from "../lib/format";
   import { openExternal } from "../lib/ipc";
   import type { BridgeView, JobsMode, PipelineView, Provider } from "../lib/types";
-  import { PipelineJobs, defaultExpanded, type ExpansionStore } from "./jobs";
+  import { PipelineJobs, defaultExpanded, etaLine, type ExpansionStore } from "./jobs";
   import Link from "./Link.svelte";
 
   interface Props {
@@ -28,9 +28,26 @@
     provider?: Provider;
     /** Bridge open/closed choices, one store per window so a poll keeps them. */
     expansion: ExpansionStore;
+    /** The watch this row is under, which the job tools resolve a job against. */
+    watchId?: string;
+    /** The watch's account allows retry and play. */
+    actions?: boolean;
   }
 
-  let { row, now, collapsed = false, mode = "all", provider = "gitlab", expansion }: Props = $props();
+  let {
+    row,
+    now,
+    collapsed = false,
+    mode = "all",
+    provider = "gitlab",
+    expansion,
+    watchId,
+    actions = false,
+  }: Props = $props();
+
+  // Only with a watch to resolve against: a row mounted without one (a test,
+  // a preview) lists its jobs exactly as it always did.
+  const tools = $derived(watchId ? { watchId, provider, actions, context: "" } : undefined);
 
   /**
    * A bridge nobody has toggled: open while its pipeline is live (the job
@@ -69,6 +86,8 @@
 
   const tone = $derived(stateTone(row.state));
   const dTone = $derived(deployTone(row.deploy));
+  /** "usually ~11m · 6m 30s in", or "" when the core sent no estimate. */
+  const eta = $derived(etaLine(row, now));
 </script>
 
 <div class="row border-border/60 flex flex-col gap-1 border-b px-3 pt-1.5 pb-2 last:border-b-0">
@@ -94,6 +113,12 @@
   </div>
 
   {#if !collapsed}
+    {#if eta}
+      <div class="eta text-muted-foreground pl-3.5 text-xs tabular-nums" title="from this watch's recent deploys">
+        {eta}
+      </div>
+    {/if}
+
     {#if row.deploy_marker}
       <div class="marker flex flex-wrap gap-1.5 pl-3.5 text-xs">
         <Link href={row.deploy_marker.web_url} class="font-mono" title="the deploy marker job">
@@ -120,6 +145,7 @@
         {now}
         isDefaultOpen={openByDefault}
         onOpen={(url) => void openExternal(url)}
+        {tools}
       />
     </div>
 

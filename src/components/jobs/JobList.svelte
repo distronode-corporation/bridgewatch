@@ -7,8 +7,15 @@
    * has started. Clicking a job name calls `onOpen` with its GitLab URL; the
    * component never navigates by itself (a GitLab page inside the popover is a
    * trap), so the shell decides how a URL is opened.
+   *
+   * With `tools`, a failed job also gets a "log" toggle that opens the end of
+   * its log under the row, and on an account with `actions = true` a failed or
+   * canceled job gets "retry" and a GitLab manual job "play", each of which
+   * asks first (see JobPanel). Without `tools` the list is exactly what it was.
    */
-  import type { JobsMode, JobView } from "../../lib/types";
+  import type { JobAction, JobsMode, JobView } from "../../lib/types";
+  import JobPanel from "./JobPanel.svelte";
+  import { canPlay, canRetry, canShowLog, type JobTools } from "./tools";
   import {
     TONE_DOT,
     classWord,
@@ -37,6 +44,8 @@
     now?: number;
     /** Shown when the mode filters every job out. */
     emptyText?: string;
+    /** The log, retry and play tools, or none. */
+    tools?: JobTools;
     class?: string;
   }
 
@@ -47,6 +56,7 @@
     onOpen,
     now: externalNow,
     emptyText,
+    tools,
     class: className = "",
   }: Props = $props();
 
@@ -72,6 +82,29 @@
     event.stopPropagation();
     onOpen(url);
   }
+
+  // What is open under each job, by job id. Kept here rather than in the
+  // panel so a row's buttons can say `aria-expanded` truthfully.
+  let panels = $state<Record<number, { log: boolean; confirm: JobAction | null }>>({});
+  const panelOf = (id: number) => panels[id] ?? { log: false, confirm: null };
+  const panelId = (id: number) => `job-panel-${(tools?.watchId ?? "").replace(/[^A-Za-z0-9_-]/g, "_")}-${id}`;
+
+  function toggleLog(id: number) {
+    const current = panelOf(id);
+    panels[id] = { ...current, log: !current.log };
+  }
+
+  function ask(id: number, action: JobAction) {
+    const current = panelOf(id);
+    panels[id] = { ...current, confirm: current.confirm === action ? null : action };
+  }
+
+  function cancel(id: number) {
+    panels[id] = { ...panelOf(id), confirm: null };
+  }
+
+  const TOOL_BUTTON =
+    "text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm px-0.5 text-[10px] font-medium uppercase outline-none focus-visible:ring-2 aria-expanded:text-foreground";
 </script>
 
 <div class={["flex flex-col gap-1.5", className]} data-slot="job-list">
@@ -113,6 +146,39 @@
                 <span class="text-muted-foreground shrink-0 text-[10px]">allowed</span>
               {/if}
               <span class="flex-1"></span>
+              {#if tools && canShowLog(job)}
+                <button
+                  type="button"
+                  class={TOOL_BUTTON}
+                  aria-expanded={panelOf(job.id).log}
+                  aria-controls={panelId(job.id)}
+                  aria-label={`${panelOf(job.id).log ? "Hide" : "Show"} the end of the log of ${job.name}`}
+                  data-slot="job-log-toggle"
+                  onclick={() => toggleLog(job.id)}>log</button
+                >
+              {/if}
+              {#if tools && canRetry(job, tools)}
+                <button
+                  type="button"
+                  class={TOOL_BUTTON}
+                  aria-expanded={panelOf(job.id).confirm === "retry"}
+                  aria-controls={panelId(job.id)}
+                  aria-label={`Retry ${job.name}`}
+                  data-slot="job-retry"
+                  onclick={() => ask(job.id, "retry")}>retry</button
+                >
+              {/if}
+              {#if tools && canPlay(job, tools)}
+                <button
+                  type="button"
+                  class={TOOL_BUTTON}
+                  aria-expanded={panelOf(job.id).confirm === "play"}
+                  aria-controls={panelId(job.id)}
+                  aria-label={`Start ${job.name}`}
+                  data-slot="job-play"
+                  onclick={() => ask(job.id, "play")}>play</button
+                >
+              {/if}
               {#if live}
                 <span class="text-tone-blue shrink-0 text-[10px] font-medium uppercase" data-slot="live-marker">live</span>
               {/if}
@@ -124,6 +190,19 @@
                 >
               {/if}
             </li>
+            {#if tools && (panelOf(job.id).log || panelOf(job.id).confirm)}
+              <li>
+                <JobPanel
+                  {job}
+                  {tools}
+                  log={panelOf(job.id).log}
+                  confirm={panelOf(job.id).confirm}
+                  onCancel={() => cancel(job.id)}
+                  {onOpen}
+                  id={panelId(job.id)}
+                />
+              </li>
+            {/if}
           {/each}
         </ul>
       </section>

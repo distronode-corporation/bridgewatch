@@ -163,6 +163,8 @@ impl Transport for Scripted {
             etag: reply.etag,
             link: reply.link,
             oauth_scopes: reply.oauth_scopes,
+            location: None,
+            truncated: false,
         })
     }
 }
@@ -518,6 +520,8 @@ fn request(url: &str) -> HttpRequest {
         path: url.to_string(),
         headers: Vec::new(),
         body: None,
+        anonymous: false,
+        tail_bytes: None,
     }
 }
 
@@ -790,6 +794,8 @@ async fn over_real_http_the_validator_is_sent_and_the_304_is_served() {
         path: "/repos/acme-corp/monorepo/actions/runs".into(),
         headers: Vec::new(),
         body: None,
+        anonymous: false,
+        tail_bytes: None,
     };
 
     let first = transport.execute(get()).await.unwrap();
@@ -841,6 +847,8 @@ async fn the_gitlab_rate_limit_spelling_wins_over_github_s() {
             path: "/projects/7/pipelines".into(),
             headers: Vec::new(),
             body: None,
+            anonymous: false,
+            tail_bytes: None,
         })
         .await
         .unwrap();

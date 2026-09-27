@@ -28,6 +28,7 @@
   import type { BridgeView, JobsMode, Provider } from "../../lib/types";
   import JobList from "./JobList.svelte";
   import { TONE_DOT, TONE_TEXT, filterJobs, type ExpansionStore } from "./jobs";
+  import type { JobTools } from "./tools";
 
   interface Props {
     bridge: BridgeView;
@@ -41,16 +42,36 @@
     onOpen: (url: string) => void;
     /** See JobList: an external clock, or omit to let the list tick itself. */
     now?: number;
+    /** The log, retry and play tools; the bridge fills in its own context. */
+    tools?: JobTools;
   }
 
-  let { bridge, pipelineId, expansion, defaultOpen = false, mode = "all", provider = "gitlab", onOpen, now }: Props =
-    $props();
+  let {
+    bridge,
+    pipelineId,
+    expansion,
+    defaultOpen = false,
+    mode = "all",
+    provider = "gitlab",
+    onOpen,
+    now,
+    tools,
+  }: Props = $props();
 
   const open = $derived(expansion.isOpen(pipelineId, bridge.name, defaultOpen));
   const tone = $derived(bridgeTone(bridge.verdict));
   const shownCount = $derived(filterJobs(bridge.jobs, mode).length);
   const neverStarted = $derived(bridge.status === "never_started");
   const workflowRun = $derived(provider === "github" && !neverStarted);
+  // Where these jobs are, for the confirm text.
+  const childTools = $derived(
+    tools && {
+      ...tools,
+      context: workflowRun
+        ? `workflow run ${bridge.name}`
+        : `child pipeline ${bridge.child_id === null ? "" : `#${bridge.child_id} `}of ${bridge.name}`,
+    },
+  );
   const bodyId = $derived(`bridge-${pipelineId}-${bridge.name.replace(/[^A-Za-z0-9_-]/g, "_")}`);
 
   function openUrl(event: MouseEvent, url: string | null) {
@@ -143,7 +164,7 @@
     {:else if bridge.child_id === null}
       <p class="text-muted-foreground px-1 text-xs">No child pipeline.</p>
     {:else}
-      <JobList jobs={bridge.jobs} {mode} {onOpen} {now} />
+      <JobList jobs={bridge.jobs} {mode} {onOpen} {now} tools={childTools} />
     {/if}
   </Collapsible.Content>
 </Collapsible.Root>

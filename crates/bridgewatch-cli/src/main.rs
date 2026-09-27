@@ -14,11 +14,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use bridgewatch_core::actions::{self, JobAction, JobTarget};
 use bridgewatch_core::client::fixture::ScrubMode;
 use bridgewatch_core::client::{
-    FixtureTransport, GitLabClient, RequestRing, ReqwestTransport, client_for,
+    CiClient, ClientError, FixtureTransport, GitLabClient, RequestRing, ReqwestTransport,
+    client_for,
 };
 use bridgewatch_core::config::{self, Config, ProjectRef};
+use bridgewatch_core::eta::EtaHistory;
 use bridgewatch_core::notify::NotifyLedger;
 use bridgewatch_core::poll::Poller;
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider};
@@ -38,7 +41,8 @@ mod exit {
     /// command: it did what it was asked.
     pub const OK: i32 = 0;
     /// `check`/`watch`: something failed. `fixture scrub --check`: a fixture
-    /// would change.
+    /// would change. `retry`/`play`: the person at the prompt said no, so
+    /// nothing was sent.
     pub const FAILED: i32 = 1;
     /// `check`/`watch`: deployed, but something else failed.
     pub const DEPLOYED_WITH_FAILURE: i32 = 2;
@@ -63,13 +67,13 @@ mod exit {
     pub const HELP: &str = "\
 Exit codes:
   0   check/watch: deployed or succeeded_no_deploy; any other command: success
-  1   check/watch: failed; fixture scrub --check: a fixture would change
+  1   check/watch: failed; fixture scrub --check: a fixture would change; retry/play: answered no
   2   check/watch: deployed_with_failure
   3   check/watch: running, parked_gate or canceled
   4   check/watch: unknown (nothing matched, or a request failed; errors on stderr)
-  64  usage error: bad arguments, or --watch names no configured watch
-  70  any other error before a verdict (token, fixture, recording, I/O)
-  78  the configuration is missing, unreadable or invalid";
+  64  usage error: bad arguments, a --watch or job URL that names nothing configured, or retry/play with no terminal and no --yes
+  70  any other error (token, fixture, recording, I/O, or a log or job request that failed)
+  78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true";
 }
 
 /// A failure, with the exit code it maps to.
@@ -153,6 +157,19 @@ enum Command {
         #[command(subcommand)]
         action: auth::AuthAction,
     },
+    /// Print the end of a job's log (the last 40 lines), from its page URL.
+    ///
+    /// Read-only. The URL is a GitLab job page
+    /// (https://<host>/<group>/<project>/-/jobs/<id>) or a GitHub one
+    /// (https://github.com/<owner>/<repo>/actions/runs/<run>/job/<id>), and
+    /// is matched to a configured account by its host.
+    Log(LogArgs),
+    /// Retry a failed or canceled job, from its page URL. A WRITE: the
+    /// account needs actions = true, and it asks first unless --yes.
+    Retry(JobActionArgs),
+    /// Start a manual GitLab job, from its page URL. A WRITE: the account
+    /// needs actions = true, and it asks first unless --yes.
+    Play(JobActionArgs),
     /// Print the config.toml the setup wizard would write, from flags.
     ///
     /// Non-interactive and offline: nothing is fetched, no token is read, and
@@ -244,6 +261,30 @@ struct InitArgs {
     /// Run this program for the token; repeat for each argument.
     #[arg(long, group = "token", value_name = "ARG", num_args = 1..)]
     token_command: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct LogArgs {
+    /// The job's page URL.
+    url: String,
+    /// The account to use, when more than one is on the URL's host.
+    #[arg(long)]
+    account: Option<String>,
+    /// Print the lines and whether the log was cut short as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct JobActionArgs {
+    /// The job's page URL.
+    url: String,
+    /// The account to use, when more than one is on the URL's host.
+    #[arg(long)]
+    account: Option<String>,
+    /// Do not ask. Required when there is no terminal to ask on.
+    #[arg(long, short)]
+    yes: bool,
 }
 
 #[derive(Debug, Args)]
@@ -365,7 +406,144 @@ async fn run(cli: Cli) -> Outcome {
         Command::Fixture { action } => fixture(&config, action).await,
         Command::Init(args) => init(&config, *args),
         Command::Auth { action } => auth_command(&config, action).await,
+        Command::Log(args) => job_log(&config, args).await,
+        Command::Retry(args) => job_action(&config, args, JobAction::Retry).await,
+        Command::Play(args) => job_action(&config, args, JobAction::Play).await,
     }
+}
+
+/// Resolve a job URL against the configuration: a URL no account matches is
+/// the command line's fault, not the file's.
+fn locate_job(
+    config: &Config,
+    url: &str,
+    account: Option<&str>,
+) -> std::result::Result<JobTarget, Failure> {
+    actions::locate(config, url, account).map_err(|e| Failure::new(exit::USAGE, e))
+}
+
+/// The client for the one account a job belongs to, built exactly as the
+/// poller builds it. This is where the token is read, so everything that can
+/// refuse without one has already had its turn.
+fn job_client(
+    config: &Config,
+    target: &JobTarget,
+) -> std::result::Result<Arc<dyn CiClient>, Failure> {
+    let account = config.accounts.get(&target.account).ok_or_else(|| {
+        Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!("no account {:?}", target.account),
+        )
+    })?;
+    bridgewatch_core::poll::build_client(
+        &target.account,
+        account,
+        &SystemTokenProvider,
+        Arc::new(SystemTokenProvider),
+        RequestRing::new(config.log.keep_requests),
+    )
+    .map_err(|e| Failure::new(exit::ERROR, e))
+}
+
+/// `bridgewatch log <job-url>`.
+async fn job_log(config_args: &ConfigArgs, args: LogArgs) -> Outcome {
+    let loaded = load(config_args)?;
+    start_logging(&loaded);
+    let config = loaded.config;
+    let target = locate_job(&config, &args.url, args.account.as_deref())?;
+    let client = job_client(&config, &target)?;
+    let tail = actions::log_tail(client.as_ref(), &target)
+        .await
+        .map_err(|e| Failure::new(exit::ERROR, e))?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&tail)?);
+        return Ok(exit::OK);
+    }
+    if tail.truncated {
+        eprintln!("note: the log is long; only its end was read");
+    }
+    if tail.lines.is_empty() {
+        eprintln!("the log is empty");
+    }
+    for line in &tail.lines {
+        println!("{line}");
+    }
+    Ok(exit::OK)
+}
+
+/// `bridgewatch retry <job-url>` and `bridgewatch play <job-url>`.
+///
+/// ⛔ Everything that can say no without a token says it first, in this
+/// order: a URL no account matches, an account without `actions = true`, a
+/// play on GitHub, and no way to ask (no terminal, no `--yes`). Only then is
+/// the token read and the request sent. The client refuses the write again
+/// if `actions` is off, whoever calls it; the check here only makes the
+/// refusal a config error (78) that arrives before any credential prompt.
+async fn job_action(config_args: &ConfigArgs, args: JobActionArgs, action: JobAction) -> Outcome {
+    let loaded = load(config_args)?;
+    start_logging(&loaded);
+    let config = loaded.config;
+    let target = locate_job(&config, &args.url, args.account.as_deref())?;
+    let account = &config.accounts[&target.account];
+    if !account.actions {
+        return Err(Failure::new(
+            exit::CONFIG,
+            anyhow::anyhow!(
+                "account {:?}: {}",
+                target.account,
+                ClientError::ActionsDisabled
+            ),
+        ));
+    }
+    if action == JobAction::Play && target.provider == config::Provider::Github {
+        return Err(Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!("GitHub Actions has no manual jobs to start; play is a GitLab action"),
+        ));
+    }
+    let question = format!(
+        "{} job {} in {} (account {:?})?",
+        match action {
+            JobAction::Retry => "Retry",
+            JobAction::Play => "Start manual",
+        },
+        target.job_id,
+        target.project,
+        target.account
+    );
+    if !args.yes {
+        if !std::io::stdin().is_terminal() {
+            return Err(Failure::new(
+                exit::USAGE,
+                anyhow::anyhow!(
+                    "not sending a {} without a confirmation: there is no terminal to ask on, \
+                     so pass --yes",
+                    action.as_str()
+                ),
+            ));
+        }
+        eprint!("{question} [y/N] ");
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            eprintln!("nothing sent");
+            return Ok(exit::FAILED);
+        }
+    }
+    let client = job_client(&config, &target)?;
+    let outcome = actions::perform(client.as_ref(), &target, action)
+        .await
+        .map_err(|e| Failure::new(exit::ERROR, e))?;
+    let done = match action {
+        JobAction::Retry => "retried",
+        JobAction::Play => "started",
+    };
+    match (outcome.job_id, outcome.web_url) {
+        (_, Some(url)) => println!("{done} job {}: {url}", target.job_id),
+        (Some(id), None) => println!("{done} job {} as job {id}", target.job_id),
+        (None, None) => println!("{done} job {}", target.job_id),
+    }
+    Ok(exit::OK)
 }
 
 /// `bridgewatch init`: the wizard's `build_config`, answered from flags.
@@ -734,7 +912,14 @@ fn build_poller(config: &Config, fixture: Option<&PathBuf>) -> Result<Poller> {
             }
             Poller::with_clients(config, clients, ring).context("cannot build poller")
         }
-        None => Poller::from_config(config, &SystemTokenProvider).context("cannot build poller"),
+        // The deploy-time history is shared with the app (see `EtaHistory`),
+        // so a `check` both uses what the app learned and adds to it. Not for
+        // a fixture: a rehearsal must not teach the real history how long a
+        // recorded pipeline took. One read at start, and a write only on a
+        // tick that saw a new deploy, so `check` pays nothing it can notice.
+        None => Poller::from_config(config, &SystemTokenProvider)
+            .context("cannot build poller")
+            .map(|poller| poller.with_eta_history(EtaHistory::default_path())),
     }
 }
 

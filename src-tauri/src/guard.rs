@@ -9,7 +9,9 @@
 //!   credential there on the next tick;
 //! - an account (new or changed) whose token source is a credential that lives
 //!   outside this file (a keyring entry, an environment variable) on a host no
-//!   account used before, which is the same exfiltration by addition.
+//!   account used before, which is the same exfiltration by addition;
+//! - `actions = true` on an account that did not have it, which lets the same
+//!   webview that asks for it retry and start jobs with that account's token.
 //!
 //! So none of them is written on the first request. The write is answered with a
 //! [`ConfirmRequest`] that describes the change in words chosen HERE, and it
@@ -70,6 +72,17 @@ pub fn sensitive_changes(old: Option<&Config>, new: &Config) -> Vec<String> {
                     argv.join(" ")
                 ));
             }
+        }
+
+        // The switch that turns this app from a reader into a writer. A script
+        // in the webview that could flip it in one call could then press
+        // Retry in the next; so turning it ON is asked about, and turning it
+        // off never is.
+        if account.actions && !before.is_some_and(|b| b.actions) {
+            out.push(format!(
+                "Account \"{name}\" will be allowed to retry failed jobs and start manual ones \
+                 with its token, from the tray and the command line."
+            ));
         }
 
         let now = origin(&account.base_url);
@@ -281,6 +294,19 @@ mod tests {
         // And an ordinary edit is not either.
         let edited = format!("{OWN}timeout_secs = 30\n");
         assert!(sensitive_changes(Some(&parse(OWN)), &parse(&edited)).is_empty());
+    }
+
+    #[test]
+    fn switching_actions_on_is_sensitive_and_switching_it_off_is_not() {
+        let on = format!("{OWN}actions = true\n");
+        let changes = sensitive_changes(Some(&parse(OWN)), &parse(&on));
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(changes[0].contains("retry"), "{changes:?}");
+        // A new account that arrives with it on is asked about too.
+        assert_eq!(sensitive_changes(None, &parse(&on)).len(), 1);
+        // Already on, or going off: nothing to ask.
+        assert!(sensitive_changes(Some(&parse(&on)), &parse(&on)).is_empty());
+        assert!(sensitive_changes(Some(&parse(&on)), &parse(OWN)).is_empty());
     }
 
     #[test]

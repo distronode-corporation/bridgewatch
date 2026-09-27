@@ -5,10 +5,12 @@
 //! sections are a struct copy at most, so a synchronous lock held across no
 //! await point is both simpler and cheaper than an async one.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use bridgewatch_core::client::CiClient;
 use bridgewatch_core::config::Config;
 use bridgewatch_core::poll::{POLL_NOW_MIN_GAP, PollNow};
 use bridgewatch_core::verdict::Snapshot;
@@ -41,6 +43,11 @@ pub struct Inner {
     /// The file's text as the last reload read it, so a reload of identical
     /// text can be skipped. See `commands::reload_from_disk`.
     pub disk_text: Option<String>,
+    /// The running poller's clients, by account name: what a job's log and a
+    /// job action are sent through, so they share the account's in-flight
+    /// bound, its request ring and its sign-in with the watches. Empty until a
+    /// poller is built, and again while one cannot be.
+    pub clients: BTreeMap<String, Arc<dyn CiClient>>,
 }
 
 /// Shared application state, reachable from every command and from the poller.
@@ -102,6 +109,7 @@ impl AppState {
                 settings_tab: None,
                 popover_hidden_at: None,
                 disk_text: resolved.text,
+                clients: BTreeMap::new(),
             }),
             poll_now: Arc::new(Notify::new()),
             reload: Arc::new(Notify::new()),
@@ -199,6 +207,16 @@ impl AppState {
     /// The last configuration that loaded.
     pub fn config(&self) -> Option<Config> {
         self.lock().config.clone()
+    }
+
+    /// Replace the running poller's clients (empty when there is none).
+    pub fn set_clients(&self, clients: BTreeMap<String, Arc<dyn CiClient>>) {
+        self.lock().clients = clients;
+    }
+
+    /// The client an account is polled through, if the poller has one.
+    pub fn client(&self, account: &str) -> Option<Arc<dyn CiClient>> {
+        self.lock().clients.get(account).cloned()
     }
 }
 

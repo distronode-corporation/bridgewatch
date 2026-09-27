@@ -1,5 +1,5 @@
 import { flushSync, mount, unmount } from "svelte";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Snapshot, Status } from "./lib/types";
 
@@ -58,6 +58,15 @@ vi.mock("./lib/ipc", () => ({
 
 let host: HTMLDivElement;
 let component: Record<string, unknown> | null = null;
+let PopoverApp: typeof import("./PopoverApp.svelte").default;
+
+// ⛔ Imported once, here, and not inside a test. A cold import compiles the whole
+// popover tree, which took 8 to 35 s on a slow disk: inside the first test that
+// was a 5 s timeout, and the timed-out test's interval then kept firing into the
+// next one, so "catches up the moment it comes back" counted 3 calls, not 2.
+beforeAll(async () => {
+  ({ default: PopoverApp } = await import("./PopoverApp.svelte"));
+}, 120_000);
 
 beforeEach(() => {
   calls.status = 0;
@@ -80,7 +89,6 @@ afterEach(() => {
 });
 
 async function render() {
-  const { default: PopoverApp } = await import("./PopoverApp.svelte");
   host = document.createElement("div");
   document.body.append(host);
   component = mount(PopoverApp, { target: host, props: {} });

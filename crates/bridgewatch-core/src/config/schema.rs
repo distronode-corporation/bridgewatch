@@ -160,6 +160,12 @@ pub struct Account {
     /// How far the poll interval is allowed to back off after rate limiting.
     #[serde(default)]
     pub rate_limit_backoff: RateLimitBackoff,
+    /// Allow retrying failed jobs and starting manual ones from bridgewatch.
+    /// Off by default: bridgewatch only reads unless this is true. The token
+    /// then needs the api scope on GitLab (read_api cannot run jobs), or
+    /// Actions: write on GitHub.
+    #[serde(default)]
+    pub actions: bool,
 }
 
 impl Account {
@@ -195,6 +201,7 @@ impl Default for Account {
             token: TokenSource::default(),
             timeout_secs: default_timeout_secs(),
             rate_limit_backoff: RateLimitBackoff::default(),
+            actions: false,
         }
     }
 }
@@ -228,6 +235,8 @@ impl<'de> Deserialize<'de> for Account {
             timeout_secs: u64,
             #[serde(default)]
             rate_limit_backoff: RateLimitBackoff,
+            #[serde(default)]
+            actions: bool,
         }
 
         let repr = AccountRepr::deserialize(d)?;
@@ -245,6 +254,7 @@ impl<'de> Deserialize<'de> for Account {
             token: repr.token,
             timeout_secs: repr.timeout_secs,
             rate_limit_backoff: repr.rate_limit_backoff,
+            actions: repr.actions,
         })
     }
 }
@@ -624,6 +634,15 @@ pub struct Watch {
     /// What a blocking failure *after* a successful deploy marker does.
     #[serde(default)]
     pub post_deploy_failure: FailurePolicy,
+    /// Learn how long this watch's deploys usually take, and show it on a
+    /// running row ("usually ~11m, 6m 30s in"). Only a watch with
+    /// `deploy_markers` has anything to learn from. `false` neither records
+    /// nor shows anything.
+    // Always serialised, unlike `group`: the settings pane reads the resolved
+    // config, and a key that is absent there reads as an unticked box on a
+    // feature that is on.
+    #[serde(default = "yes")]
+    pub eta: bool,
     /// Per-job class overrides. Keys are matched in file order, first wins.
     #[serde(default)]
     pub jobs: JobOverrides,

@@ -67,7 +67,16 @@
     <!-- A collapsed secondary watch still shows its newest row: hiding it
          entirely would leave a header with no information in it at all. -->
     {#if expanded || index === 0}
-      <PipelineRow {row} {now} {mode} {provider} {expansion} collapsed={!expanded} />
+      <PipelineRow
+        {row}
+        {now}
+        {mode}
+        {provider}
+        {expansion}
+        collapsed={!expanded}
+        watchId={watch.id}
+        actions={watch.actions ?? false}
+      />
     {/if}
   {/each}
 </section>

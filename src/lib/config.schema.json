@@ -66,6 +66,11 @@
       "description": "One instance and the credential used against it.",
       "type": "object",
       "properties": {
+        "actions": {
+          "description": "Allow retrying failed jobs and starting manual ones from bridgewatch.\nOff by default: bridgewatch only reads unless this is true. The token\nthen needs the api scope on GitLab (read_api cannot run jobs), or\nActions: write on GitHub.",
+          "type": "boolean",
+          "default": false
+        },
         "api_path": {
           "description": "API prefix. Overridable for proxies that mount the API elsewhere.\nDefaults per provider: `/api/v4`, or empty for github.com. GitHub\nEnterprise Server needs `/api/v3`.",
           "type": "string",
@@ -682,6 +687,11 @@
             "exclude": [],
             "only_when": null
           }
+        },
+        "eta": {
+          "description": "Learn how long this watch's deploys usually take, and show it on a\nrunning row (\"usually ~11m, 6m 30s in\"). Only a watch with\n`deploy_markers` has anything to learn from. `false` neither records\nnor shows anything.",
+          "type": "boolean",
+          "default": true
         },
         "expect": {
           "description": "GitHub only, and only with `group = \"commit\"`: workflow FILE names\n(`ci.yml`, or the whole `.github/workflows/ci.yml` path), not display\nnames, that must have a run in every commit group this watch shows.\nOnce a group has settled and its `fan_out_secs` window has passed, an\nexpected workflow with no run in it is a dead bridge, the way a GitLab\ntrigger job that created no child is. Until then it is a pending job.\nIt applies to every group the watch shows, whatever its event, so list\nonly workflows that run on EVERY event in `sources`, and none whose\n`paths` or `branches` filter can legitimately skip a push.",

@@ -1067,3 +1067,108 @@ fn auth_login_without_a_client_id_stops_at_the_configuration() {
         stderr(&out)
     );
 }
+
+// ---------------------------------------------------------------------------
+// log, retry and play
+// ---------------------------------------------------------------------------
+
+/// One GitLab account and one GitHub account, both reading a token from a
+/// variable that is never set: every test below must stop BEFORE a token is
+/// needed, and one that did not would fail on the token (70), not pass.
+fn jobs_config(dir: &TempDir, actions: bool) -> PathBuf {
+    dir.write(
+        "config.toml",
+        &format!(
+            "[accounts.gl]\nactions = {actions}\ntoken = {{ env = \"BRIDGEWATCH_TEST_TOKEN_NEVER_SET\" }}\n\n\
+             [accounts.gh]\nprovider = \"github\"\nactions = {actions}\n\
+             token = {{ env = \"BRIDGEWATCH_TEST_TOKEN_NEVER_SET\" }}\n\n\
+             [[watches]]\nid = \"w\"\naccount = \"gl\"\nproject = \"acme-corp/monorepo\"\n"
+        ),
+    )
+}
+
+const GITLAB_JOB: &str = "https://gitlab.com/acme-corp/monorepo/-/jobs/12345";
+const GITHUB_JOB: &str = "https://github.com/acme-corp/monorepo/actions/runs/1/job/2";
+
+#[test]
+fn a_job_url_that_names_nothing_configured_is_a_usage_error() {
+    let dir = TempDir::new("log-url");
+    let config = jobs_config(&dir, false);
+    for (args, expected) in [
+        (
+            vec!["log", "https://gitlab.com/acme-corp/monorepo/-/pipelines/1"],
+            "not a job's page",
+        ),
+        (
+            vec!["log", "https://evil.example/a/b/-/jobs/1"],
+            "any configured account",
+        ),
+        (vec!["retry", "--yes", "not a url"], "not an http(s) URL"),
+    ] {
+        let out = run(bin().arg("--config").arg(&config).args(&args));
+        assert_eq!(code(&out), 64, "{args:?}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains(expected),
+            "{args:?}: {}",
+            stderr(&out)
+        );
+    }
+}
+
+#[test]
+fn retry_on_an_account_without_actions_is_a_config_error_before_any_token() {
+    let dir = TempDir::new("retry-off");
+    let config = jobs_config(&dir, false);
+    for url in [GITLAB_JOB, GITHUB_JOB] {
+        let out = run(bin()
+            .arg("--config")
+            .arg(&config)
+            .args(["retry", "--yes", url]));
+        assert_eq!(code(&out), 78, "{url}: {}", stderr(&out));
+        assert!(stderr(&out).contains("actions = true"), "{}", stderr(&out));
+    }
+}
+
+#[test]
+fn a_write_with_no_terminal_and_no_yes_is_refused_before_any_token() {
+    let dir = TempDir::new("retry-notty");
+    let config = jobs_config(&dir, true);
+    // `output()` gives the child no stdin, so there is nobody to ask.
+    let out = run(bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["retry", GITLAB_JOB]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(stderr(&out).contains("--yes"), "{}", stderr(&out));
+}
+
+#[test]
+fn play_on_github_is_a_usage_error() {
+    let dir = TempDir::new("play-github");
+    let config = jobs_config(&dir, true);
+    let out = run(bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["play", "--yes", GITHUB_JOB]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(stderr(&out).contains("no manual jobs"), "{}", stderr(&out));
+}
+
+#[test]
+fn with_yes_a_write_goes_on_to_read_the_token_and_that_failure_is_an_error() {
+    // The token variable is never set, so this proves the order: every
+    // refusal above happens before this point, and this is the first thing
+    // that needs a credential. Nothing is sent.
+    let dir = TempDir::new("retry-token");
+    let config = jobs_config(&dir, true);
+    let out = run(bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["retry", "--yes", GITLAB_JOB]));
+    assert_eq!(code(&out), 70, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("BRIDGEWATCH_TEST_TOKEN_NEVER_SET"),
+        "{}",
+        stderr(&out)
+    );
+}

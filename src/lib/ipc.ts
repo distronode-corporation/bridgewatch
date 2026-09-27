@@ -35,7 +35,16 @@ import type {
   SignedIn,
   StartedSignIn,
 } from "./oauth";
-import type { DiagnosticView, Edit, Snapshot, Status, Validation } from "./types";
+import type {
+  DiagnosticView,
+  Edit,
+  JobAction,
+  JobActionOutcome,
+  LogTail,
+  Snapshot,
+  Status,
+  Validation,
+} from "./types";
 
 /** True inside the Tauri webview, false under vitest and `vite dev` in a browser. */
 export function inTauri(): boolean {
@@ -77,6 +86,18 @@ export const clearOwnToken = (account: string) => invoke<void>("clear_own_token"
 export const getLaunchAtLogin = () => invoke<boolean>("get_launch_at_login");
 export const setLaunchAtLogin = (enabled: boolean) =>
   invoke<boolean>("set_launch_at_login", { enabled });
+
+/**
+ * The end of one job's log. The job is named by its watch and its page URL;
+ * the shell resolves both against the watch's own account.
+ */
+export const jobLogTail = (watch: string, url: string) => invoke<LogTail>("job_log_tail", { watch, url });
+/**
+ * Retry or play one job. A WRITE: the shell's client refuses it unless the
+ * account has `actions = true`, and polls at once when it went through.
+ */
+export const jobAction = (watch: string, url: string, action: JobAction) =>
+  invoke<JobActionOutcome>("job_action", { watch, url, action });
 
 /** Subscribe to the poller's per-tick snapshot. */
 export function onSnapshot(handler: (s: Snapshot) => void): Promise<UnlistenFn> {

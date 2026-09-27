@@ -35,6 +35,7 @@ derives a **deploy verdict** from marker jobs the user names.
 | `verdict` | pure functions from responses to the view model |
 | `poll` | what to fetch, how often, and what to keep |
 | `notify` | what is worth interrupting somebody over |
+| `eta` | how long a watch's deploys usually take, learned from its own history |
 | `wizard` | the setup wizard's steps, with no UI: connection test, project listing, marker suggestions, `build_config` |
 
 ## Building a poller and subscribing to snapshots
@@ -47,7 +48,8 @@ use bridgewatch_core::{config, poll::Poller, token::SystemTokenProvider};
 let path = config::resolve_path(None);
 let loaded = config::load(&path)?;          // `loaded.warnings` is worth showing
 let mut poller = Poller::from_config(&loaded.config, &SystemTokenProvider)?
-    .with_ledger(bridgewatch_core::notify::NotifyLedger::default_path());
+    .with_ledger(bridgewatch_core::notify::NotifyLedger::default_path())
+    .with_eta_history(bridgewatch_core::eta::EtaHistory::default_path());
 
 // One snapshot per tick. `watch::Receiver` gives you the latest, never a backlog.
 let mut snapshots = poller.subscribe();
@@ -133,6 +135,9 @@ This is the whole contract; the GUI renders exactly this and computes nothing.
       "post_deploy_failures": [],          // blocking failures that started after the marker
       "sibling_failures": ["trigger:android"],  // failed/dead bridges other than the marker's
       "created_at": "...", "updated_at": "...",
+      // Only on a row still on its way to a deploy, once the watch has 3 samples,
+      // and while elapsed <= 2 x typical; absent (not null) otherwise:
+      // "eta": { "typical_secs": 660, "elapsed_secs": 390 },
       "parent_jobs": [{ "id": 1, "name": "secret_detection", "class": "passed",
                         "status": "success", "allow_failure": true,
                         "stage": "security", "web_url": "...",
@@ -310,8 +315,9 @@ Rules the shell can rely on:
   it *would* have fired so the next tick reports only genuine changes.
 - Dedupe key is `pipeline|kind|sorted job names`: job **names**, so a retry of
   the same failure is not news.
-- The ledger is the only thing bridgewatch persists across launches. A corrupt
-  one costs one repeated notification, never a crash.
+- The ledger is one of two things bridgewatch persists across launches (the
+  other is the deploy-time history, `eta.json` beside it). A corrupt one costs
+  one repeated notification, never a crash.
 
 ⚠️ MiniJinja follows Jinja2: `default(x)` substitutes only for an *undefined*
 value, and `failures | join(', ')` on an empty list is the defined empty string.

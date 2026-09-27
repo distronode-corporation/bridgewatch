@@ -147,6 +147,15 @@ export const REGISTRY: RegistryEntry[] = [
     label: "Backoff ceiling (s)",
     hint: "How far the poll interval may grow after rate limiting.",
   },
+  {
+    path: "accounts.*.actions",
+    tab: "accounts",
+    control: "boolean",
+    label: "Allow retry and play",
+    // Turning it on is one of the changes the shell asks about before writing
+    // (`guard::sensitive_changes`): it is what makes this app a writer.
+    hint: "Offer Retry on failed jobs and Play on manual ones. Needs the api scope on GitLab, Actions: write on GitHub.",
+  },
 
   // --- Watches -----------------------------------------------------------
   { path: "watches.*.id", tab: "watches", control: "text", label: "Id" },
@@ -295,6 +304,13 @@ export const REGISTRY: RegistryEntry[] = [
     control: "select",
     label: "Post-deploy failure",
     options: ["downgrade", "fail", "ignore"],
+  },
+  {
+    path: "watches.*.eta",
+    tab: "watches",
+    control: "boolean",
+    label: "Deploy ETA",
+    hint: "Learn how long this watch's deploys take and show it on a running row. Needs deploy markers.",
   },
   {
     path: "watches.*.jobs.*",

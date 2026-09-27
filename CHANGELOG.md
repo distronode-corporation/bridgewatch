@@ -15,6 +15,15 @@ body line with a bracket.
 
 ### Added
 
+- **Deploy ETA.** A running row now says how long this watch's deploys usually take and
+  how far in this one is (`usually ~11m · 6m 30s in` in the popover, the same after the
+  row in `bridgewatch check` and `bridgewatch watch`, and an `eta` object in their
+  `--json`). It is learned with no extra API requests: each pipeline that deploys adds
+  its push-to-marker-finished time, the median of the last 20 is shown once there are 3,
+  and it is hidden when the row settles or has run past twice the usual time. Kept in
+  `eta.json` beside the notification ledger and shared by the app and the CLI. On by
+  default; `eta = false` on a watch, or the new **Deploy ETA** box in Settings, turns it
+  off.
 - **A log file.** The app now writes its log to a daily file as well as to stderr, in
   `~/Library/Logs/bridgewatch` on macOS and `$XDG_STATE_HOME/bridgewatch` (by default
   `~/.local/state/bridgewatch`) on Linux, keeping the last 7 days. A macOS app started
@@ -26,6 +35,21 @@ body line with a bracket.
   oldest GitHub runner per architecture), so the glibc floor stays 2.35 on both. The
   `.rpm` requires `/usr/bin/secret-tool`, which resolves to `libsecret` on Fedora and to
   `secret-tool` on openSUSE.
+- **The end of a failed job's log, in the popover and on the command line.** A failed
+  job (parent or child, GitLab or GitHub) gets a **log** button that shows its last 40
+  lines under the row, as plain text with escape sequences, section markers and runner
+  timestamps taken out, with a link to the full log. `bridgewatch log <job-url>` prints
+  the same. Read on demand only, never polled, and at most 256 KiB of a log is read.
+  GitHub serves a log from a signed storage URL: bridgewatch follows that one redirect
+  itself, over https only, and sends no token there.
+- **Retry and play, opt in.** With `actions = true` on an account, a failed or canceled
+  job gets **retry** and a GitLab manual job gets **play**, each confirmed first, and
+  `bridgewatch retry <job-url>` and `bridgewatch play <job-url>` do the same (`--yes` to
+  skip the question, required without a terminal). Off by default: without it the
+  client refuses every write before anything is sent. The token needs the `api` scope on
+  GitLab or Actions: write on GitHub, and a GitLab sign-in made with `read_api` is asked
+  to sign in again rather than sent. Every write is logged at `info`. The README's
+  section [Retry and play](README.md#retry-and-play-opt-in) has the details.
 
 ### Changed
 

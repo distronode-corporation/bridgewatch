@@ -1568,6 +1568,8 @@ async fn the_real_transport_posts_the_form_with_its_content_type() {
                 "application/x-www-form-urlencoded".into(),
             )],
             body: Some("client_id=abc&grant_type=refresh_token".into()),
+            anonymous: false,
+            tail_bytes: None,
         })
         .await
         .unwrap();

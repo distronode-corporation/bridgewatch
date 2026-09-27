@@ -22,6 +22,7 @@
 //! - [`verdict`]: pure functions from responses to the view model.
 //! - [`poll`]: what to fetch, how often, and what to keep.
 //! - [`notify`]: what is worth interrupting somebody over.
+//! - [`eta`]: how long a deploy usually takes, learned from the watch's history.
 //! - [`wizard`]: the first-run setup wizard's steps, with no UI in them.
 //!
 //! # Getting a snapshot
@@ -43,8 +44,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod actions;
 pub mod client;
 pub mod config;
+pub mod eta;
 pub mod model;
 pub mod notify;
 pub mod oauth;

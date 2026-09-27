@@ -5,9 +5,11 @@ import type { Snapshot } from "../../lib/types";
 import { PARENT_JOBS, RUNNING_JOB, T0, bridge, job } from "./__fixtures__/pipeline";
 import {
   NO_STAGE,
+  approxDuration,
   bridgeVisible,
   createExpansionStore,
   elapsedSeconds,
+  etaLine,
   filterJobs,
   formatDuration,
   groupByStage,
@@ -121,5 +123,37 @@ describe("expansion store", () => {
     store.prune([2]);
     expect(store.has(1, "a")).toBe(false);
     expect(store.has(2, "a")).toBe(true);
+  });
+});
+
+describe("the deploy ETA line", () => {
+  const CREATED = "2026-09-18T10:00:00Z";
+
+  it("rounds a typical duration to the minute once it is one, and never says 60m", () => {
+    expect(approxDuration(45)).toBe("~45s");
+    expect(approxDuration(89)).toBe("~1m");
+    expect(approxDuration(90)).toBe("~2m");
+    expect(approxDuration(660)).toBe("~11m");
+    expect(approxDuration(3_580)).toBe("~1h 00m");
+    expect(approxDuration(3_900)).toBe("~1h 05m");
+    expect(approxDuration(null)).toBe("");
+  });
+
+  it("reads the core's estimate with the elapsed half ticking from created_at", () => {
+    const row = { created_at: CREATED, eta: { typical_secs: 660, elapsed_secs: 385 } };
+    expect(etaLine(row, Date.parse(CREATED) + 390_000)).toBe("usually ~11m \u00b7 6m 30s in");
+  });
+
+  it("falls back to the core's elapsed figure when created_at does not parse, and clamps skew at zero", () => {
+    const eta = { typical_secs: 660, elapsed_secs: 385 };
+    expect(etaLine({ created_at: null, eta }, T0)).toBe("usually ~11m \u00b7 6m 25s in");
+    expect(etaLine({ created_at: CREATED, eta }, Date.parse(CREATED) - 5_000)).toBe(
+      "usually ~11m \u00b7 0s in",
+    );
+  });
+
+  it("is empty when the core sent no estimate, whether the key is null or absent", () => {
+    expect(etaLine({ created_at: CREATED, eta: null }, T0)).toBe("");
+    expect(etaLine({ created_at: CREATED }, T0)).toBe("");
   });
 });

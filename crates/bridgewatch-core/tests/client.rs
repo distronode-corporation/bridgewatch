@@ -290,6 +290,8 @@ fn debug_never_prints_the_credential_header() {
         path: "/projects/1".into(),
         headers: vec![("PRIVATE-TOKEN".into(), "glpat-SECRET".into())],
         body: None,
+        anonymous: false,
+        tail_bytes: None,
     };
     let rendered = format!("{request:?} {request:#?}");
     assert!(!rendered.contains("glpat-SECRET"), "{rendered}");
@@ -748,6 +750,8 @@ async fn a_response_keeps_the_etag_and_link_headers_verbatim() {
             path: "/anything".into(),
             headers: Vec::new(),
             body: None,
+            anonymous: false,
+            tail_bytes: None,
         })
         .await
         .expect("the loopback server answers");

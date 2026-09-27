@@ -59,6 +59,9 @@ pub enum PollNow {
     ConfigChanged,
     /// A human asked.
     Manual,
+    /// A job was just retried or started from the tray, so the watch holding
+    /// it is about to change and the person who clicked is looking at it.
+    JobAction,
 }
 
 impl PollNow {
@@ -69,7 +72,7 @@ impl PollNow {
     pub fn bypasses_gate(&self) -> bool {
         matches!(
             self,
-            PollNow::Wake | PollNow::ConfigChanged | PollNow::Manual
+            PollNow::Wake | PollNow::ConfigChanged | PollNow::Manual | PollNow::JobAction
         )
     }
 }

@@ -15,8 +15,8 @@ use std::sync::Mutex;
 use super::ClientError;
 use super::http::{HttpRequest, HttpResponse, Transport};
 
-/// The answers queued for one URL fragment: status and body, in order.
-type Queue = (String, VecDeque<(u16, String)>);
+/// The answers queued for one URL fragment, in order.
+type Queue = (String, VecDeque<HttpResponse>);
 
 /// See the module documentation.
 #[derive(Debug, Default)]
@@ -33,13 +33,16 @@ impl ScriptTransport {
 
     /// Queue one answer for the next request whose URL contains `contains`.
     pub fn reply(&self, contains: &str, status: u16, body: &str) -> &Self {
+        self.reply_with(contains, HttpResponse::plain(status, body))
+    }
+
+    /// Queue one whole response, headers included: a redirect's `location`,
+    /// a rate limit's `x-ratelimit-remaining`, a truncated tail.
+    pub fn reply_with(&self, contains: &str, response: HttpResponse) -> &Self {
         let mut rules = self.rules.lock().unwrap_or_else(|e| e.into_inner());
         match rules.iter_mut().find(|(c, _)| c == contains) {
-            Some((_, queue)) => queue.push_back((status, body.to_string())),
-            None => rules.push((
-                contains.to_string(),
-                VecDeque::from([(status, body.to_string())]),
-            )),
+            Some((_, queue)) => queue.push_back(response),
+            None => rules.push((contains.to_string(), VecDeque::from([response]))),
         }
         self
     }
@@ -76,22 +79,12 @@ impl Transport for ScriptTransport {
                 })
                 .and_then(|(_, queue)| queue.pop_front())
         };
-        let Some((status, body)) = answer else {
+        let Some(response) = answer else {
             return Err(ClientError::Transport(format!(
                 "no scripted reply for {} {}",
                 request.method, request.path
             )));
         };
-        Ok(HttpResponse {
-            status,
-            body,
-            next_page: None,
-            ratelimit_remaining: None,
-            ratelimit_reset: None,
-            retry_after: None,
-            etag: None,
-            link: None,
-            oauth_scopes: None,
-        })
+        Ok(response)
     }
 }

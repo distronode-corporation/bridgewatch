@@ -55,6 +55,26 @@ use crate::config::{Account, OAuthSource, Provider};
 /// intersection of the user's access and the app's permissions.
 pub const GITLAB_SCOPE: &str = "read_api";
 
+/// The scope asked for instead when the account has `actions = true`.
+///
+/// ⚠️ GitLab has no narrower scope that can retry or play a job: `api` is
+/// full read and write access to the API as the user, which is why it is asked
+/// for only when the account opts in, and why an account that opts in has to
+/// sign in again (a stored `read_api` sign-in is refused before a write is
+/// sent, see [`session::OAuthSession::may_write`]). The application the
+/// client id names must allow `api` too, or GitLab answers `invalid_scope`.
+pub const GITLAB_WRITE_SCOPE: &str = "api";
+
+/// The GitLab scope an account signs in with: [`GITLAB_WRITE_SCOPE`] when it
+/// may run jobs, else [`GITLAB_SCOPE`].
+pub fn gitlab_scope(account: &Account) -> &'static str {
+    if account.actions {
+        GITLAB_WRITE_SCOPE
+    } else {
+        GITLAB_SCOPE
+    }
+}
+
 /// Where one account signs in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoints {
@@ -101,7 +121,7 @@ impl Endpoints {
                     provider: Provider::Gitlab,
                     device_code_url: format!("{base}/oauth/authorize_device"),
                     token_url: format!("{base}/oauth/token"),
-                    scope: Some(GITLAB_SCOPE),
+                    scope: Some(gitlab_scope(account)),
                     host: host_of(&base).unwrap_or_else(|| base.clone()),
                     origin: origin_of(&base).unwrap_or_else(|| base.clone()),
                 }
@@ -203,7 +223,10 @@ fn advice(code: &str) -> &'static str {
             ": the client id is not an application this server knows, or the application \
              is confidential. Check the client id; on GitLab, untick \"Confidential\""
         }
-        "invalid_scope" => ": the application does not allow the read_api scope",
+        "invalid_scope" => {
+            ": the application does not allow the scope asked for (read_api, or api for an \
+             account with actions = true); tick it in the application's settings"
+        }
         "unsupported_grant_type" => {
             ": this server does not offer the device grant (GitLab needs 17.9 or later, or \
              the oauth2_device_grant_flow feature flag)"

@@ -35,8 +35,9 @@ pub const REDACTED: &str = "<redacted>";
 /// [`REDACTED`].
 #[derive(Clone)]
 pub struct HttpRequest {
-    /// HTTP method: `GET` for every API call, `POST` only for the OAuth
-    /// device-flow and token endpoints ([`crate::oauth`]).
+    /// HTTP method: `GET` for every read, `POST` for the OAuth device-flow
+    /// and token endpoints ([`crate::oauth`]) and for the job actions (retry,
+    /// play), which are the only writes bridgewatch makes.
     pub method: &'static str,
     /// Fully-qualified URL.
     pub url: String,
@@ -52,6 +53,26 @@ pub struct HttpRequest {
     /// HERE, which is why `Debug` never prints it and why no log line or
     /// [`RequestLog`] field reads it.
     pub body: Option<String>,
+    /// Send this request exactly as built: no layer may add a credential or a
+    /// validator to it, and nothing may cache what it returns.
+    ///
+    /// ⛔ Set for one kind of request only: the second leg of a job log, the
+    /// short-lived signed URL a provider's log endpoint redirects to (see
+    /// [`super::log`]). The signature in that URL IS the authorisation, the
+    /// host is a storage service rather than the account's, and
+    /// [`crate::oauth::OAuthTransport`] would otherwise put the account's
+    /// bearer token on it like on every other request. The client builds it
+    /// with no credential header; this flag is what stops a layer below from
+    /// adding one.
+    pub anonymous: bool,
+    /// Keep only the last this-many bytes of the body, however long it is.
+    ///
+    /// ⚠️ A job log can run to tens of megabytes and only its end is wanted,
+    /// so the transport never buffers more than about twice this: it reads
+    /// the body in chunks and drops the front as it goes, and says in
+    /// [`HttpResponse::truncated`] whether anything was dropped. `None` for
+    /// every JSON request, whose body is read whole as it always was.
+    pub tail_bytes: Option<usize>,
 }
 
 impl std::fmt::Debug for HttpRequest {
@@ -71,6 +92,8 @@ impl std::fmt::Debug for HttpRequest {
                     .collect::<Vec<_>>(),
             )
             .field("body", &self.body.as_ref().map(|_| REDACTED))
+            .field("anonymous", &self.anonymous)
+            .field("tail_bytes", &self.tail_bytes)
             .finish()
     }
 }
@@ -120,6 +143,35 @@ pub struct HttpResponse {
     /// "there is nothing here to tell you" against "this token was granted no
     /// scopes", so this is `Option<String>` and never defaulted to `""`.
     pub oauth_scopes: Option<String>,
+    /// `location`, exactly as received. Read only by a job log's one explicit
+    /// redirect follow ([`super::log::follow`]); every other 3xx is refused as
+    /// it always was.
+    pub location: Option<String>,
+    /// True when the body is not the whole resource: a `tail_bytes` request
+    /// whose response was longer than the tail and had its front dropped, or
+    /// a `206` whose `content-range` starts after byte 0. Always false for a
+    /// request without `tail_bytes`.
+    pub truncated: bool,
+}
+
+impl HttpResponse {
+    /// A response with a status and a body and no headers at all, for test
+    /// doubles and scripts.
+    pub fn plain(status: u16, body: &str) -> Self {
+        Self {
+            status,
+            body: body.to_string(),
+            next_page: None,
+            ratelimit_remaining: None,
+            ratelimit_reset: None,
+            retry_after: None,
+            etag: None,
+            link: None,
+            oauth_scopes: None,
+            location: None,
+            truncated: false,
+        }
+    }
 }
 
 /// Executes HTTP requests. The one seam between the verdict engine and the
@@ -394,8 +446,8 @@ impl ReqwestTransport {
 #[async_trait::async_trait]
 impl Transport for ReqwestTransport {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ClientError> {
-        // Only the OAuth endpoints post, and they post a form; everything
-        // else is a GET exactly as before.
+        // The OAuth endpoints post a form and the job actions post nothing;
+        // everything else is a GET exactly as before.
         let mut builder = match request.method {
             "POST" => self
                 .client
@@ -445,11 +497,38 @@ impl Transport for ReqwestTransport {
         // different answer from a fine-grained token that sends no header at
         // all. See the field's documentation.
         let oauth_scopes = header("x-oauth-scopes");
+        let location = header("location").filter(|s| !s.is_empty());
 
-        let body = response
-            .text()
-            .await
-            .map_err(|e| ClientError::Transport(describe(&e)))?;
+        let (body, truncated) = match request.tail_bytes {
+            None => (
+                response
+                    .text()
+                    .await
+                    .map_err(|e| ClientError::Transport(describe(&e)))?,
+                false,
+            ),
+            Some(keep) => {
+                let starts_late = status == 206
+                    && header("content-range")
+                        .as_deref()
+                        .and_then(range_start)
+                        .is_some_and(|start| start > 0);
+                let mut tail = Tail::new(keep);
+                let mut response = response;
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|e| ClientError::Transport(describe(&e)))?
+                {
+                    tail.push(&chunk);
+                }
+                let (bytes, dropped) = tail.finish();
+                (
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                    dropped || starts_late,
+                )
+            }
+        };
 
         Ok(HttpResponse {
             status,
@@ -461,8 +540,72 @@ impl Transport for ReqwestTransport {
             etag,
             link,
             oauth_scopes,
+            location,
+            truncated,
         })
     }
+}
+
+/// The last `keep` bytes of a stream, held in at most about twice that.
+///
+/// Public so the bound can be tested without a network: the transport is the
+/// only production caller.
+#[derive(Debug)]
+pub struct Tail {
+    keep: usize,
+    bytes: Vec<u8>,
+    dropped: bool,
+}
+
+impl Tail {
+    /// An empty tail that will keep the last `keep` bytes.
+    pub fn new(keep: usize) -> Self {
+        Self {
+            keep: keep.max(1),
+            bytes: Vec::new(),
+            dropped: false,
+        }
+    }
+
+    /// Append a chunk, dropping the front once more than twice `keep` is
+    /// held. Twice rather than exactly `keep` so a stream of small chunks does
+    /// not move the whole buffer on every one of them.
+    pub fn push(&mut self, chunk: &[u8]) {
+        self.bytes.extend_from_slice(chunk);
+        if self.bytes.len() > self.keep.saturating_mul(2) {
+            let cut = self.bytes.len() - self.keep;
+            self.bytes.drain(..cut);
+            self.dropped = true;
+        }
+    }
+
+    /// How many bytes are held right now. Never more than twice `keep` plus
+    /// one chunk.
+    pub fn held(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// The last `keep` bytes, and whether anything before them was dropped.
+    pub fn finish(mut self) -> (Vec<u8>, bool) {
+        if self.bytes.len() > self.keep {
+            let cut = self.bytes.len() - self.keep;
+            self.bytes.drain(..cut);
+            self.dropped = true;
+        }
+        (self.bytes, self.dropped)
+    }
+}
+
+/// The first byte position of a `content-range: bytes <start>-<end>/<size>`.
+fn range_start(header: &str) -> Option<u64> {
+    header
+        .trim()
+        .strip_prefix("bytes ")?
+        .split('-')
+        .next()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Render a reqwest error usefully.

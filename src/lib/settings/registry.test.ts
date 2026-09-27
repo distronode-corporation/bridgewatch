@@ -120,6 +120,21 @@ describe("the job-list keys (ui.jobs, watches.*.show.jobs)", () => {
   });
 });
 
+describe("the deploy ETA key (watches.*.eta)", () => {
+  it("is in the schema, defaults to on there, and is a checkbox on the Watches tab", () => {
+    // Named, like the job-list keys: the set differences above would catch a
+    // missing entry, but not a control that renders it as text, and not a
+    // default that quietly became off.
+    expect(leafPaths(SCHEMA)).toContain("watches.*.eta");
+    // `default` is not a key the settings walker reads, so `JsonSchema` has none.
+    const watch = (SCHEMA.$defs?.Watch?.properties ?? {}) as Record<string, { default?: unknown }>;
+    expect(watch.eta?.default).toBe(true);
+    const eta = entry("watches.*.eta");
+    expect(eta.control).toBe("boolean");
+    expect(eta.tab).toBe("watches");
+  });
+});
+
 describe("leafPaths", () => {
   const paths = leafPaths(SCHEMA);
 

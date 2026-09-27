@@ -185,6 +185,16 @@ pub struct PipelineView {
     pub created_at: Option<String>,
     /// True while anything is genuinely in flight. A gate is not.
     pub live: bool,
+    /// How long this watch's deploys usually take, and how far in this one
+    /// is. Only on a row still on its way to a deploy, and only once the
+    /// watch has enough history; see [`crate::eta`].
+    ///
+    /// Filled in by the poller, never by the rules: the rules read no clock
+    /// and no history. Omitted when absent, so a settled row serialises
+    /// exactly as it did before this field existed, and `check --json` gains
+    /// the key only where there is something in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eta: Option<crate::eta::Eta>,
 }
 
 /// One watch's contribution to the popover.
@@ -215,6 +225,15 @@ pub struct WatchView {
     /// and every recorded snapshot are a committed-bytes contract.
     #[serde(default, skip_serializing_if = "Provider::is_gitlab")]
     pub provider: Provider,
+    /// Whether the watch's account allows retry and play (`actions = true`),
+    /// so the popover offers them only where they can be sent. The client
+    /// refuses a write regardless; this is what the button reads.
+    ///
+    /// Omitted when false, for the reason `provider` is omitted for GitLab:
+    /// every snapshot of an account that never opted in serialises exactly as
+    /// it did before this field existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub actions: bool,
 }
 
 impl WatchView {
@@ -637,6 +656,7 @@ pub fn evaluate_pipeline(
         updated_at: detail.pipeline.updated_at.clone(),
         created_at: detail.pipeline.created_at.clone(),
         live: anything_live,
+        eta: None,
     };
 
     let mut script_error = None;

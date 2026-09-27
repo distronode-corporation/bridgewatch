@@ -5,11 +5,13 @@ export { default as UpdatedAgo } from "./UpdatedAgo.svelte";
 export {
   FAILURE_VIEW_CLASSES,
   NO_STAGE,
+  approxDuration,
   bridgeVisible,
   classWord,
   createExpansionStore,
   defaultExpanded,
   elapsedSeconds,
+  etaLine,
   expansionKey,
   filterJobs,
   formatDuration,

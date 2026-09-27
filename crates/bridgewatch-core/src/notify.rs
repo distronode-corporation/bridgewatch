@@ -69,7 +69,8 @@ pub struct Notification {
 /// baselined.
 ///
 /// Persisted, because the alternative is that restarting the app re-notifies
-/// everything. It is the only thing bridgewatch keeps across launches.
+/// everything. The only other thing bridgewatch keeps across launches is the
+/// deploy-time history, [`crate::eta::EtaHistory`], in the same directory.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NotifyLedger {
     /// Dedupe keys already delivered.
@@ -112,7 +113,9 @@ impl NotifyLedger {
         Self::path_named("notify-cli.json")
     }
 
-    fn path_named(file: &str) -> PathBuf {
+    /// `file` in bridgewatch's state directory. Also where
+    /// [`crate::eta::EtaHistory`] keeps its samples.
+    pub(crate) fn path_named(file: &str) -> PathBuf {
         dirs::state_dir()
             .or_else(dirs::data_local_dir)
             .unwrap_or_else(|| PathBuf::from("."))

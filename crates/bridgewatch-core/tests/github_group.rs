@@ -124,6 +124,8 @@ impl Transport for Routed {
             etag: None,
             link: reply.link,
             oauth_scopes: None,
+            location: None,
+            truncated: false,
         })
     }
 }
@@ -901,6 +903,51 @@ async fn a_deeper_dive_costs_no_request_on_a_commit_group() {
 // ---------------------------------------------------------------------------
 // Deploy markers across runs
 // ---------------------------------------------------------------------------
+
+/// A commit group learns its deploy time like a GitLab pipeline does: from the
+/// group's creation (its earliest run's) to the marker job finishing. The
+/// marker here is in the OLDER run, whose id is not the group's, so its job is
+/// found among the runs' jobs rather than under the row's own id.
+#[tokio::test]
+async fn a_commit_group_that_deployed_records_its_push_to_marker_time() {
+    let transport = Routed::new()
+        .on(
+            &list_path("push"),
+            Reply::ok(runs_page(&[
+                Run::push(4202, "CI", "2026-09-18T09:00:30Z", "success"),
+                Run::push(4201, "Deploy", "2026-09-18T09:00:00Z", "success"),
+            ])),
+        )
+        .on(
+            &jobs_path(4202),
+            Reply::ok(jobs_page(&[job(
+                9302,
+                "test",
+                "success",
+                "2026-09-18T09:00:40Z",
+                "2026-09-18T09:03:00Z",
+            )])),
+        )
+        .on(
+            &jobs_path(4201),
+            Reply::ok(jobs_page(&[job(
+                9301,
+                "publish",
+                "success",
+                "2026-09-18T09:05:00Z",
+                "2026-09-18T09:11:00Z",
+            )])),
+        );
+    let mut poller = poller_for(&group_config(""), transport);
+
+    let snapshot = poller.tick().await.snapshot;
+    let row = &snapshot.watches[0].rows[0];
+    assert_eq!(row.id, 4202);
+    assert_eq!(row.deploy, "live");
+    assert_eq!(row.deploy_marker.as_ref().unwrap().pipeline_id, 4201);
+    // 09:00:00 (the earliest run) to 09:11:00.
+    assert_eq!(poller.eta_history().samples("bw-push"), [660]);
+}
 
 /// Post-deploy and marker-scope failures read the runs as scopes, unchanged.
 /// A failure in ANOTHER workflow that started after the marker succeeded is a
@@ -2033,6 +2080,8 @@ async fn a_gitlab_client_ignores_expect_entirely() {
                 etag: None,
                 link: None,
                 oauth_scopes: None,
+                location: None,
+                truncated: false,
             })
         }
     }

@@ -452,6 +452,19 @@ that way across refreshes. Every job links to its page on GitLab or GitHub. A Gi
 workflow in `expect` that never started shows as a bridge marked **never started**, linked
 to the workflow's page.
 
+A failed job, in the parent or in a child pipeline, on GitLab or GitHub, has a **log**
+button. It opens the end of that job's log under the row: the last 40 lines, in a
+scrollable box, with a link to the full log on its page (opened through the same
+[host rule](#opening-links) as every other link). The log is read when you open it and
+never by the poller, and at most 256 KiB of it is read, from the end. It is shown as
+plain text: terminal colour codes, GitLab's collapsible-section markers, lines a
+progress bar overwrote, control characters and the runner's per-line timestamps
+(GitHub's, and GitLab's when the runner adds them) are taken out. GitHub serves a log
+from a signed storage URL that its API redirects to. bridgewatch follows that one
+redirect itself, only to an `https` URL, and sends no token or credential header there:
+the signature in the URL is the authorisation, and the request log shows that leg as
+`(redirect) host/path` without the signature.
+
 `[ui].jobs` picks what an expanded row lists: `all` (every job, the default) or
 `failures` (only failed jobs, tolerated failures and manual gates, and only the bridges
 that have something to say). `watches.show.jobs` overrides it per watch. This is
@@ -475,6 +488,75 @@ as of this release, whose Free-plan figure is 100 a minute; under those a busy e
 a Free account would be rate limited while a pipeline runs, and bridgewatch would back
 off (up to `rate_limit_backoff.max_secs`). Raise `live_secs` if that matters to you.
 GitHub's budget is far smaller and counts differently, see [Rate limits](#rate-limits).
+
+## Retry and play (opt in)
+
+bridgewatch reads by default and writes nothing. Set `actions = true` on an account and
+the popover offers **retry** on a failed or canceled job and **play** on a GitLab manual
+job, for that account's watches only. Each one asks first, naming the job, the project and
+the pipeline, and sends one request however many times it is clicked. When the request
+goes through, the watch is polled at once. A refusal is shown under the job.
+
+```toml
+[accounts.gitlab]
+token = { keyring = { service = "glab:gitlab.com:token", user = "" } }
+actions = true
+```
+
+- **Refused in the core, not just hidden.** With `actions` off (the default) the client
+  refuses a retry or play before anything is sent, whatever asks for it: the popover, the
+  CLI or a script in the webview. Turning `actions` on from Settings (or **Edit as text**)
+  is one of the changes the app asks you to confirm before it writes the file, see
+  [Command sources need confirmation](#command-sources-need-confirmation).
+- **Every write is logged** at `info` in the log file: the account, the project, the job
+  id, the action and how it ended. Never the token.
+- **GitHub has no manual jobs**, so there is no play there. Retry is GitHub's re-run of
+  one job, which runs again under the same id as a new attempt of its run.
+- **The CLI:** `bridgewatch retry <job-url>` and `bridgewatch play <job-url>`, see [CLI](#cli).
+
+What the token needs:
+
+| Token | To read logs | To retry and play |
+| --- | --- | --- |
+| GitLab personal access token, or glab's login | `read_api` | `api`, and a role that may run pipelines on the project (Developer or above). `read_api` cannot run jobs; `glab auth login` creates a token with `api` unless it was narrowed. |
+| GitLab sign-in (`token = { oauth = .. }`) | `read_api` | `api`. The sign-in asks for `api` only on an account with `actions = true`, so after turning it on, sign in again: a sign-in made with `read_api` is refused before a write is sent, with a message that says so. The OAuth application must allow the `api` scope too (on your own application, tick it; the built-in gitlab.com application has to allow it as well). |
+| GitHub classic token, or gh's login | `repo` (private repositories) | `repo`, and write access to the repository. gh's default login includes `repo`. |
+| GitHub fine-grained token | Actions: read | Actions: read and write. |
+| GitHub sign-in (the bridgewatch-ci GitHub App) | Actions: read | The App needs **Actions: read and write** in its own permissions, which its owner sets on GitHub; each installation then has to approve the new permission. A GitHub App's user token asks for no scope, so signing in again changes nothing until then. |
+
+A 403 on a write reads "this token cannot run jobs", with what it needs, and not "check
+the token": the token works, it may only read. A 401 is still a bad token, and a GitHub
+rate limit is still a rate limit.
+
+## Deploy ETA
+
+While a push is still on its way, a row says how long this watch's deploys usually take
+and how far in this one is: `usually ~11m · 6m 30s in` in the popover, and
+`usually ~11m, 6m 30s in` in `bridgewatch check` and `bridgewatch watch`. It costs no
+API requests: it is learned from pipelines the watch has already fetched.
+
+- **What is measured.** When a pipeline's deploy first reads `live` (a marker succeeded
+  and no other marker can still move), bridgewatch records the time from the pipeline's
+  creation to the marker job finishing. A pipeline is measured once. A missing or
+  unreadable time is no sample, and so is a zero or negative one. Any watch with
+  `deploy_markers` learns, primary or secondary; one without has nothing to learn from.
+- **What is shown.** The median of the last 20 samples, once there are at least 3, on a
+  row whose deploy is still in progress, or that is running on a watch with markers
+  none of which has appeared yet. It disappears when the row settles, and once the
+  elapsed time passes twice the usual one, where a typical figure no longer says
+  anything.
+- **Where it is kept.** `eta.json` beside the notification ledger, in the state
+  directory: `~/Library/Application Support/bridgewatch` on macOS (the data directory,
+  as macOS has no state directory) and `$XDG_STATE_HOME/bridgewatch` on Linux (by
+  default `~/.local/state/bridgewatch`). The app and the CLI share it; each re-reads it
+  and merges before writing, and writes to a temporary file that is renamed over it. A
+  corrupt file costs its samples and one warning, never a poll. `check --fixture` and
+  `watch --fixture` learn in memory only.
+- **Keyed by the watch's `id`.** Renaming a watch starts its history again.
+
+`eta = false` on a watch turns all of it off: nothing is recorded and nothing is shown.
+In `check --json` and `watch --json` a running row with an estimate carries
+`"eta": { "typical_secs": 660, "elapsed_secs": 390 }`; every other row has no `eta` key.
 
 ## Tokens
 
@@ -526,7 +608,8 @@ permissions every time a token is needed. So when Settings or the wizard would w
 (a new one, or a changed command), the app writes nothing and shows the exact command for
 you to confirm first. The same applies to a change that would send a credential to a host
 it has not been sent to before: a new `base_url` for an account that already has a
-token, or a keyring or environment source on a host no account used. Edits you make in your own editor are not
+token, or a keyring or environment source on a host no account used, and to turning
+`actions` on for an account (see [Retry and play](#retry-and-play-opt-in)). Edits you make in your own editor are not
 subject to this: the check is on the app's write path, and the file is yours.
 `config validate` warns about every command source.
 
@@ -581,6 +664,7 @@ Accounts of both providers can sit in one file:
 | `header` | `"PRIVATE-TOKEN"` (GitLab personal and project access tokens) or `"Authorization: Bearer"` (GitLab OAuth and CI job tokens, and every GitHub token) [`PRIVATE-TOKEN`, or `Authorization: Bearer` for github, where `PRIVATE-TOKEN` is an error]. |
 | `timeout_secs` | Per-request timeout [15]. |
 | `rate_limit_backoff.max_secs` | Ceiling for the doubled interval after rate limiting or errors [300]. A `retry-after`, or GitHub's rate-limit reset time, is waited out in full even when it is longer. |
+| `actions` | Allow retrying jobs and starting manual ones from the popover and the CLI [false]. The token then needs more than read access, see [Retry and play](#retry-and-play-opt-in). |
 
 **`[[watches]]`**, in display order:
 
@@ -608,6 +692,7 @@ Accounts of both providers can sit in one file:
 | `deploy_markers` | Job names or `re:` patterns whose success means "deployed". With several, a success counts only once none of the others is still in flight; config order then decides which success is reported [`[]`]. |
 | `sibling_failure` | What a failed or dead bridge other than the marker's does to a deploy: `downgrade`, `fail` or `ignore` [`downgrade`]. |
 | `post_deploy_failure` | The same for a blocking failure after the marker, or in the marker's own pipeline [`downgrade`]. |
+| `eta` | Learn how long this watch's deploys take and show it on a running row, see [Deploy ETA](#deploy-eta) [true]. |
 | `[watches.jobs]` | Job-name pattern (literal or `re:`) to `gate`, `warning`, `blocking` or `ignore`. File order, first match wins. Applies to bridges too. On GitHub it is the only way to tolerate a failure. |
 | `notify.deployed`, `notify.blocking_failure`, `notify.finished` | Notify on these events [true]. |
 | `notify.started`, `notify.gate_opened` | Notify on these events [false]. |
@@ -776,6 +861,12 @@ bridgewatch config dump                  # the config with every default filled 
 
 bridgewatch fixture record <pipeline-id> [--out <dir>] [--account <name>] [--project <id|path>] [--list]
 bridgewatch fixture scrub <dir>... [--check]
+
+bridgewatch log <job-url> [--account <name>] [--json]
+                                         # the last 40 lines of a job's log
+bridgewatch retry <job-url> [--account <name>] [--yes]
+bridgewatch play <job-url> [--account <name>] [--yes]
+                                         # retry a job, or start a manual one (GitLab)
 ```
 
 `--config <path>` (or `-c`) is accepted before or after any subcommand. `watch` does not
@@ -795,6 +886,16 @@ watch is added as secondary with a note on stderr; `--primary` keeps it primary.
 GitHub watch polls at 30 s live and 120 s idle unless `--live-secs` says otherwise.
 Redirect it yourself once it reads right.
 
+**`log`, `retry` and `play`** take a job's page URL, as the popover links to it:
+`https://<host>/<group>/<project>/-/jobs/<id>` on GitLab (a `base_url` with a path prefix
+included) or `https://github.com/<owner>/<repo>/actions/runs/<run>/job/<id>` on GitHub.
+The URL is matched to a configured account by its host, the same rule links are opened
+by; when two accounts share a host, `--account` names one. `retry` and `play` are writes:
+they need `actions = true` on the account (exit 78 otherwise, before any token is read),
+ask `Retry job ... ? [y/N]` on the terminal, and without a terminal refuse unless `--yes`
+is given (exit 64). Answering no exits 1 and sends nothing. `play` on a GitHub account is
+a usage error.
+
 **`fixture record`** walks one parent pipeline and its children into a fixture directory
 for the core's tests; `fixture scrub` re-applies the allow-list that keeps personal data
 out of fixtures. Recording is GitLab-only: a github account is refused with exit 64. See
@@ -813,13 +914,13 @@ because a secondary watch must not be able to outvote a primary one.
 
 ```
   0   check/watch: deployed or succeeded_no_deploy; any other command: success
-  1   check/watch: failed; fixture scrub --check: a fixture would change
+  1   check/watch: failed; fixture scrub --check: a fixture would change; retry/play: answered no
   2   check/watch: deployed_with_failure
   3   check/watch: running, parked_gate or canceled
   4   check/watch: unknown (nothing matched, or a request failed; errors on stderr)
-  64  usage error: bad arguments, or --watch names no configured watch
-  70  any other error before a verdict (token, fixture, recording, I/O)
-  78  the configuration is missing, unreadable or invalid
+  64  usage error: bad arguments, a --watch or job URL that names nothing configured, or retry/play with no terminal and no --yes
+  70  any other error (token, fixture, recording, I/O, or a log or job request that failed)
+  78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true
 ```
 
 ## Build from source

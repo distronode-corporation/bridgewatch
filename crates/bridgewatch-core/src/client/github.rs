@@ -72,6 +72,7 @@ use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 
 use super::http::{HttpRequest, HttpResponse, RequestLog, RequestRing, Transport};
+use super::log::{self as joblog, JobActionOutcome, LOG_TAIL_LINES, LogTail};
 use super::wire::github as wire;
 use super::{CiClient, ClientError, ListQuery};
 use crate::config::{Account, ProjectRef, Provider};
@@ -122,6 +123,8 @@ pub struct GitHubClient {
     /// What `expect` measures a group's window against. The wall clock, except
     /// in a test that has to step over a window without sleeping through it.
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
+    /// The account's `actions`: whether a re-run may be SENT.
+    actions: bool,
 }
 
 impl std::fmt::Debug for GitHubClient {
@@ -132,6 +135,7 @@ impl std::fmt::Debug for GitHubClient {
             .field("header_name", &self.header_name)
             .field("header_value", &super::http::REDACTED)
             .field("transport", &self.transport)
+            .field("actions", &self.actions)
             .finish()
     }
 }
@@ -154,6 +158,7 @@ impl GitHubClient {
             in_flight: super::InFlight::new(),
             groups: Arc::new(Mutex::new(group::Memo::default())),
             clock: Arc::new(Utc::now),
+            actions: account.actions,
         }
     }
 
@@ -343,6 +348,106 @@ impl GitHubClient {
         Ok(repo.into())
     }
 
+    /// `GET /repos/{owner}/{repo}/actions/jobs/{id}/logs`: the end of one
+    /// job's log.
+    ///
+    /// GitHub answers with a `302` to a signed blob URL, which is followed
+    /// ONCE, by hand, without the token (see [`super::log`]). An instance that
+    /// answers `200` with the log itself is read the same way, tail only.
+    pub async fn job_log_tail(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+        max_bytes: usize,
+    ) -> Result<LogTail, ClientError> {
+        let max_bytes = max_bytes.max(1);
+        let path = format!(
+            "/repos/{}/actions/jobs/{job_id}/logs",
+            repo_segment(project)?
+        );
+        let mut request = self.request("GET", &path);
+        request.tail_bytes = Some(max_bytes);
+        let first = self
+            .send(request, |r| match r.status {
+                s if joblog::is_redirect(s) => None,
+                s => status_error(s, &path, r),
+            })
+            .await?;
+        let response = if joblog::is_redirect(first.status) {
+            // No `Range`: the blob store was measured ignoring a suffix range,
+            // and the transport keeps only the tail either way.
+            let next = joblog::follow(first.location.as_deref(), max_bytes, false, &path)?;
+            let next_path = next.path.clone();
+            self.send(next, |r| joblog::blob_error(r.status, &next_path))
+                .await?
+        } else {
+            first
+        };
+        Ok(LogTail::from_body(
+            &response.body,
+            Provider::Github,
+            response.truncated,
+            LOG_TAIL_LINES,
+        ))
+    }
+
+    /// `POST /repos/{owner}/{repo}/actions/jobs/{id}/rerun`. A WRITE; see
+    /// [`CiClient::retry_job`]. GitHub re-runs the job under the same id, as a
+    /// new attempt of its run, and answers `201` with no body.
+    pub async fn retry_job(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError> {
+        // ⛔ Before anything is built, let alone sent.
+        if !self.actions {
+            return Err(ClientError::ActionsDisabled);
+        }
+        let path = format!(
+            "/repos/{}/actions/jobs/{job_id}/rerun",
+            repo_segment(project)?
+        );
+        let request = self.request("POST", &path);
+        self.send(request, |r| write_status_error(r, &path)).await?;
+        Ok(JobActionOutcome::default())
+    }
+
+    /// A request to this account's API, credential and GitHub's two pinned
+    /// headers included. What [`Self::get_json`] builds, for the requests that
+    /// are not JSON reads.
+    fn request(&self, method: &'static str, path: &str) -> HttpRequest {
+        HttpRequest {
+            method,
+            url: format!("{}{}{}", self.base_url, self.api_path, path),
+            path: path.to_string(),
+            headers: vec![
+                (self.header_name.to_string(), self.header_value.clone()),
+                ("Accept".to_string(), ACCEPT.to_string()),
+                ("X-GitHub-Api-Version".to_string(), API_VERSION.to_string()),
+            ],
+            body: None,
+            anonymous: false,
+            tail_bytes: None,
+        }
+    }
+
+    /// One request through [`joblog::send`], with this client's transport,
+    /// bound and ring.
+    async fn send(
+        &self,
+        request: HttpRequest,
+        classify: impl Fn(&HttpResponse) -> Option<ClientError>,
+    ) -> Result<HttpResponse, ClientError> {
+        joblog::send(
+            self.transport.as_ref(),
+            &self.in_flight,
+            &self.ring,
+            request,
+            classify,
+        )
+        .await
+    }
+
     /// The jobs and bridges of a commit-group row: one bridge per run in the
     /// group, plus what its `expect` adds (see [`group`]).
     ///
@@ -506,6 +611,8 @@ impl GitHubClient {
                 ("X-GitHub-Api-Version".to_string(), API_VERSION.to_string()),
             ],
             body: None,
+            anonymous: false,
+            tail_bytes: None,
         };
 
         // Before the clock starts: `ms` is the request, not the queue.
@@ -781,6 +888,37 @@ impl CiClient for GitHubClient {
     async fn project(&self, project: &ProjectRef) -> Result<Project, ClientError> {
         GitHubClient::project(self, project).await
     }
+
+    async fn job_log_tail(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+        max_bytes: usize,
+    ) -> Result<LogTail, ClientError> {
+        GitHubClient::job_log_tail(self, project, job_id, max_bytes).await
+    }
+
+    async fn retry_job(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError> {
+        GitHubClient::retry_job(self, project, job_id).await
+    }
+
+    /// Refused without a request: a GitHub Actions job has no manual state to
+    /// start from. The nearest thing, a `workflow_dispatch`, starts a whole
+    /// workflow with inputs, which is not what "play" means.
+    async fn play_job(
+        &self,
+        _project: &ProjectRef,
+        _job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError> {
+        Err(ClientError::Unsupported {
+            message: "GitHub Actions has no manual jobs to start; play is a GitLab action"
+                .to_string(),
+        })
+    }
 }
 
 /// Map an HTTP status onto a [`ClientError`], or `None` when it is a success.
@@ -842,5 +980,50 @@ pub fn status_error(status: u16, path: &str, response: &HttpResponse) -> Option<
             status: other,
             path: path.to_string(),
         }),
+    }
+}
+
+/// [`status_error`] for a WRITE.
+///
+/// The rate-limit reading is kept whole: a 403 carrying
+/// `x-ratelimit-remaining: 0` or `retry-after` is still a rate limit on a
+/// write, never a permission problem. Otherwise a 403 is the token's
+/// PERMISSION to write ([`ClientError::WriteForbidden`]), whose shapes were
+/// "Resource not accessible by integration" (the GitHub App),
+/// "... by personal access token" (fine-grained) and "Must have admin
+/// rights"; any other 403 message, and a 409 or 422, is GitHub refusing this
+/// job (one whose run is still in progress, say) and is shown as it stands.
+/// A 401 is still a bad token.
+pub fn write_status_error(response: &HttpResponse, path: &str) -> Option<ClientError> {
+    match status_error(response.status, path, response) {
+        Some(ClientError::Auth { status: 403, .. }) => {
+            let message = joblog::sanitize_message(&response.body);
+            let about_permission = message.as_deref().is_none_or(|m| {
+                let m = m.to_ascii_lowercase();
+                m.contains("not accessible")
+                    || m.contains("admin rights")
+                    || m.contains("permission")
+            });
+            Some(if about_permission {
+                ClientError::WriteForbidden {
+                    status: 403,
+                    provider: Provider::Github,
+                }
+            } else {
+                ClientError::JobRefused {
+                    provider: Provider::Github,
+                    message: message.unwrap_or_default(),
+                }
+            })
+        }
+        Some(ClientError::Unexpected {
+            status: status @ (409 | 422),
+            ..
+        }) => Some(ClientError::JobRefused {
+            provider: Provider::Github,
+            message: joblog::sanitize_message(&response.body)
+                .unwrap_or_else(|| format!("the request was refused ({status})")),
+        }),
+        other => other,
     }
 }

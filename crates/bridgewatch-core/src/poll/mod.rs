@@ -14,6 +14,7 @@ pub use policy::{MAX_RETRY_AFTER, POLL_NOW_MIN_GAP, PollNow, PollPolicy};
 
 use crate::client::{CiClient, ClientError, ListQuery, RequestRing, in_order};
 use crate::config::{Config, JobsMode, ProjectRef, Provider, Role, Watch, WatchRules};
+use crate::eta::EtaHistory;
 use crate::model::{Bridge, Pipeline, PipelineDetail};
 use crate::notify::{Notification, NotifyLedger, notifications_for};
 use crate::status::Status;
@@ -43,6 +44,9 @@ struct WatchState {
     /// The watch's account's provider, carried into every view. An unknown
     /// account reads as GitLab, the default; that watch shows an error anyway.
     provider: Provider,
+    /// The watch's account's `actions`, carried into every view so the
+    /// popover offers Retry and Play only where they can be sent.
+    actions: bool,
     last_bridges: HashMap<u64, Vec<Bridge>>,
     /// What to add to a "not found" on this watch's list request, when its
     /// account signs in through a GitHub App (see `oauth::not_found_hint`).
@@ -69,6 +73,13 @@ pub struct Poller {
     ring: RequestRing,
     ledger: NotifyLedger,
     ledger_path: Option<std::path::PathBuf>,
+    /// How long each watch's deploys have taken. Learned in the ordered half
+    /// of [`Poller::tick`], so the GUI and `bridgewatch check` both learn.
+    eta: EtaHistory,
+    eta_path: Option<std::path::PathBuf>,
+    /// What "now" is for an estimate's elapsed time. The wall clock, except
+    /// in a test that has to put a pipeline a known distance into its run.
+    clock: Clock,
     sender: tokio::sync::watch::Sender<Snapshot>,
     /// Whether anything was in flight last tick. The backoff gate needs an
     /// interval before it knows this tick's answer, and last tick's is the only
@@ -102,6 +113,10 @@ impl Poller {
                     .get(&watch.account)
                     .map(|a| a.provider)
                     .unwrap_or_default(),
+                actions: config
+                    .accounts
+                    .get(&watch.account)
+                    .is_some_and(|a| a.actions),
                 not_found_hint: config.accounts.get(&watch.account).and_then(|a| {
                     crate::oauth::not_found_hint(a, &crate::oauth::BuiltinClients::shipped())
                 }),
@@ -133,6 +148,9 @@ impl Poller {
             ring,
             ledger: NotifyLedger::default(),
             ledger_path: None,
+            eta: EtaHistory::default(),
+            eta_path: None,
+            clock: Arc::new(chrono::Utc::now),
             sender,
             last_any_live: false,
         })
@@ -168,43 +186,20 @@ impl Poller {
             .iter()
             .filter(|(name, _)| used.contains(name.as_str()))
         {
-            let transport: Arc<dyn crate::client::Transport> = Arc::new(
-                crate::client::ReqwestTransport::new(std::time::Duration::from_secs(
-                    account.timeout_secs,
-                ))
-                .map_err(PollerError::Client)?,
-            );
-            // ⛔ Through the factory, never by naming a client type: an account
-            // whose provider has no client yet fails HERE, loudly, rather than
-            // being handed a GitLab client pointed at somebody else's API.
-            let client = match &account.token {
-                crate::config::TokenSource::Oauth(source) => {
-                    let transport = crate::oauth::transport_for(
-                        name,
-                        account,
-                        source,
-                        &crate::oauth::BuiltinClients::shipped(),
-                        transport,
-                        store.clone(),
-                    )
-                    .map_err(|e| PollerError::SignIn(name.clone(), e))?;
-                    crate::client::client_for(
-                        &crate::oauth::bearer_account(account),
-                        &crate::token::Secret::new(""),
-                        transport,
-                        ring.clone(),
-                    )
-                }
-                source => {
-                    let token = crate::token::resolve(source, name, provider)
-                        .map_err(|e| PollerError::Token(name.clone(), e))?;
-                    crate::client::client_for(account, &token, transport, ring.clone())
-                }
-            }
-            .map_err(PollerError::Client)?;
+            let client = build_client(name, account, provider, store.clone(), ring.clone())?;
             clients.insert(name.clone(), client);
         }
         Self::with_clients(config, clients, ring).map_err(PollerError::Config)
+    }
+
+    /// The client each account polls through, by account name.
+    ///
+    /// Handed out so a job's log and a job action go through the SAME client
+    /// the account's watches use: one in-flight bound per account, one ring,
+    /// and for a signed-in account one session, so a refresh the poller made
+    /// is the one the action sends.
+    pub fn clients(&self) -> &BTreeMap<String, Arc<dyn CiClient>> {
+        &self.clients
     }
 
     /// Load and persist the notification ledger at this path.
@@ -212,6 +207,32 @@ impl Poller {
         self.ledger = NotifyLedger::load(&path);
         self.ledger_path = Some(path);
         self
+    }
+
+    /// Load and persist the deploy-time history at this path.
+    ///
+    /// Without it the poller still learns, in memory, for as long as it lives.
+    /// A fixture run should not call this: a rehearsal must not teach the real
+    /// history how long a recorded pipeline took.
+    pub fn with_eta_history(mut self, path: std::path::PathBuf) -> Self {
+        self.eta = EtaHistory::load(&path);
+        self.eta_path = Some(path);
+        self
+    }
+
+    /// Read the time from `clock` rather than the wall. Only an estimate's
+    /// elapsed time reads it.
+    pub fn with_clock(
+        mut self,
+        clock: impl Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync + 'static,
+    ) -> Self {
+        self.clock = Arc::new(clock);
+        self
+    }
+
+    /// The deploy-time history, mostly for tests.
+    pub fn eta_history(&self) -> &EtaHistory {
+        &self.eta
     }
 
     /// Subscribe to snapshots. Each tick publishes one.
@@ -282,6 +303,10 @@ impl Poller {
         )
         .await;
         let mut polled = polled.into_iter();
+        // One clock for the whole apply phase, so two rows of one tick cannot
+        // disagree about what time it is.
+        let now = (self.clock)();
+        let mut learned = false;
 
         for (state, turn) in self.watches.iter_mut().zip(turns) {
             match turn {
@@ -298,6 +323,7 @@ impl Poller {
                         error: Some(format!("unknown account {:?}", state.watch.account)),
                         jobs: state.jobs_mode,
                         provider: state.provider,
+                        actions: state.actions,
                     });
                 }
                 Turn::SitOut => {
@@ -305,11 +331,25 @@ impl Poller {
                         if let Some(e) = &view.error {
                             errors.push(format!("{}: {e}", state.watch.id));
                         }
-                        views.push(view.clone());
+                        // Nothing was fetched, but time still passed: the
+                        // elapsed half of an estimate is re-read.
+                        let mut view = view.clone();
+                        annotate_eta(&self.eta, state, &mut view, now);
+                        views.push(view);
                     }
                 }
                 Turn::Poll => {
-                    let Some(view) = polled.next() else { continue };
+                    let Some(mut view) = polled.next() else {
+                        continue;
+                    };
+                    // ⛔ Here, in configuration order, and never inside
+                    // `poll_watch`: the history is shared by every watch, and
+                    // the concurrent half may touch nothing but its own
+                    // watch's state. Learning before annotating is what lets
+                    // the tick that records the third sample show the first
+                    // estimate.
+                    learned |= learn_eta(&mut self.eta, state, &view);
+                    annotate_eta(&self.eta, state, &mut view, now);
                     if let Some(e) = &view.error {
                         errors.push(format!("{}: {e}", state.watch.id));
                     }
@@ -325,6 +365,15 @@ impl Poller {
             && let Err(e) = self.ledger.save(path)
         {
             tracing::warn!(error = %e, "could not persist the notification ledger");
+        }
+        // Only when a sample arrived, which is once per deployed pipeline, so
+        // a `check` against a settled estate reads the file once and writes
+        // nothing.
+        if learned
+            && let Some(path) = &self.eta_path
+            && let Err(e) = self.eta.save_merged(path)
+        {
+            tracing::warn!(error = %e, "could not persist the deploy-time history");
         }
 
         let snapshot = Snapshot {
@@ -380,6 +429,75 @@ impl Poller {
             }
             tokio::time::sleep(tick.next_interval).await;
         }
+    }
+}
+
+/// The poller's clock. See [`Poller::with_clock`].
+type Clock = Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>;
+
+/// Record a sample for every row of this view whose deploy is `live` and that
+/// has not been measured yet. Returns whether anything was recorded.
+///
+/// The marker's `finished_at` is not on the view (it would change the bytes of
+/// every `check --json` with a deploy in it), so it is read from the cached
+/// detail the view was built from. The job is found by id across the parent
+/// and every child, because on a GitHub commit group the row's own id is also
+/// its newest run's, and the pipeline id alone cannot say which list holds it.
+fn learn_eta(history: &mut EtaHistory, state: &WatchState, view: &WatchView) -> bool {
+    if !state.watch.eta || state.watch.deploy_markers.is_empty() {
+        return false;
+    }
+    let mut learned = false;
+    for row in &view.rows {
+        let Some(marker) = &row.deploy_marker else {
+            continue;
+        };
+        if history.contains(&state.watch.id, row.id) {
+            continue;
+        }
+        let Some(entry) = state.cache.get(row.id) else {
+            continue;
+        };
+        let finished_at = entry
+            .detail
+            .jobs
+            .iter()
+            .chain(entry.detail.child_jobs.values().flatten())
+            .find(|job| job.id == marker.id)
+            .and_then(|job| job.finished_at.as_deref());
+        let Some(secs) = crate::eta::deploy_sample(row.created_at.as_deref(), finished_at) else {
+            continue;
+        };
+        if history.record(&state.watch.id, row.id, secs) {
+            tracing::debug!(
+                watch = %state.watch.id,
+                pipeline = row.id,
+                secs,
+                "recorded a deploy time"
+            );
+            learned = true;
+        }
+    }
+    learned
+}
+
+/// Put an estimate on every running row of this view, and take it off every
+/// other row. See [`crate::eta::estimate`] for when there is none.
+fn annotate_eta(
+    history: &EtaHistory,
+    state: &WatchState,
+    view: &mut WatchView,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    let has_markers = !state.watch.deploy_markers.is_empty();
+    let samples = history.samples(&state.watch.id);
+    for row in &mut view.rows {
+        row.eta = if state.watch.eta && crate::eta::is_running(row, has_markers) {
+            crate::eta::elapsed_since(row.created_at.as_deref(), now)
+                .and_then(|elapsed| crate::eta::estimate(&samples, elapsed))
+        } else {
+            None
+        };
     }
 }
 
@@ -465,6 +583,7 @@ async fn poll_watch(
                     error: Some(message),
                     jobs: state.jobs_mode,
                     provider: state.provider,
+                    actions: state.actions,
                 },
             };
         }
@@ -560,6 +679,7 @@ async fn poll_watch(
         error,
         jobs: state.jobs_mode,
         provider: state.provider,
+        actions: state.actions,
     }
 }
 
@@ -757,6 +877,57 @@ async fn fetch_detail(
         errors,
         bridges,
     })
+}
+
+/// The client one account is polled through: a real transport, and its
+/// credential, resolved now or (for `token = { oauth = .. }`) on each request
+/// by the sign-in's own session.
+///
+/// [`Poller::from_config`] builds every polled account's with this, and the
+/// CLI's `log`, `retry` and `play` build the one account a job URL names, so
+/// the two cannot come to disagree about how an account authenticates.
+pub fn build_client<P>(
+    name: &str,
+    account: &crate::config::Account,
+    provider: &P,
+    store: Arc<dyn crate::token::TokenProvider>,
+    ring: RequestRing,
+) -> Result<Arc<dyn CiClient>, PollerError>
+where
+    P: crate::token::TokenProvider,
+{
+    let transport: Arc<dyn crate::client::Transport> = Arc::new(
+        crate::client::ReqwestTransport::new(std::time::Duration::from_secs(account.timeout_secs))
+            .map_err(PollerError::Client)?,
+    );
+    // ⛔ Through the factory, never by naming a client type: an account whose
+    // provider has no client yet fails HERE, loudly, rather than being handed a
+    // GitLab client pointed at somebody else's API.
+    match &account.token {
+        crate::config::TokenSource::Oauth(source) => {
+            let transport = crate::oauth::transport_for(
+                name,
+                account,
+                source,
+                &crate::oauth::BuiltinClients::shipped(),
+                transport,
+                store,
+            )
+            .map_err(|e| PollerError::SignIn(name.to_string(), e))?;
+            crate::client::client_for(
+                &crate::oauth::bearer_account(account),
+                &crate::token::Secret::new(""),
+                transport,
+                ring,
+            )
+        }
+        source => {
+            let token = crate::token::resolve(source, name, provider)
+                .map_err(|e| PollerError::Token(name.to_string(), e))?;
+            crate::client::client_for(account, &token, transport, ring)
+        }
+    }
+    .map_err(PollerError::Client)
 }
 
 /// Build the list query for a watch.

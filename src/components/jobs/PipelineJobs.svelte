@@ -11,6 +11,7 @@
   import BridgeJobs from "./BridgeJobs.svelte";
   import JobList from "./JobList.svelte";
   import { bridgeVisible, defaultExpanded, filterJobs, type ExpansionStore } from "./jobs";
+  import type { JobTools } from "./tools";
 
   interface Props {
     pipeline: PipelineView;
@@ -25,6 +26,11 @@
     now?: number;
     /** Override the default open state of an untouched bridge. */
     isDefaultOpen?: typeof defaultExpanded;
+    /**
+     * The log, retry and play tools. Their `context` is filled in here and by
+     * each bridge, so a caller's own is ignored.
+     */
+    tools?: JobTools;
   }
 
   let {
@@ -36,7 +42,15 @@
     stageOrder = null,
     now,
     isDefaultOpen = defaultExpanded,
+    tools,
   }: Props = $props();
+
+  const parentTools = $derived(
+    tools && {
+      ...tools,
+      context: `${provider === "github" ? "workflow run" : "pipeline"} #${pipeline.iid ?? pipeline.id}`,
+    },
+  );
 
   const bridges = $derived(pipeline.bridges.filter((bridge) => bridgeVisible(bridge, mode)));
   const parentShown = $derived(filterJobs(pipeline.parent_jobs, mode).length);
@@ -50,7 +64,7 @@
     </p>
   {:else}
     {#if parentShown > 0}
-      <JobList jobs={pipeline.parent_jobs} {mode} {stageOrder} {onOpen} {now} />
+      <JobList jobs={pipeline.parent_jobs} {mode} {stageOrder} {onOpen} {now} tools={parentTools} />
     {/if}
     {#if bridges.length > 0}
       <div class="flex flex-col" role="list" aria-label={provider === "github" ? "workflow runs" : "child pipelines"}>
@@ -65,6 +79,7 @@
               {provider}
               {onOpen}
               {now}
+              {tools}
             />
           </div>
         {/each}

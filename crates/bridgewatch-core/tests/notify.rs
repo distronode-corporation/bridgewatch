@@ -453,6 +453,7 @@ fn a_watch_is_not_baselined_on_a_tick_that_failed() {
         error: Some("transport error: dns failure".into()),
         jobs: Default::default(),
         provider: Default::default(),
+        actions: false,
     };
     assert!(notifications_for(&watch, &offline, &mut ledger).is_empty());
     assert!(
@@ -509,6 +510,7 @@ fn a_template_that_fails_to_render_does_not_burn_the_dedupe_key() {
         error: None,
         jobs: Default::default(),
         provider: Default::default(),
+        actions: false,
     };
 
     let mut ledger = NotifyLedger::default();
@@ -721,6 +723,7 @@ fn view_of(
         error: None,
         jobs: Default::default(),
         provider: Default::default(),
+        actions: false,
     }
 }
 

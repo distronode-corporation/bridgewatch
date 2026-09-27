@@ -222,6 +222,8 @@ impl bridgewatch_core::client::Transport for Canned {
             etag: None,
             link: None,
             oauth_scopes: None,
+            location: None,
+            truncated: false,
         })
     }
 }

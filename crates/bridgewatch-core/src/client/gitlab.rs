@@ -3,6 +3,10 @@
 //! The poller's five are all `GET` under `{base_url}{api_path}/projects/{project}`.
 //! The setup wizard adds four more, also `GET`: `/user`,
 //! `/personal_access_tokens/self`, `/projects` and `/projects/{project}`.
+//! On demand only, never polled: one job's log (`GET .../jobs/{id}/trace`),
+//! and the two writes, `POST .../jobs/{id}/retry` and `POST .../jobs/{id}/play`,
+//! which are refused before they are sent unless the account has
+//! `actions = true`.
 //! Pagination follows `x-next-page`, which is the only paging header GitLab
 //! guarantees for these collections.
 //!
@@ -14,7 +18,8 @@ use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
 
-use super::http::{HttpRequest, RequestLog, RequestRing, Transport};
+use super::http::{HttpRequest, HttpResponse, RequestLog, RequestRing, Transport};
+use super::log::{self as joblog, JobActionOutcome, LOG_TAIL_LINES, LogTail};
 use super::wire::gitlab as wire;
 use super::{CiClient, ClientError};
 use crate::config::{Account, ProjectRef, Provider};
@@ -151,6 +156,8 @@ pub struct GitLabClient {
     ring: RequestRing,
     /// At most [`super::MAX_IN_FLIGHT`] of this client's requests at a time.
     in_flight: super::InFlight,
+    /// The account's `actions`: whether retry and play may be SENT.
+    actions: bool,
 }
 
 impl std::fmt::Debug for GitLabClient {
@@ -161,6 +168,7 @@ impl std::fmt::Debug for GitLabClient {
             .field("header_name", &self.header_name)
             .field("header_value", &super::http::REDACTED)
             .field("transport", &self.transport)
+            .field("actions", &self.actions)
             .finish()
     }
 }
@@ -181,6 +189,7 @@ impl GitLabClient {
             transport,
             ring,
             in_flight: super::InFlight::new(),
+            actions: account.actions,
         }
     }
 
@@ -294,6 +303,129 @@ impl GitLabClient {
             .map(Into::into)
     }
 
+    /// `GET /projects/{project}/jobs/{id}/trace`: the end of one job's log.
+    ///
+    /// Asked for as `Range: bytes=-{max_bytes}` so a server that honours it
+    /// sends only the tail; one that does not sends the whole log, which the
+    /// transport reads through keeping only its end. A `416` is an empty log
+    /// (there is no last N bytes of nothing). A redirect (an archived log in
+    /// object storage) is followed ONCE, without the token; see
+    /// [`super::log`].
+    pub async fn job_log_tail(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+        max_bytes: usize,
+    ) -> Result<LogTail, ClientError> {
+        let max_bytes = max_bytes.max(1);
+        let path = format!("/projects/{}/jobs/{job_id}/trace", project.url_segment());
+        let request = HttpRequest {
+            method: "GET",
+            url: format!("{}{}{}", self.base_url, self.api_path, path),
+            path: path.clone(),
+            headers: vec![
+                (self.header_name.to_string(), self.header_value.clone()),
+                ("Range".to_string(), format!("bytes=-{max_bytes}")),
+                // A range of a gzipped body is a slice of compressed bytes.
+                ("Accept-Encoding".to_string(), "identity".to_string()),
+            ],
+            body: None,
+            anonymous: false,
+            tail_bytes: Some(max_bytes),
+        };
+        let first = self
+            .send(request, |r| match r.status {
+                416 => None,
+                s if joblog::is_redirect(s) => None,
+                s => status_error(s, &path, r.retry_after),
+            })
+            .await?;
+        let response = if joblog::is_redirect(first.status) {
+            let next = joblog::follow(first.location.as_deref(), max_bytes, true, &path)?;
+            let next_path = next.path.clone();
+            self.send(next, |r| match r.status {
+                416 => None,
+                s => joblog::blob_error(s, &next_path),
+            })
+            .await?
+        } else {
+            first
+        };
+        if response.status == 416 {
+            return Ok(LogTail {
+                lines: Vec::new(),
+                truncated: false,
+            });
+        }
+        Ok(LogTail::from_body(
+            &response.body,
+            Provider::Gitlab,
+            response.truncated,
+            LOG_TAIL_LINES,
+        ))
+    }
+
+    /// `POST /projects/{project}/jobs/{id}/retry`. A WRITE; see
+    /// [`CiClient::retry_job`].
+    pub async fn retry_job(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError> {
+        self.job_action(project, job_id, "retry").await
+    }
+
+    /// `POST /projects/{project}/jobs/{id}/play`. A WRITE; see
+    /// [`CiClient::play_job`].
+    pub async fn play_job(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError> {
+        self.job_action(project, job_id, "play").await
+    }
+
+    async fn job_action(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+        verb: &str,
+    ) -> Result<JobActionOutcome, ClientError> {
+        // ⛔ Before anything is built, let alone sent.
+        if !self.actions {
+            return Err(ClientError::ActionsDisabled);
+        }
+        let path = format!("/projects/{}/jobs/{job_id}/{verb}", project.url_segment());
+        let request = HttpRequest {
+            method: "POST",
+            url: format!("{}{}{}", self.base_url, self.api_path, path),
+            path: path.clone(),
+            headers: vec![(self.header_name.to_string(), self.header_value.clone())],
+            body: None,
+            anonymous: false,
+            tail_bytes: None,
+        };
+        let response = self.send(request, |r| write_status_error(r, &path)).await?;
+        Ok(JobActionOutcome::from_body(&response.body))
+    }
+
+    /// One request through [`joblog::send`], with this client's transport,
+    /// bound and ring.
+    async fn send(
+        &self,
+        request: HttpRequest,
+        classify: impl Fn(&HttpResponse) -> Option<ClientError>,
+    ) -> Result<HttpResponse, ClientError> {
+        joblog::send(
+            self.transport.as_ref(),
+            &self.in_flight,
+            &self.ring,
+            request,
+            classify,
+        )
+        .await
+    }
+
     /// Follow `x-next-page` from `prefix` (which ends in `?` or `&`) for at
     /// most `max_pages` pages. The flag is true when a next page existed and
     /// was not fetched.
@@ -350,6 +482,8 @@ impl GitLabClient {
             path: path.to_string(),
             headers: vec![(self.header_name.to_string(), self.header_value.clone())],
             body: None,
+            anonymous: false,
+            tail_bytes: None,
         };
 
         // Before the clock starts: `ms` is the request, not the queue.
@@ -483,6 +617,31 @@ impl CiClient for GitLabClient {
     async fn project(&self, project: &ProjectRef) -> Result<Project, ClientError> {
         GitLabClient::project(self, project).await
     }
+
+    async fn job_log_tail(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+        max_bytes: usize,
+    ) -> Result<LogTail, ClientError> {
+        GitLabClient::job_log_tail(self, project, job_id, max_bytes).await
+    }
+
+    async fn retry_job(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError> {
+        GitLabClient::retry_job(self, project, job_id).await
+    }
+
+    async fn play_job(
+        &self,
+        project: &ProjectRef,
+        job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError> {
+        GitLabClient::play_job(self, project, job_id).await
+    }
 }
 
 /// Map an HTTP status onto a [`ClientError`], or `None` when it is a success.
@@ -522,5 +681,40 @@ pub fn status_error(status: u16, path: &str, retry_after: Option<u64>) -> Option
             status: other,
             path: path.to_string(),
         }),
+    }
+}
+
+/// [`status_error`] for a WRITE, which reads a 403 differently.
+///
+/// ⛔ A 403 on a read is a token that cannot see the project; on a write, from
+/// a token that just read the same project, it is almost always the SCOPE: a
+/// `read_api` token answers `{"error": "insufficient_scope"}`. So it is
+/// [`ClientError::WriteForbidden`], whose sentence names `api`, and never
+/// [`ClientError::Auth`], whose sentence says to check a token that works.
+/// The exception is GitLab's own refusal about the JOB, which also arrives as
+/// a 403 ("Job is not retryable"): its message says so, and it is shown as
+/// it stands. A 400 ("Unplayable Job") and a 422 are the job's too. A 401 is
+/// still a bad token.
+pub fn write_status_error(response: &HttpResponse, path: &str) -> Option<ClientError> {
+    let message = joblog::sanitize_message(&response.body);
+    let about_the_job = message.as_deref().is_some_and(|m| {
+        let m = m.to_ascii_lowercase();
+        m.contains("not retryable") || m.contains("not playable") || m.contains("unplayable")
+    });
+    match response.status {
+        403 if about_the_job => Some(ClientError::JobRefused {
+            provider: Provider::Gitlab,
+            message: message.unwrap_or_default(),
+        }),
+        403 => Some(ClientError::WriteForbidden {
+            status: 403,
+            provider: Provider::Gitlab,
+        }),
+        400 | 409 | 422 => Some(ClientError::JobRefused {
+            provider: Provider::Gitlab,
+            message: message
+                .unwrap_or_else(|| format!("the request was refused ({})", response.status)),
+        }),
+        status => status_error(status, path, response.retry_after),
     }
 }

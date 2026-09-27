@@ -158,6 +158,8 @@ async fn post(
             ),
         ],
         body: Some(body),
+        anonymous: false,
+        tail_bytes: None,
     };
     let started = std::time::Instant::now();
     let result = transport.execute(request).await;

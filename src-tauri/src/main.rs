@@ -14,6 +14,7 @@ mod commands;
 mod config;
 mod guard;
 mod icons;
+mod jobs;
 mod links;
 mod logging;
 mod oauth;
@@ -119,6 +120,8 @@ fn main() {
             commands::clear_own_token,
             commands::get_launch_at_login,
             commands::set_launch_at_login,
+            jobs::job_log_tail,
+            jobs::job_action,
             wizard::wizard_detect_cli_token,
             wizard::wizard_test_connection,
             wizard::wizard_list_projects,

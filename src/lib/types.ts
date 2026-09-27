@@ -105,6 +105,21 @@ export interface PipelineView {
   created_at: string | null;
   /** A gate is NOT live. */
   live: boolean;
+  /**
+   * How long this watch's deploys usually take and how far in this one is.
+   * The core sends it only on a row still on its way to a deploy, once the
+   * watch has three samples, and while elapsed is at most twice the typical
+   * time; absent everywhere else, so older recordings type-check unchanged.
+   */
+  eta?: Eta | null;
+}
+
+/** `bridgewatch_core::eta::Eta`. Both in whole seconds. */
+export interface Eta {
+  /** The median of the watch's recent push-to-deployed times. */
+  typical_secs: number;
+  /** Seconds since the pipeline was created, at the poll that built the row. */
+  elapsed_secs: number;
 }
 
 export interface WatchView {
@@ -126,6 +141,30 @@ export interface WatchView {
    * absent means `"gitlab"`.
    */
   provider?: Provider;
+  /**
+   * The watch's account allows retry and play (`actions = true`). The core
+   * sends it only when true, so every other watch's JSON is unchanged: absent
+   * means false. The client refuses a write regardless; this only decides
+   * whether the popover offers one.
+   */
+  actions?: boolean;
+}
+
+/** `client::LogTail`: the end of one job's log, cleaned to plain text. */
+export interface LogTail {
+  /** At most 40 lines, oldest first. Plain text: render as text, never markup. */
+  lines: string[];
+  /** The log was longer than what was read, so lines above these exist. */
+  truncated: boolean;
+}
+
+/** `actions::JobAction`. */
+export type JobAction = "retry" | "play";
+
+/** `client::JobActionOutcome`: GitLab names the job it created; GitHub says nothing. */
+export interface JobActionOutcome {
+  job_id: number | null;
+  web_url: string | null;
 }
 
 export interface RequestLog {

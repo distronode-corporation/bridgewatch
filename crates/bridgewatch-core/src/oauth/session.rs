@@ -228,6 +228,28 @@ impl OAuthSession {
         Ok(set.access_token.clone())
     }
 
+    /// Whether the held sign-in may run jobs.
+    ///
+    /// GitHub: always, as far as this can tell. A GitHub App's user token has
+    /// no scopes, its reach is the App's permissions, and a refusal arrives as
+    /// a 403 the client explains. GitLab: when the granted scopes include
+    /// `api`, or when the provider did not say what it granted (an empty list
+    /// is "not said", and the request then goes out and a 403 speaks for
+    /// itself). A `read_api` sign-in, which is what every sign-in made before
+    /// `actions` existed holds, is the case this is for.
+    pub async fn may_write(&self) -> bool {
+        if self.provider != Provider::Gitlab {
+            return true;
+        }
+        let state = self.state.lock().await;
+        match &state.current {
+            Some(set) => {
+                set.scopes.is_empty() || set.scopes.iter().any(|s| s == super::GITLAB_WRITE_SCOPE)
+            }
+            None => true,
+        }
+    }
+
     /// The server refused `rejected`: refresh once and hand back what to retry
     /// with. When somebody already replaced `rejected`, that replacement is the
     /// answer and no refresh is made. `None` means "do not retry": the token
@@ -382,7 +404,31 @@ fn authorised(request: &HttpRequest, token: &Secret) -> HttpRequest {
 #[async_trait::async_trait]
 impl Transport for OAuthTransport {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ClientError> {
+        // ⛔ Sent exactly as built, with no token: the second leg of a job log,
+        // a signed URL on a storage host (see `HttpRequest::anonymous`). This
+        // layer's whole job is to put the sign-in on every request, which is
+        // exactly what must not happen to this one. A credential header the
+        // caller left on it by mistake is taken OFF rather than trusted.
+        if request.anonymous {
+            let mut bare = request;
+            bare.headers.retain(|(name, _)| {
+                !name.eq_ignore_ascii_case("authorization")
+                    && !name.eq_ignore_ascii_case("private-token")
+            });
+            return self.inner.execute(bare).await;
+        }
         let token = self.session.access_token().await?;
+        // A write (the only POST a client sends through here: the sign-in's
+        // own requests go to the inner transport) on a GitLab sign-in that was
+        // granted `read_api` would be a 403 that reads like a broken token. The
+        // stored set knows its scopes, so it is refused before it is sent,
+        // with the one thing that fixes it.
+        if request.method == "POST" && !self.session.may_write().await {
+            return Err(ClientError::SignInForActions {
+                account: self.session.account.clone(),
+                provider: self.session.provider,
+            });
+        }
         let first = self.inner.execute(authorised(&request, &token)).await?;
         if first.status != 401 {
             return Ok(first);

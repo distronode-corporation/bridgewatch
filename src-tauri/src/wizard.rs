@@ -830,6 +830,8 @@ mod tests {
                     etag: None,
                     link: None,
                     oauth_scopes: None,
+                    location: None,
+                    truncated: false,
                 })
             })
         }

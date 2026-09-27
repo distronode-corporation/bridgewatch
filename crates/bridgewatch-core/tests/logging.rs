@@ -129,6 +129,8 @@ impl Transport for OneEmptyPage {
             etag: None,
             link: None,
             oauth_scopes: None,
+            location: None,
+            truncated: false,
         })
     }
 }
@@ -173,4 +175,35 @@ fn the_github_request_line_never_carries_the_token() {
         "the path is what makes the line worth printing: {log}"
     );
     assert!(log.contains("status=200"), "{log}");
+}
+
+/// A corrupt deploy-time history costs its samples and one `warn` naming the
+/// file, and never the poll. A missing one is every first run, and says
+/// nothing at all.
+#[test]
+fn a_corrupt_deploy_time_history_warns_once_and_a_missing_one_says_nothing() {
+    support::start_capture();
+    let dir = std::env::temp_dir().join(format!("bw-eta-log-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let corrupt = dir.join("eta.json");
+    std::fs::write(&corrupt, "{ not json").expect("write");
+
+    let (history, log) = with_log(|| bridgewatch_core::eta::EtaHistory::load(&corrupt));
+    assert_eq!(history, bridgewatch_core::eta::EtaHistory::default());
+    assert_eq!(
+        log.matches("deploy-time history cannot be read").count(),
+        1,
+        "{log}"
+    );
+    assert_eq!(
+        level_of(&log, "deploy-time history cannot be read").as_deref(),
+        Some("WARN")
+    );
+
+    let (history, log) =
+        with_log(|| bridgewatch_core::eta::EtaHistory::load(&dir.join("absent.json")));
+    assert_eq!(history, bridgewatch_core::eta::EtaHistory::default());
+    assert!(log.is_empty(), "{log}");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

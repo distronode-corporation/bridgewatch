@@ -12,6 +12,7 @@ pub mod fixture;
 pub mod github;
 pub mod gitlab;
 pub mod http;
+pub mod log;
 pub mod script;
 pub mod wire;
 
@@ -25,6 +26,7 @@ pub use http::{
     HttpRequest, HttpResponse, InFlight, MAX_IN_FLIGHT, RequestLog, RequestRing, ReqwestTransport,
     Transport, in_order, in_order2,
 };
+pub use log::{JobActionOutcome, LOG_TAIL_BYTES, LOG_TAIL_LINES, LogTail};
 pub use script::ScriptTransport;
 
 use crate::config::{Account, ProjectRef, Provider};
@@ -123,6 +125,54 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
 
     /// One project by id or path.
     async fn project(&self, project: &ProjectRef) -> Result<Project, ClientError>;
+
+    /// The end of one job's log: at most `max_bytes` of it read, the last
+    /// [`LOG_TAIL_LINES`] lines kept, cleaned for display as plain text (see
+    /// [`log`]).
+    ///
+    /// Read on demand only, never by the poller: a log is the most expensive
+    /// thing a provider serves, and nothing about a verdict depends on one.
+    ///
+    /// The default refuses, so a client that has not been taught logs says so
+    /// rather than answering with an empty one.
+    async fn job_log_tail(
+        &self,
+        _project: &ProjectRef,
+        _job_id: u64,
+        _max_bytes: usize,
+    ) -> Result<LogTail, ClientError> {
+        Err(ClientError::Unsupported {
+            message: "this client cannot read job logs".to_string(),
+        })
+    }
+
+    /// Retry one job: GitLab's `retry`, GitHub's `rerun`. A WRITE.
+    ///
+    /// ⛔ Refused before anything is sent unless the account has
+    /// `actions = true`: see [`ClientError::ActionsDisabled`]. The default
+    /// refuses too, for the reason [`Self::job_log_tail`]'s does.
+    async fn retry_job(
+        &self,
+        _project: &ProjectRef,
+        _job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError> {
+        Err(ClientError::Unsupported {
+            message: "this client cannot retry jobs".to_string(),
+        })
+    }
+
+    /// Start one manual job: GitLab's `play`. A WRITE, guarded exactly as
+    /// [`Self::retry_job`] is. GitHub has no manual jobs and answers
+    /// [`ClientError::Unsupported`] without a request.
+    async fn play_job(
+        &self,
+        _project: &ProjectRef,
+        _job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError> {
+        Err(ClientError::Unsupported {
+            message: "this client cannot start manual jobs".to_string(),
+        })
+    }
 }
 
 /// Build the client an account's `provider` asks for.
@@ -186,6 +236,36 @@ fn auth_message(status: &u16, provider: &Provider) -> String {
             "not authorised ({status}): check that the token can read Actions on this \
              repository (a classic token needs the repo scope for a private repository; a \
              fine-grained token needs Actions: read)"
+        ),
+    }
+}
+
+/// A provider's name as a sentence spells it.
+fn provider_name(provider: &Provider) -> &'static str {
+    match provider {
+        Provider::Gitlab => "GitLab",
+        Provider::Github => "GitHub",
+    }
+}
+
+/// The sentence [`ClientError::WriteForbidden`] displays: what the credential
+/// needs to be allowed to run jobs, per provider.
+///
+/// ⛔ NOT [`auth_message`]. A 403 on a write from a token that reads fine is
+/// the token's SCOPE (or the user's role), and "check the token" sends people
+/// to replace a token that works. The GitLab arm names `api` because
+/// `read_api`, which every read of this app needs and which a GitLab user
+/// has therefore already granted, cannot retry or play anything.
+fn write_forbidden_message(status: &u16, provider: &Provider) -> String {
+    match provider {
+        Provider::Gitlab => format!(
+            "this token cannot run jobs ({status}): it needs the api scope (read_api can \
+             only read), and a role on the project that may run pipelines (Developer or above)"
+        ),
+        Provider::Github => format!(
+            "this token cannot re-run jobs ({status}): it needs Actions: write on this \
+             repository (a fine-grained token or the GitHub App), or the repo scope on a \
+             classic token, and write access to the repository"
         ),
     }
 }
@@ -288,6 +368,50 @@ pub enum ClientError {
         /// What cannot be done, and what to write instead.
         message: String,
     },
+    /// The account does not allow writes: `actions` is not `true` on it.
+    ///
+    /// ⛔ Decided in the client, before anything is sent, whatever asked. The
+    /// tray only offers Retry and Play when the account allows them, but the
+    /// tray is a webview reachable by any script in it, and the CLI is a
+    /// command line; neither is where a write should be stopped.
+    #[error(
+        "running jobs is switched off for this account: set actions = true under its \
+         [accounts.<name>] table (Settings, Accounts) to allow retry and play"
+    )]
+    ActionsDisabled,
+    /// A write was refused with a 403 that is not a rate limit: the token can
+    /// read but may not run jobs. See [`write_forbidden_message`].
+    #[error("{}", write_forbidden_message(.status, .provider))]
+    WriteForbidden {
+        /// The status that was returned.
+        status: u16,
+        /// Which provider refused it.
+        provider: Provider,
+    },
+    /// The provider refused a write for a reason of the JOB's, not the
+    /// token's: GitLab's "Job is not retryable", a play on a job that is not
+    /// manual, GitHub's refusal to re-run a job whose run is still going.
+    #[error("{} refused: {message}", provider_name(.provider))]
+    JobRefused {
+        /// Which provider refused it.
+        provider: Provider,
+        /// The provider's own message, reduced by [`log::sanitize_message`].
+        message: String,
+    },
+    /// A write on a GitLab sign-in that was granted `read_api` only. Refused
+    /// before it is sent; see [`crate::oauth::session::OAuthSession::may_write`].
+    #[error(
+        "the {} sign-in of account \"{account}\" may only read: sign in again to allow \
+         running jobs (Settings, Accounts, Token source, or bridgewatch auth login --account \
+         {account})",
+        provider_name(.provider)
+    )]
+    SignInForActions {
+        /// The `[accounts.*]` key.
+        account: String,
+        /// Which provider to sign in to.
+        provider: Provider,
+    },
     /// An account that signs in (`token = { oauth = .. }`) has no usable
     /// sign-in: never signed in, or its refresh was refused. Nothing is sent
     /// until the user signs in again, and the message says where.
@@ -330,6 +454,10 @@ impl ClientError {
             ClientError::Auth { .. }
                 | ClientError::Unsupported { .. }
                 | ClientError::SignInAgain { .. }
+                | ClientError::ActionsDisabled
+                | ClientError::WriteForbidden { .. }
+                | ClientError::JobRefused { .. }
+                | ClientError::SignInForActions { .. }
         )
     }
 

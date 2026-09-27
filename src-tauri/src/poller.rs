@@ -9,6 +9,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use bridgewatch_core::eta::EtaHistory;
 use bridgewatch_core::notify::{Notification, NotifyLedger};
 use bridgewatch_core::poll::Poller;
 use bridgewatch_core::token::SystemTokenProvider;
@@ -106,6 +107,7 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             // something changed rather than spinning.
             set_icon(&app, IconState::Unknown);
             publish(&app, &state, Snapshot::empty());
+            state.set_clients(Default::default());
             state.reload.notified().await;
             continue;
         };
@@ -119,9 +121,12 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
         let mut poller = match Poller::from_config(&config, &SystemTokenProvider) {
             Ok(p) => {
                 failed_builds = 0;
+                state.set_clients(p.clients().clone());
                 p.with_ledger(NotifyLedger::default_path())
+                    .with_eta_history(EtaHistory::default_path())
             }
             Err(e) => {
+                state.set_clients(Default::default());
                 let delay = build_retry_delay(failed_builds);
                 failed_builds = failed_builds.saturating_add(1);
                 tracing::error!(error = %e, retry_in = ?delay, "poller could not be built");

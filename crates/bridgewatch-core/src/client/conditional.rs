@@ -253,6 +253,16 @@ impl Transport for ConditionalTransport {
         if request.method != "GET" {
             return self.inner.execute(request).await;
         }
+        // ⛔ Nor a job log, either leg. The first answers with a redirect to a
+        // signed URL that is different every time, so a validator for it can
+        // never be sent back; the second IS that URL, on another host, and must
+        // go out exactly as built (`HttpRequest::anonymous`). Storing either
+        // would spend up to a log tail of this client's cache on a body nobody
+        // asks for twice, evicting the list and jobs pages a settled watch
+        // polls for free.
+        if request.anonymous || request.tail_bytes.is_some() {
+            return self.inner.execute(request).await;
+        }
         let key = key_of(&request);
         let sent = self.with_store(|s| s.lookup(&key)).flatten();
         if let Some(stored) = &sent {
@@ -297,6 +307,8 @@ impl Transport for ConditionalTransport {
                         .oauth_scopes
                         .clone()
                         .or_else(|| stored.oauth_scopes.clone()),
+                    location: None,
+                    truncated: false,
                 };
                 // Re-stored rather than merely touched: the entry may have been
                 // evicted while this request was in flight, and the server has
