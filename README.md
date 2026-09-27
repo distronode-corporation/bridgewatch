@@ -301,7 +301,7 @@ Macs. The Linux file names follow each format's own architecture spelling (`amd6
 provenance attestation:
 
 ```
-gh attestation verify bridgewatch_1.0.0_amd64.deb --repo distronode-corporation/bridgewatch
+gh attestation verify bridgewatch_1.1.0_amd64.deb --repo distronode-corporation/bridgewatch
 ```
 
 The release assets contain the GUI only. The `bridgewatch` CLI is built from source,
@@ -323,10 +323,10 @@ The second command should end with `source=Notarized Developer ID`.
 ### Linux: .deb
 
 ```
-sudo apt install ./bridgewatch_1.0.0_amd64.deb
+sudo apt install ./bridgewatch_1.1.0_amd64.deb
 ```
 
-On arm64, use `bridgewatch_1.0.0_arm64.deb`. The package depends on `libsecret-tools`,
+On arm64, use `bridgewatch_1.1.0_arm64.deb`. The package depends on `libsecret-tools`,
 because bridgewatch runs `secret-tool` to read a keyring item that has an empty user name,
 which is how glab stores its token and how gh stores its active account's (see
 [Tokens](#tokens)).
@@ -334,11 +334,11 @@ which is how glab stores its token and how gh stores its active account's (see
 ### Linux: .rpm
 
 ```
-sudo dnf install ./bridgewatch-1.0.0-1.x86_64.rpm      # Fedora
-sudo zypper install ./bridgewatch-1.0.0-1.x86_64.rpm   # openSUSE
+sudo dnf install ./bridgewatch-1.1.0-1.x86_64.rpm      # Fedora
+sudo zypper install ./bridgewatch-1.1.0-1.x86_64.rpm   # openSUSE
 ```
 
-On arm64, use `bridgewatch-1.0.0-1.aarch64.rpm`. The package requires the file
+On arm64, use `bridgewatch-1.1.0-1.aarch64.rpm`. The package requires the file
 `/usr/bin/secret-tool` rather than a package name, for the same reason as the `.deb`: the
 package that ships it is `libsecret` on Fedora but `secret-tool` on openSUSE, and
 a file dependency resolves to the right one on each. The package is not GPG-signed; the
@@ -347,11 +347,11 @@ attestation above is how to check where it came from.
 ### Linux: AppImage
 
 ```
-chmod +x bridgewatch_1.0.0_amd64.AppImage
-./bridgewatch_1.0.0_amd64.AppImage
+chmod +x bridgewatch_1.1.0_amd64.AppImage
+./bridgewatch_1.1.0_amd64.AppImage
 ```
 
-On arm64, use `bridgewatch_1.0.0_aarch64.AppImage`. An AppImage declares no dependencies.
+On arm64, use `bridgewatch_1.1.0_aarch64.AppImage`. An AppImage declares no dependencies.
 If you reuse glab's or gh's token, install `secret-tool` yourself (`sudo apt install
 libsecret-tools` on Debian and Ubuntu, `sudo dnf install libsecret` on Fedora). A token stored in
 bridgewatch's own keyring entry goes through the Secret Service over D-Bus and does not

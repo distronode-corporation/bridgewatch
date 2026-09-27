@@ -13,6 +13,8 @@ body line with a bracket.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-27
+
 ### Added
 
 - **Deploy ETA.** A running row now says how long this watch's deploys usually take and
@@ -338,6 +340,7 @@ per-workflow status dot other monitors already show.
   `glab:<host>:token` naming, which has not been checked against a live install.
 - Windows is not targeted.
 
-[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/distronode-corporation/bridgewatch/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/distronode-corporation/bridgewatch/releases/tag/v0.1.0
