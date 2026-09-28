@@ -435,9 +435,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          deb="$(dpkg-deb -c staging/*.deb)"
+          # tauri-bundler writes the .deb's data members as `usr/...`, with no `./` in
+          # front (measured on a CI installers build), where dpkg-built packages have
+          # one; the prefix is stripped so the match is exact either way.
+          deb="$(dpkg-deb --fsys-tarfile staging/*.deb | tar -t | sed 's#^\./##')"
           for f in copyright NOTICE THIRD-PARTY-LICENSES-rust.txt THIRD-PARTY-LICENSES-npm.txt; do
-            grep -qF "./usr/share/doc/bridgewatch/$f" <<<"$deb" || { echo "::error::the .deb has no /usr/share/doc/bridgewatch/$f"; exit 1; }
+            grep -qxF "usr/share/doc/bridgewatch/$f" <<<"$deb" || { echo "::error::the .deb has no /usr/share/doc/bridgewatch/$f"; exit 1; }
           done
           rpm_files="$(rpm -qpl staging/*.rpm)"
           for f in LICENSE NOTICE THIRD-PARTY-LICENSES-rust.txt THIRD-PARTY-LICENSES-npm.txt; do
