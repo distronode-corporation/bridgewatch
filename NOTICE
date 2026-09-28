@@ -34,9 +34,21 @@ style) and are used under the MIT License below.
   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
   SOFTWARE.
 
+The tray icons and the app icon are original work, drawn by
+src-tauri/icons/generate.py in this repository; they are not derived from any
+third-party icon set.
+
 The distributed binaries statically link a large number of third-party Rust
-crates and bundle a compiled JavaScript frontend. Those dependencies keep their
-own licences, which are declared in Cargo.toml / Cargo.lock and package.json /
-package-lock.json and are not restated here. "bridgewatch" is a name used by
-Distronode Corporation; nothing in this repository claims endorsement by, or
-affiliation with, GitLab Inc., whose API this software is a client of.
+crates and bundle a compiled JavaScript frontend. Third-party dependencies keep
+their own licences. They are declared in Cargo.toml / Cargo.lock and
+package.json / package-lock.json, and each release bundle carries their licence
+texts in THIRD-PARTY-LICENSES-rust.txt and THIRD-PARTY-LICENSES-npm.txt, next to
+this file.
+
+The bridgewatch name and icon are trademarks of Distronode Corporation. They are
+not licensed under the Apache License 2.0: a build you distribute must use its
+own name and icon.
+
+bridgewatch is not affiliated with or endorsed by GitLab Inc. or GitHub, Inc.,
+whose APIs it is a client of. GitLab and GitHub are trademarks of their
+respective owners.

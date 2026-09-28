@@ -40,8 +40,8 @@ const HEALTHY: Status = { ...BROKEN, configOk: true, diagnostics: [] };
 const CONFIG = {
   accounts: { "gitlab.com": { base_url: "https://gitlab.com", token: { own: true } } },
   watches: [
-    { id: "main-push", role: "primary", account: "gitlab.com", project: 82468124, ref: "main" },
-    { id: "hourly", role: "secondary", account: "gitlab.com", project: 82468124, ref: "main" },
+    { id: "main-push", role: "primary", account: "gitlab.com", project: 12345678, ref: "main" },
+    { id: "hourly", role: "secondary", account: "gitlab.com", project: 12345678, ref: "main" },
   ],
 };
 
@@ -234,7 +234,7 @@ describe("SettingsApp, the questions it asks", () => {
     await h.clickText("Add watch");
     expect(shell.edits).toEqual([]);
     h.fill(0, "preflights");
-    h.fill(1, "82468124");
+    h.fill(1, "12345678");
     await h.click('[role="dialog"] .confirm');
     expect(shell.edits).toEqual([
       [
@@ -245,7 +245,7 @@ describe("SettingsApp, the questions it asks", () => {
             account: "gitlab.com",
             // A numeric id is written as a number, which is what the core's
             // `project` union prefers.
-            project: 82468124,
+            project: 12345678,
             ref: "main",
             role: "secondary",
           },

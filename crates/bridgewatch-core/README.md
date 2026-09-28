@@ -151,7 +151,7 @@ This is the whole contract; the GUI renders exactly this and computes nothing.
         "verdict": "failed",               // passed|passed_with_warnings|failed|dead|
                                            // running|awaiting_gate|canceled|skipped|unknown
         "verdict_jobs": ["verify:android"],// the failures, gates or warnings it names
-        "child_id": 2857465094, "child_project_id": 82468124, "child_url": "...",
+        "child_id": 2857465094, "child_project_id": 12345678, "child_url": "...",
         "dived": true,                     // false ⇒ `jobs` is empty because nobody looked
         "jobs": [ /* JobView, as above */ ],
         "bridges": [],                     // the child's own bridges, when dive.depth > 1
@@ -159,7 +159,7 @@ This is the whole contract; the GUI renders exactly this and computes nothing.
       }]
     }]
   }],
-  "request_log": [{ "method": "GET", "path": "/projects/82468124/pipelines?ref=main&...",
+  "request_log": [{ "method": "GET", "path": "/projects/12345678/pipelines?ref=main&...",
                     "status": 200, "ms": 536, "ratelimit_remaining": 1999,
                     "ratelimit_reset": 1789672380, "retry_after": null,
                     "error": null, "at": "2026-09-17T18:40:11.795Z" }]
@@ -346,7 +346,7 @@ fixtures synthesised from them, each saying what it was made from.
   the thing that ships.
 - `client::fixture::record` walks one parent pipeline into a new fixture
   directory; `bridgewatch fixture record <id> [--out <dir>]` is its front end, and
-  `scripts/record-fixture.sh <id> <name>` does the same walk with `glab api`.
+  `scripts/record-fixture.sh <id> <name> <project>` does the same walk with `glab api`.
 - Each fixture's `expected.json` records its **source** (a real pipeline id, or
   what it was synthesised from and why), and the test asserts that field is
   present.

@@ -719,7 +719,7 @@ pub fn parse_project_input(input: &str, provider: Provider) -> Result<ProjectRef
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(match provider {
-            Provider::Gitlab => issue("type a project id (e.g. 82468124) or path (group/project)"),
+            Provider::Gitlab => issue("type a project id (e.g. 12345678) or path (group/project)"),
             Provider::Github => issue("type a repository as owner/repo (e.g. acme-corp/monorepo)"),
         });
     }

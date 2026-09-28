@@ -78,9 +78,16 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "Bridge-aware tray monitor for GitLab CI and GitHub Actions",
-    "longDescription": "bridgewatch walks GitLab trigger jobs into their child pipelines and derives a deploy verdict, so the tray can say \"deployed, and the android bridge failed\" instead of a flat red.",
+    "longDescription": "bridgewatch is a tray monitor for GitLab CI and GitHub Actions. It shows one row per push, walks GitLab trigger jobs into their child pipelines and groups a push's GitHub workflow runs, and derives a deploy verdict, so the tray can say \"deployed, and the android bridge failed\" instead of a flat red.",
+    "publisher": "Distronode Corporation",
+    "homepage": "https://www.distronode.com/open-source/bridgewatch",
     "copyright": "Copyright (c) 2026 Distronode Corporation",
+    "license": "Apache-2.0",
     "licenseFile": "../LICENSE",
+    "resources": {
+      "../LICENSE": "LICENSE",
+      "../NOTICE": "NOTICE"
+    },
     "macOS": {
       "minimumSystemVersion": "10.15"
     },
@@ -88,12 +95,20 @@
       "deb": {
         "depends": [
           "libsecret-tools"
-        ]
+        ],
+        "files": {
+          "/usr/share/doc/bridgewatch/copyright": "../LICENSE",
+          "/usr/share/doc/bridgewatch/NOTICE": "../NOTICE"
+        }
       },
       "rpm": {
         "depends": [
           "/usr/bin/secret-tool"
-        ]
+        ],
+        "files": {
+          "/usr/share/licenses/bridgewatch/LICENSE": "../LICENSE",
+          "/usr/share/licenses/bridgewatch/NOTICE": "../NOTICE"
+        }
       }
     }
   }

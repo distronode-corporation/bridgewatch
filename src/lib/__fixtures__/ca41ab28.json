@@ -52,7 +52,7 @@
               "verdict_jobs": [],
               "child_id": 2857465074,
               "child_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465074",
-              "child_project_id": 82468124,
+              "child_project_id": 12345678,
               "dived": true,
               "jobs": [
                 {
@@ -121,7 +121,7 @@
               ],
               "child_id": 2857465094,
               "child_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465094",
-              "child_project_id": 82468124,
+              "child_project_id": 12345678,
               "dived": true,
               "jobs": [
                 {
@@ -179,7 +179,7 @@
               "verdict_jobs": [],
               "child_id": 2857465116,
               "child_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465116",
-              "child_project_id": 82468124,
+              "child_project_id": 12345678,
               "dived": true,
               "jobs": [
                 {
@@ -291,7 +291,7 @@
               "verdict_jobs": [],
               "child_id": 2857465135,
               "child_url": "https://gitlab.com/acme-corp/monorepo/-/pipelines/2857465135",
-              "child_project_id": 82468124,
+              "child_project_id": 12345678,
               "dived": true,
               "jobs": [
                 {
@@ -678,7 +678,7 @@
   "request_log": [
     {
       "method": "GET",
-      "path": "/projects/82468124/pipelines?ref=main&source=push&order_by=id&sort=desc&per_page=20",
+      "path": "/projects/12345678/pipelines?ref=main&source=push&order_by=id&sort=desc&per_page=20",
       "status": 200,
       "ms": 0,
       "ratelimit_remaining": 1999,
@@ -689,7 +689,7 @@
     },
     {
       "method": "GET",
-      "path": "/projects/82468124/pipelines/2857464986/jobs?per_page=100&page=1",
+      "path": "/projects/12345678/pipelines/2857464986/jobs?per_page=100&page=1",
       "status": 200,
       "ms": 0,
       "ratelimit_remaining": 1999,
@@ -700,7 +700,7 @@
     },
     {
       "method": "GET",
-      "path": "/projects/82468124/pipelines/2857464986/bridges?per_page=100&page=1",
+      "path": "/projects/12345678/pipelines/2857464986/bridges?per_page=100&page=1",
       "status": 200,
       "ms": 0,
       "ratelimit_remaining": 1999,
@@ -711,7 +711,7 @@
     },
     {
       "method": "GET",
-      "path": "/projects/82468124/pipelines/2857465074/jobs?per_page=100&page=1",
+      "path": "/projects/12345678/pipelines/2857465074/jobs?per_page=100&page=1",
       "status": 200,
       "ms": 0,
       "ratelimit_remaining": 1999,
@@ -722,7 +722,7 @@
     },
     {
       "method": "GET",
-      "path": "/projects/82468124/pipelines/2857465094/jobs?per_page=100&page=1",
+      "path": "/projects/12345678/pipelines/2857465094/jobs?per_page=100&page=1",
       "status": 200,
       "ms": 0,
       "ratelimit_remaining": 1999,
@@ -733,7 +733,7 @@
     },
     {
       "method": "GET",
-      "path": "/projects/82468124/pipelines/2857465116/jobs?per_page=100&page=1",
+      "path": "/projects/12345678/pipelines/2857465116/jobs?per_page=100&page=1",
       "status": 200,
       "ms": 0,
       "ratelimit_remaining": 1999,
@@ -744,7 +744,7 @@
     },
     {
       "method": "GET",
-      "path": "/projects/82468124/pipelines/2857465135/jobs?per_page=100&page=1",
+      "path": "/projects/12345678/pipelines/2857465135/jobs?per_page=100&page=1",
       "status": 200,
       "ms": 0,
       "ratelimit_remaining": 1999,
@@ -755,7 +755,7 @@
     },
     {
       "method": "GET",
-      "path": "/projects/82468124/pipelines?ref=main&source=schedule&order_by=id&sort=desc&per_page=20",
+      "path": "/projects/12345678/pipelines?ref=main&source=schedule&order_by=id&sort=desc&per_page=20",
       "status": 200,
       "ms": 0,
       "ratelimit_remaining": 1999,
@@ -766,7 +766,7 @@
     },
     {
       "method": "GET",
-      "path": "/projects/82468124/pipelines?order_by=updated_at&sort=desc&per_page=30",
+      "path": "/projects/12345678/pipelines?order_by=updated_at&sort=desc&per_page=30",
       "status": 200,
       "ms": 0,
       "ratelimit_remaining": 1999,

@@ -16,7 +16,10 @@ src/                       Svelte 5 + TypeScript frontend: popover, job view, Se
                            src/lib/components/ui/, themed in src/lib/theme/.
 examples/                  The shipped example configs: distronode.toml (GitLab) and
                            github.toml (GitHub).
-scripts/                   record-fixture.sh and check-version.py.
+scripts/                   record-fixture.sh, check-version.py and
+                           third-party-licenses-npm.mjs.
+licenses/, about.toml      The cargo-about template and config for the Rust half of
+                           the third-party licence texts the release bundles.
 ```
 
 ## Setup
@@ -105,7 +108,7 @@ test. Two ways to record one:
 ```
 bridgewatch fixture record <pipeline-id> --out crates/bridgewatch-core/tests/fixtures/<name> \
   [--project <id|path>] [--list]
-scripts/record-fixture.sh <pipeline-id> <name> [project] [--list]
+scripts/record-fixture.sh <pipeline-id> <name> <project> [--list]
 ```
 
 The CLI walks the pipeline through bridgewatch's own client and your config's account and
@@ -149,6 +152,11 @@ wrong, the evidence, and what would have caught it.
 
 Pull requests run `.github/workflows/ci.yml` and all of it must be green.
 
+## Licence of contributions
+
+By contributing you agree that your contribution is licensed under the Apache License
+2.0, as section 5 of the licence provides. There is no CLA and no sign-off requirement.
+
 ## Docs
 
 Every claim in the README must be checkable in the code. If you change behaviour the
@@ -156,9 +164,13 @@ README describes (a default, a rule, a CLI flag, an exit code), change the READM
 same pull request. The exit-code table is copied from `bridgewatch --help`, which is
 generated from the constants in `crates/bridgewatch-cli/src/main.rs`.
 
-## Reporting bugs
+## Questions and bugs
 
-Open an issue with the output of `bridgewatch check --json` (it contains no token) and,
+Questions, setup help and ideas go to
+[Discussions](https://github.com/distronode-corporation/bridgewatch/discussions), not
+Issues; see [.github/SUPPORT.md](.github/SUPPORT.md).
+
+For a bug, open an issue with the output of `bridgewatch check --json` (it contains no token) and,
 for a verdict disagreement, the pipeline id. A pipeline id is usually enough to record a
 fixture and turn the report into a test; say if the project is private.
 

@@ -59,12 +59,12 @@ fn running_fixture(job: &str, status: &str) -> TempPath {
     };
     write(
         "fixture.json",
-        serde_json::json!({ "primary": 900, "project": 82468124, "source": "synthetic: eta tests" }),
+        serde_json::json!({ "primary": 900, "project": 12345678, "source": "synthetic: eta tests" }),
     );
     write(
         "list.json",
         serde_json::json!([{
-            "id": 900, "iid": 9, "project_id": 82468124,
+            "id": 900, "iid": 9, "project_id": 12345678,
             "sha": "0123456789abcdef0123456789abcdef01234567", "ref": "main",
             "status": "running", "source": "push",
             "created_at": CREATED, "updated_at": CREATED
