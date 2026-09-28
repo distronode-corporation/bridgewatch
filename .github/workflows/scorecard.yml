@@ -15,7 +15,15 @@ on:
     - cron: '17 6 * * 1' # weekly, Monday, so a check that decays with time still reports
   workflow_dispatch:
 
-permissions: read-all
+# Nothing at the top level, so a job added here later starts with no token scope at all.
+# The job below grants itself exactly what it uses.
+permissions: {}
+
+# One run at a time per ref; a second run queues rather than cancelling the first, so a
+# publish that has started always finishes.
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   scorecard:

@@ -40,7 +40,7 @@ fn the_example_config_loads_and_says_what_it_looks_like() {
     assert_eq!(c.watches.len(), 3);
     let main = &c.watches[0];
     assert_eq!(main.id, "main-push");
-    assert_eq!(main.project, ProjectRef::Id(82468124));
+    assert_eq!(main.project, ProjectRef::Id(12345678));
     assert_eq!(main.sources, ["push"]);
     assert_eq!(main.role, Role::Primary);
     assert_eq!(main.deploy_markers, ["deploy:origins", "deploy:marketing"]);
@@ -332,7 +332,7 @@ fn ref_matchers_cover_exact_glob_and_regex() {
 /// A project path is URL-encoded; a numeric id is not.
 #[test]
 fn project_refs_are_url_safe() {
-    assert_eq!(ProjectRef::Id(82468124).url_segment(), "82468124");
+    assert_eq!(ProjectRef::Id(12345678).url_segment(), "12345678");
     assert_eq!(
         ProjectRef::Path("acme-corp/monorepo".into()).url_segment(),
         "acme-corp%2Fmonorepo"
@@ -396,7 +396,7 @@ fn an_edit_preserves_comments_and_key_order() {
                         r#"
                         id = "releases"
                         account = "gitlab"
-                        project = 82468124
+                        project = 12345678
                         ref = "re:^release/.*$"
                         role = "secondary"
                         "#,
@@ -1538,7 +1538,7 @@ token = { env = "TOK" }
 [[watches]]
 id = "x"
 account = "gh"
-project = 82468124
+project = 12345678
 deploy_markers = ["publish"]
 "#;
     let err = parse(raw).expect_err("there is no /repos/<id>");
@@ -1731,7 +1731,7 @@ token    = { keyring = { service = "glab:gitlab.com:token", user = "" } }
 [[watches]]
 id      = "main-push"
 account = "gitlab"
-project = 82468124
+project = 12345678
 ref     = "main"
 deploy_markers = ["deploy:origins"]
 "#;

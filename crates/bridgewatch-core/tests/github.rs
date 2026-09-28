@@ -487,7 +487,7 @@ async fn a_numeric_project_is_refused_without_a_request() {
     let (client, _) = github_client(transport.clone());
 
     let error = client
-        .get_pipeline(&ProjectRef::Id(82468124), 1)
+        .get_pipeline(&ProjectRef::Id(12345678), 1)
         .await
         .expect_err("GitHub cannot address a repository by id");
 

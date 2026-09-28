@@ -12,6 +12,15 @@ pipeline status.
 A Rust core crate, a `bridgewatch` CLI and a Tauri 2 GUI (Svelte 5). macOS and Linux.
 Apache-2.0.
 
+**Status:** 1.1.0, released 2026-09-27. Download it from the
+[Releases page](https://github.com/distronode-corporation/bridgewatch/releases/latest): a
+signed and notarised universal `.dmg` for macOS, and a `.deb`, an `.rpm` and an
+`.AppImage` for Linux on x86_64 and arm64. See [Install](#install).
+
+**Links:** [project page](https://www.distronode.com/open-source/bridgewatch) ·
+[GitLab mirror](https://gitlab.com/distronode-corporation/bridgewatch) (read-only mirror;
+issues and pull requests live on GitHub) · [CHANGELOG](CHANGELOG.md)
+
 ## Why another CI tray monitor
 
 Most CI tray monitors define "project status" as the status of the newest pipeline on a
@@ -303,6 +312,14 @@ provenance attestation:
 ```
 gh attestation verify bridgewatch_1.1.0_amd64.deb --repo distronode-corporation/bridgewatch
 ```
+
+From the next release on, the attestation is also attached to the release as
+`bridgewatch_<version>.intoto.jsonl`, so the same check works offline with
+`--bundle bridgewatch_<version>.intoto.jsonl` added. Every bundle carries `LICENSE`,
+`NOTICE` and the licence texts of the Rust crates and npm packages built into it
+(`THIRD-PARTY-LICENSES-rust.txt`, `THIRD-PARTY-LICENSES-npm.txt`): in
+`/usr/share/doc/bridgewatch/` for the `.deb`, `/usr/share/licenses/bridgewatch/` for
+the `.rpm`, and among the app's resources in the `.dmg` and the `.AppImage`.
 
 The release assets contain the GUI only. The `bridgewatch` CLI is built from source,
 see [CLI](#cli).
@@ -968,6 +985,19 @@ Bundles land in `target/release/bundle/` at the repository root. On a Mac with b
 release ships, under `target/universal-apple-darwin/release/bundle/`. For development, see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+A plain `npm run tauri build` bundles `LICENSE` and `NOTICE`. To bundle the third-party
+licence texts as a release does (which you should, if you distribute the build),
+generate them first and pass the overlay config; this needs
+[cargo-about](https://github.com/EmbarkStudios/cargo-about) 0.9:
+
+```
+mkdir -p target/licenses
+cargo about generate --locked --fail --manifest-path src-tauri/Cargo.toml -c about.toml \
+  -o target/licenses/THIRD-PARTY-LICENSES-rust.txt licenses/about.hbs
+node scripts/third-party-licenses-npm.mjs target/licenses/THIRD-PARTY-LICENSES-npm.txt
+npm run tauri build -- --config src-tauri/tauri.licenses.conf.json
+```
+
 ## Limitations
 
 - **Polling, not push.** See [the job view](#the-job-view-and-what-live-means).
@@ -993,20 +1023,24 @@ release ships, under `target/universal-apple-darwin/release/bundle/`. For develo
   `fan_out_secs` after the rest of its push (a slow `workflow_dispatch`, a re-push of the
   same commit) is a row of its own. See [`expect`](#expect-a-workflow-that-never-started).
 
-## Contributing
+## Contributing, security and conduct
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The inner loop is `cargo test -p
-bridgewatch-core`, which runs against recorded fixtures and scripted responses with no
-network and no token.
+- [CONTRIBUTING.md](CONTRIBUTING.md): the layout, the inner loop and the whole local
+  gate. The inner loop is `cargo test -p bridgewatch-core`, which runs against recorded
+  fixtures and scripted responses with no network and no token.
+- [SECURITY.md](SECURITY.md): the security model, and how to report a vulnerability
+  privately through
+  [GitHub's private vulnerability reporting](https://github.com/distronode-corporation/bridgewatch/security/advisories/new),
+  not in a public issue.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- [SUPPORT](.github/SUPPORT.md): questions and ideas go to
+  [Discussions](https://github.com/distronode-corporation/bridgewatch/discussions), bugs
+  to [Issues](https://github.com/distronode-corporation/bridgewatch/issues).
+- [CHANGELOG.md](CHANGELOG.md).
 
-## Security
+### What guards the code and the release path
 
-See [SECURITY.md](SECURITY.md). Report vulnerabilities privately through
-[GitHub's private vulnerability reporting](https://github.com/distronode-corporation/bridgewatch/security/advisories/new),
-not in a public issue.
-
-What guards the code and the release path, on every push to `main` unless the item says
-otherwise:
+On every push to `main` unless the item says otherwise:
 
 - CodeQL (Rust, TypeScript, Actions) and [zizmor](https://docs.zizmor.sh) over the
   workflows, both reporting to code scanning.
@@ -1023,8 +1057,13 @@ otherwise:
   the `main` ruleset requires have passed. A major waits for a person.
 - Release builds run in a `release` environment that only a `v*` tag can reach and that
   holds the macOS signing identity as its own environment secrets, so no branch and no
-  pull request can read it. Release tags cannot be moved or deleted.
+  pull request can read it. Release tags are protected by a ruleset against moves and
+  deletion (repository administrators can bypass it).
 
-## License
+## License and trademarks
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+The bridgewatch name and icon are trademarks of Distronode Corporation. They are not
+licensed under the Apache License 2.0: a build you distribute must use its own name and
+icon. bridgewatch is not affiliated with or endorsed by GitLab Inc. or GitHub, Inc.

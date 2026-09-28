@@ -173,7 +173,7 @@ describe("debug pane formatting", () => {
   });
 
   it("keeps the TAIL of a long path, where the query string is", () => {
-    const path = "/projects/82468124/pipelines?ref=main&per_page=20&order_by=id";
+    const path = "/projects/12345678/pipelines?ref=main&per_page=20&order_by=id";
     const short = shortPath(path, 24);
     expect(short.length).toBe(24);
     expect(short.startsWith("…")).toBe(true);

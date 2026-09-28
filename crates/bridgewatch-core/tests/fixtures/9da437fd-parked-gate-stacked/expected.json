@@ -1,5 +1,5 @@
 {
-  "source": "REAL: gitlab.com project 82468124 pipelines 2858536145 (sha 9da437fd) and 2859138213 (sha 04eff5c5), ref main, source push, with the real `pipelines?ref=main` list page. Recorded 2026-09-17; list.json trimmed to those two rows, no field altered.",
+  "source": "REAL: gitlab.com project 12345678 pipelines 2858536145 (sha 9da437fd) and 2859138213 (sha 04eff5c5), ref main, source push, with the real `pipelines?ref=main` list page. Recorded 2026-09-17; list.json trimmed to those two rows, no field altered.",
   "note": "2858536145 read `running` for hours. The reason is a trigger:voice_agent bridge whose child is `manual`: parked, not working. The icon follows the highest pipeline id, so the newer green push wins the tray while the parked run is still listed.",
   "cases": [
     {

@@ -1,5 +1,5 @@
 {
-  "source": "REAL: gitlab.com project 82468124 pipeline 2857464986, sha ca41ab28, ref main, source push. Recorded 2026-09-17.",
+  "source": "REAL: gitlab.com project 12345678 pipeline 2857464986, sha ca41ab28, ref main, source push. Recorded 2026-09-17.",
   "note": "The website bridge deployed to all four origins while the android bridge failed and the voice-agent bridge was cancelled. The parent pipeline reads `failed`, which is the answer every other monitor gives and is not the useful one.",
   "cases": [
     {

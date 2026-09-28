@@ -1,4 +1,5 @@
-# bridgewatch, as Distronode runs it against gitlab.com project 82468124.
+# bridgewatch against one GitLab project: a push pipeline that fans out through
+# trigger jobs, an hourly schedule and preflight branches.
 #
 # This file is the source of truth: the GUI exposes exactly these keys and
 # writes them back through toml_edit, so these comments survive an edit from the
@@ -20,7 +21,7 @@ rate_limit_backoff = { max_secs = 300 }
 [[watches]]
 id       = "main-push"
 account  = "gitlab"
-project  = 82468124                    # numeric id or "group/path"
+project  = 12345678                    # numeric id or "group/path"
 ref      = "main"                      # exact, glob ("pf/*") or regex ("re:^release/.*$")
 sources  = ["push"]                    # any GitLab pipeline source; [] = all
 role     = "primary"                   # primary drives the icon; secondary is rows only
@@ -43,12 +44,12 @@ title = "{{watch.id}} {{sha7}}: {{state}}"   # minijinja over the verdict view m
 # `default`'s second argument is load-bearing: without it an empty failures list
 # is a defined empty string, not undefined, and a green pipeline notifies blank.
 body  = "{{failures | join(', ') | default('all green', true)}}"
-click = "first_failure_or_pipeline"    # first_failure_or_pipeline | pipeline | marker_job | none (desktop notifications cannot open it in 0.1)
+click = "first_failure_or_pipeline"    # first_failure_or_pipeline | pipeline | marker_job | none (desktop notifications cannot open it yet)
 
 [[watches]]
 id = "hourly"
 account = "gitlab"
-project = 82468124
+project = 12345678
 ref = "main"
 sources = ["schedule"]
 role = "secondary"
@@ -57,7 +58,7 @@ dive = { bridges = "*", depth = 1, only_when = "failed" }
 [[watches]]
 id = "preflights"
 account = "gitlab"
-project = 82468124
+project = 12345678
 ref = "pf/*"
 role = "secondary"
 dive = { bridges = "" }

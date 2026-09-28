@@ -1,5 +1,5 @@
 {
-  "source": "REAL: gitlab.com project 82468124 pipeline 2859138213, sha 04eff5c5, ref main, source push. Recorded 2026-09-17.",
+  "source": "REAL: gitlab.com project 12345678 pipeline 2859138213, sha 04eff5c5, ref main, source push. Recorded 2026-09-17.",
   "note": "A .gitignore + CLAUDE.md commit. Zero bridges, so nothing to walk into and nothing to deploy.",
   "cases": [
     {

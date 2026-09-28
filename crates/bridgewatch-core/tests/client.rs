@@ -28,14 +28,14 @@ async fn an_exact_ref_and_one_source_go_into_the_query() {
 
     client
         .list_pipelines(
-            &ProjectRef::Id(82468124),
+            &ProjectRef::Id(12345678),
             &ListQuery::exact("main", Some("push".into()), 20),
         )
         .await
         .unwrap();
 
     let path = &transport.paths()[0];
-    assert!(path.starts_with("/projects/82468124/pipelines?"), "{path}");
+    assert!(path.starts_with("/projects/12345678/pipelines?"), "{path}");
     for expected in [
         "ref=main",
         "source=push",
@@ -316,11 +316,11 @@ async fn the_fixture_transport_serves_the_recorded_endpoints() {
     let transport =
         Arc::new(bridgewatch_core::client::FixtureTransport::load(&dir).expect("fixture loads"));
     assert_eq!(transport.meta().primary, 2857464986);
-    assert_eq!(transport.meta().project, 82468124);
+    assert_eq!(transport.meta().project, 12345678);
     assert!(transport.meta().source.contains("2857464986"));
 
     let (client, _) = client_with(transport, AuthHeader::PrivateToken);
-    let project = ProjectRef::Id(82468124);
+    let project = ProjectRef::Id(12345678);
 
     let pipeline = client.get_pipeline(&project, 2857464986).await.unwrap();
     assert_eq!(pipeline.sha7(), "ca41ab2");
@@ -366,7 +366,7 @@ async fn a_recorded_fixture_reloads_and_answers_the_same() {
 
     let recorded = bridgewatch_core::client::fixture::record(
         &client,
-        &ProjectRef::Id(82468124),
+        &ProjectRef::Id(12345678),
         2857464986,
         &out,
         false,
@@ -401,7 +401,7 @@ async fn a_recorded_fixture_reloads_and_answers_the_same() {
     assert_eq!(replayed.meta().primary, 2857464986);
     let (client2, _) = client_with(replayed, AuthHeader::PrivateToken);
     let bridges = client2
-        .pipeline_bridges(&ProjectRef::Id(82468124), 2857464986)
+        .pipeline_bridges(&ProjectRef::Id(12345678), 2857464986)
         .await
         .unwrap();
     assert_eq!(bridges.len(), 4);
@@ -426,7 +426,7 @@ async fn recording_a_dead_bridge_reports_it() {
     let _ = std::fs::remove_dir_all(&out);
     let recorded = bridgewatch_core::client::fixture::record(
         &client,
-        &ProjectRef::Id(82468124),
+        &ProjectRef::Id(12345678),
         2857464986,
         &out,
         false,

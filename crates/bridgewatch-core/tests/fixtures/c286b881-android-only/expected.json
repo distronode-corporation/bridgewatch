@@ -1,5 +1,5 @@
 {
-  "source": "REAL: gitlab.com project 82468124 pipeline 2857590973, sha c286b881, ref main, source push. Recorded 2026-09-17.",
+  "source": "REAL: gitlab.com project 12345678 pipeline 2857590973, sha c286b881, ref main, source push. Recorded 2026-09-17.",
   "note": "An android-only lane. The parent is green, its one allow-failure job failed, and there is no deploy marker anywhere: `succeeded_no_deploy`, not `deployed`. The brief predicted `deployed`; the recording says otherwise, and the recording wins.",
   "cases": [
     {

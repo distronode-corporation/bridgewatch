@@ -1,5 +1,5 @@
 {
-  "source": "REAL: gitlab.com project 82468124 pipeline 2856963900, sha 4cfaced9, ref main, source push. Recorded 2026-09-17.",
+  "source": "REAL: gitlab.com project 12345678 pipeline 2856963900, sha 4cfaced9, ref main, source push. Recorded 2026-09-17.",
   "note": "A clean full-lane push. Also the manual-coverage-shards case: verify:web_coverage_full 1..4/4 are `manual` in the website child and read as gates, not as missing work, with or without the re: override.",
   "cases": [
     {

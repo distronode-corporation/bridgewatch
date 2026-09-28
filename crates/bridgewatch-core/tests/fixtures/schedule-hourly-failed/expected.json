@@ -1,5 +1,5 @@
 {
-  "source": "REAL: gitlab.com project 82468124 pipeline 2858879779, sha 9da437fd, ref main, source schedule. Recorded 2026-09-17.",
+  "source": "REAL: gitlab.com project 12345678 pipeline 2858879779, sha 9da437fd, ref main, source schedule. Recorded 2026-09-17.",
   "note": "The hourly reconcile, red by design. It matches the `hourly` secondary watch only, whose dive.only_when = \"failed\" walks into the one failed bridge and leaves the other four unopened. With no primary rows the tray reads `unknown`, which is the honest answer to \"how is main?\" when no push has been looked at.",
   "cases": [
     {

@@ -228,7 +228,7 @@ describe("Popover, degraded cases", () => {
           role: "primary",
           icon_state: null,
           rows: [],
-          error: "404 Project Not Found (project 82468124)",
+          error: "404 Project Not Found (project 12345678)",
         },
       ],
     };

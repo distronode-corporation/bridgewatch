@@ -54,9 +54,9 @@ name: Dependabot auto-merge
 # the `permissions:` block: merge by hand with `gh pr merge --squash <url>`, and delete
 # this workflow. Do not reach for `pull_request_target` to work around it.
 #
-# No `concurrency:` group. Enabling auto-merge is idempotent, so a force-push that
-# supersedes an in-flight run costs a few seconds of a small runner and nothing else;
-# cancelling would only add a way for the last run to be the cancelled one.
+# The `concurrency:` group is per pull request and never cancels. Enabling auto-merge is
+# idempotent, so a force-push that supersedes an in-flight run only queues behind it;
+# cancelling would add a way for the last run to be the cancelled one.
 
 on:
   pull_request:
@@ -64,6 +64,10 @@ on:
 # Nothing at the top level, so a job added here later starts with no token scope at all
 # rather than inheriting the repository default.
 permissions: {}
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
   auto-merge:

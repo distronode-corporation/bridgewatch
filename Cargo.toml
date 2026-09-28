@@ -22,7 +22,9 @@ edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/distronode-corporation/bridgewatch"
-authors = ["Distronode Corporation"]
+# Also the Maintainer field of the .deb: tauri-bundler takes it from `authors` before it
+# looks at tauri.conf.json's `publisher`.
+authors = ["Distronode <opensource@distronode.com>"]
 
 [workspace.dependencies]
 bridgewatch-core = { path = "crates/bridgewatch-core", version = "1.1.0" }

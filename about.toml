@@ -1,0 +1,36 @@
+# cargo-about: the licence texts of every Rust crate in the shipped app, written to
+# THIRD-PARTY-LICENSES-rust.txt by scripts/third-party-licenses.sh and bundled by the
+# release workflow. See that script for how it is run.
+#
+# ⛔ `accepted` MUST EQUAL deny.toml's `[licenses].allow`, in the same order. cargo-deny
+# is the gate that refuses a crate under any other licence; this list only says which
+# licence texts may be chosen when a crate offers several (`MIT OR Apache-2.0`). A
+# licence missing here fails generation, which is the second, later signal that
+# deny.toml was widened without this file.
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    "CC0-1.0",
+    "MPL-2.0",
+    "0BSD",
+]
+
+# What the release builds: the universal .dmg's two halves and both Linux legs.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
+
+# Our own crates are Apache-2.0 and covered by LICENSE and NOTICE.
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+private = { ignore = true }

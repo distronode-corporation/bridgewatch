@@ -168,7 +168,7 @@ async fn a_project_token_is_named_and_warned_about() {
         .route(
             "/user",
             200,
-            r#"{"id":5,"username":"project_82468124_bot_3f2a","name":"bridgewatch","bot":true}"#,
+            r#"{"id":5,"username":"project_12345678_bot_3f2a","name":"bridgewatch","bot":true}"#,
         )
         .route("/personal_access_tokens/self", 200, READ_API_TOKEN);
     let id = wizard::test_connection(&client(t), Provider::Gitlab)
@@ -179,13 +179,13 @@ async fn a_project_token_is_named_and_warned_about() {
     assert_eq!(
         id.token,
         TokenKind::Project {
-            project_id: Some(82468124)
+            project_id: Some(12345678)
         }
     );
     assert!(!id.can_list_projects());
     assert_eq!(id.warnings.len(), 1, "{:?}", id.warnings);
     assert!(
-        id.warnings[0].contains("project access token") && id.warnings[0].contains("82468124"),
+        id.warnings[0].contains("project access token") && id.warnings[0].contains("12345678"),
         "{}",
         id.warnings[0]
     );
@@ -371,7 +371,7 @@ async fn a_project_token_gets_type_an_id_or_path_without_a_request() {
         &client(t.clone()),
         Provider::Gitlab,
         &TokenKind::Project {
-            project_id: Some(82468124),
+            project_id: Some(12345678),
         },
         None,
     )
@@ -380,7 +380,7 @@ async fn a_project_token_gets_type_an_id_or_path_without_a_request() {
     let ProjectListing::TypeIdOrPath { reason, suggestion } = listing else {
         panic!("expected TypeIdOrPath, got {listing:?}");
     };
-    assert_eq!(suggestion, Some(82468124));
+    assert_eq!(suggestion, Some(12345678));
     assert!(reason.contains("Type the project id or path"), "{reason}");
     assert!(t.seen().is_empty(), "nothing was sent");
 }
@@ -474,7 +474,7 @@ async fn the_type_it_hint_names_what_each_provider_takes() {
 #[test]
 fn what_people_type_for_a_project_is_understood() {
     let p = |s: &str| wizard::parse_project_input(s, Provider::Gitlab);
-    assert_eq!(p(" 82468124 ").unwrap(), ProjectRef::Id(82468124));
+    assert_eq!(p(" 12345678 ").unwrap(), ProjectRef::Id(12345678));
     for typed in [
         "acme-corp/monorepo",
         "https://gitlab.com/acme-corp/monorepo",
@@ -647,7 +647,7 @@ async fn suggestions_from_a_recorded_pipeline_walk_the_children() {
     let transport = Arc::new(FixtureTransport::load(&dir).unwrap());
     let got = wizard::suggest_deploy_markers(
         &client(transport.clone()),
-        &ProjectRef::Id(82468124),
+        &ProjectRef::Id(12345678),
         "main",
         None,
     )
@@ -910,7 +910,7 @@ fn re_running_on_a_matching_config_changes_nothing() {
             service: "glab:gitlab.com:token".into(),
             user: String::new(),
         },
-        project: Some(ProjectRef::Id(82468124)),
+        project: Some(ProjectRef::Id(12345678)),
         watch_id: "main-push".into(),
         deploy_markers: vec!["deploy:origins".into(), "deploy:marketing".into()],
         notify: Some(NotifyAnswers {
@@ -931,7 +931,7 @@ fn re_running_on_a_matching_config_changes_nothing() {
 fn re_running_on_an_existing_config_edits_rather_than_clobbers() {
     let example = support::example_config_raw();
     let changed = WizardAnswers {
-        project: Some(ProjectRef::Id(82468124)),
+        project: Some(ProjectRef::Id(12345678)),
         watch_id: "main-push".into(),
         deploy_markers: vec!["deploy:origins".into()],
         token: TokenSource::Env("BRIDGEWATCH_TOKEN_GITLAB".into()),
@@ -1083,7 +1083,7 @@ fn with_no_primary_in_the_file_the_new_watch_is_primary() {
 fn re_running_for_the_primary_watch_keeps_it_primary() {
     let example = support::example_config_raw();
     let same = WizardAnswers {
-        project: Some(ProjectRef::Id(82468124)),
+        project: Some(ProjectRef::Id(12345678)),
         watch_id: "main-push".into(),
         ..answers()
     };
@@ -1334,7 +1334,7 @@ fn answers_arrive_as_json_in_the_documented_shape() {
             "account": "gitlab",
             "base_url": "https://gitlab.com",
             "token": json,
-            "project": 82468124,
+            "project": 12345678,
             "watch_id": "distronode-com-main",
             "ref_name": "main",
             "sources": ["push"],
@@ -1347,7 +1347,7 @@ fn answers_arrive_as_json_in_the_documented_shape() {
         }))
         .unwrap();
         assert_eq!(answers.token, want);
-        assert_eq!(answers.project, Some(ProjectRef::Id(82468124)));
+        assert_eq!(answers.project, Some(ProjectRef::Id(12345678)));
         let back = serde_json::to_value(&answers).unwrap();
         let again: WizardAnswers = serde_json::from_value(back).unwrap();
         assert_eq!(again, answers);
@@ -1554,7 +1554,7 @@ fn what_people_type_for_a_github_repository_is_understood() {
     // ⛔ A numeric id is refused where it is typed, because `config::validate`
     // calls it an ERROR: writing it would produce a file the wizard's own final
     // check rejects.
-    let err = p("82468124").unwrap_err();
+    let err = p("12345678").unwrap_err();
     assert!(err.to_string().contains("owner/repo"), "{err}");
     // A TYPED three-segment path is refused rather than silently truncated to
     // something the user did not write.
@@ -1796,7 +1796,7 @@ async fn github_deploy_suggestions_come_from_one_run_s_jobs() {
 #[test]
 fn github_answers_that_cannot_work_are_refused_on_their_own_step() {
     let numeric = WizardAnswers {
-        project: Some(ProjectRef::Id(82468124)),
+        project: Some(ProjectRef::Id(12345678)),
         ..gh_answers()
     };
     let WizardError::Answers(issues) = wizard::build_config(&numeric, None).unwrap_err() else {

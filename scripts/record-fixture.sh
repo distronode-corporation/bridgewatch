@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Record one parent pipeline into a test fixture directory, using `glab api`.
 #
-#   scripts/record-fixture.sh <pipeline-id> <name> [project] [--list]
+#   scripts/record-fixture.sh <pipeline-id> <name> <project> [--list]
 #
 # Writes crates/bridgewatch-core/tests/fixtures/<name>/ containing:
 #
@@ -34,9 +34,9 @@
 # other, and run `cargo test -p bridgewatch-core --test verdict`.
 set -euo pipefail
 
-PIPELINE_ID="${1:?usage: record-fixture.sh <pipeline-id> <name> [project] [--list]}"
-NAME="${2:?usage: record-fixture.sh <pipeline-id> <name> [project] [--list]}"
-PROJECT="${3:-82468124}"
+PIPELINE_ID="${1:?usage: record-fixture.sh <pipeline-id> <name> <project> [--list]}"
+NAME="${2:?usage: record-fixture.sh <pipeline-id> <name> <project> [--list]}"
+PROJECT="${3:?usage: record-fixture.sh <pipeline-id> <name> <project> [--list]}"
 WANT_LIST="${4:-}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

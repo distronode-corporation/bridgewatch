@@ -23,9 +23,9 @@ afterEach(() => {
 });
 
 const WATCHES = [
-  { id: "main-push", role: "primary", account: "gitlab.com", project: 82468124, ref: "main" },
-  { id: "hourly", role: "secondary", account: "gitlab.com", project: 82468124, ref: "main" },
-  { id: "preflights", role: "secondary", account: "gitlab.com", project: 82468124, ref: "pf/*" },
+  { id: "main-push", role: "primary", account: "gitlab.com", project: 12345678, ref: "main" },
+  { id: "hourly", role: "secondary", account: "gitlab.com", project: 12345678, ref: "main" },
+  { id: "preflights", role: "secondary", account: "gitlab.com", project: 12345678, ref: "pf/*" },
 ];
 
 function render(watches = WATCHES) {

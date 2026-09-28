@@ -1,0 +1,23 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "resources": {
+      "../target/licenses/THIRD-PARTY-LICENSES-rust.txt": "THIRD-PARTY-LICENSES-rust.txt",
+      "../target/licenses/THIRD-PARTY-LICENSES-npm.txt": "THIRD-PARTY-LICENSES-npm.txt"
+    },
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/doc/bridgewatch/THIRD-PARTY-LICENSES-rust.txt": "../target/licenses/THIRD-PARTY-LICENSES-rust.txt",
+          "/usr/share/doc/bridgewatch/THIRD-PARTY-LICENSES-npm.txt": "../target/licenses/THIRD-PARTY-LICENSES-npm.txt"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/share/licenses/bridgewatch/THIRD-PARTY-LICENSES-rust.txt": "../target/licenses/THIRD-PARTY-LICENSES-rust.txt",
+          "/usr/share/licenses/bridgewatch/THIRD-PARTY-LICENSES-npm.txt": "../target/licenses/THIRD-PARTY-LICENSES-npm.txt"
+        }
+      }
+    }
+  }
+}

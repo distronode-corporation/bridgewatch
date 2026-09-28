@@ -85,7 +85,7 @@ impl Drop for TempDir {
 }
 
 /// One account, one primary watch on `main`. The fixtures in the core crate
-/// were recorded against project 82468124, which is what this names.
+/// carry the placeholder project id 12345678, which is what this names.
 const MINIMAL: &str = r#"
 [accounts.gitlab]
 token = { env = "BRIDGEWATCH_TEST_TOKEN_NEVER_SET" }
@@ -93,7 +93,7 @@ token = { env = "BRIDGEWATCH_TEST_TOKEN_NEVER_SET" }
 [[watches]]
 id = "main-push"
 account = "gitlab"
-project = 82468124
+project = 12345678
 ref = "main"
 sources = ["push"]
 deploy_markers = ["deploy:origins", "deploy:marketing"]
@@ -109,7 +109,7 @@ token = { env = "BRIDGEWATCH_TEST_TOKEN_NEVER_SET" }
 [[watches]]
 id = "hourly"
 account = "gitlab"
-project = 82468124
+project = 12345678
 ref = "main"
 role = "secondary"
 sources = ["push", "schedule"]
@@ -711,7 +711,7 @@ fn init_edits_an_existing_config_rather_than_replacing_it() {
     let out = run(bin().args(["--config"]).arg(&path).args([
         "init",
         "--project",
-        "82468124",
+        "12345678",
         "--ref",
         "release",
         "--glab",
@@ -721,7 +721,7 @@ fn init_edits_an_existing_config_rather_than_replacing_it() {
     for line in original.lines().filter(|l| l.trim_start().starts_with('#')) {
         assert!(text.contains(line), "comment lost: {line}");
     }
-    assert!(text.contains("id = \"82468124-release\""), "{text}");
+    assert!(text.contains("id = \"12345678-release\""), "{text}");
     assert!(text.starts_with(&original[..original.find("[[watches]]").unwrap()]));
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -938,7 +938,7 @@ fn init_refuses_answers_that_do_not_fit_the_provider() {
         run(&mut cmd)
     };
 
-    let out = github(&["--project", "82468124"]);
+    let out = github(&["--project", "12345678"]);
     assert_eq!(code(&out), 64, "{}", stderr(&out));
     assert!(stderr(&out).contains("owner/repo"), "{}", stderr(&out));
 

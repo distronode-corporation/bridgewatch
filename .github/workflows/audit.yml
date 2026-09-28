@@ -16,10 +16,10 @@ name: Audit
 # repository activity, and emails the owner when it does. On a dormant repository the
 # weekly check stops; re-enable it from the Actions tab (or push anything).
 #
-# No `concurrency` group: the two jobs are read-only, share no state with each other
-# or with any other workflow, and a manual run overlapping the Monday cron costs a
-# few runner-minutes and nothing else. A group here would only add a way to cancel a
-# check that is cheap to let finish.
+# A `concurrency` group that queues rather than cancels: the two jobs are read-only and
+# share no state, so an overlap would be harmless, but a manual run and the Monday cron
+# then report one after the other instead of racing. Nothing is ever cancelled, because
+# a cancelled advisory check is a week with no answer.
 on:
   schedule:
     # Weekly, Monday, 30 minutes after scorecard.yml's '17 6 * * 1' so the two weekly
@@ -30,6 +30,10 @@ on:
 # Read-only. Neither job writes anything back to the repository.
 permissions:
   contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: false
 
 # Two independent jobs, deliberately not one: a Rust advisory and an npm advisory are
 # separate answers, and each should be reported whatever the other does. (`fail-fast`
