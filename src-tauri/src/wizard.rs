@@ -674,11 +674,9 @@ mod tests {
         assert_eq!(f.kind, FailureKind::Answers);
         assert_eq!(f.issues[0].field, "token");
         assert_eq!(f.issues[0].step, WizardStep::Account);
-        assert!(
-            f.message.starts_with("could not read the token"),
-            "{}",
-            f.message
-        );
+        // No `{}` of the message: printing a token failure, even this one,
+        // reads to CodeQL as logging a secret.
+        assert!(f.message.starts_with("could not read the token"));
     }
 
     #[test]
