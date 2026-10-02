@@ -146,6 +146,22 @@ describe("TextTab, a file that moved underneath the buffer", () => {
     expect(h.conflict()).toBe(null);
   });
 
+  it("stops and says so when the file cannot be re-read for an overwrite", async () => {
+    // ⛔ A failed re-read fell back to the stale base, so the save conflicted
+    // again and every click showed the same banner with no reason at all.
+    const h = render(FILE, OK, () => 'title = "from $EDITOR"\n');
+    h.type(EDIT);
+    await h.save();
+    h.props.diskText = () => Promise.reject("permission denied: bridgewatch.toml");
+    flushSync();
+    await h.overwrite();
+    expect(h.saved).toEqual([]);
+    expect(host.querySelector(".read-error")?.textContent).toContain(
+      "Could not re-read the file: permission denied: bridgewatch.toml",
+    );
+    expect(h.box().value).toBe(EDIT);
+  });
+
   it("offers to take the file instead, which is a revert", async () => {
     const h = render(FILE, OK, () => 'title = "from $EDITOR"\n');
     h.type(EDIT);

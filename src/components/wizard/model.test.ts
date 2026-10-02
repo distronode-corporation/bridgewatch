@@ -166,6 +166,11 @@ describe("GitHub", () => {
     expect(cliKeyringService("github", "https://ghe.acme.com")).toBe("gh:ghe.acme.com");
     expect(cliKeyringService("gitlab", "https://GitLab.Example.com:8443/")).toBe("glab:gitlab.example.com:8443:token");
     expect(cliKeyringService("github", "github.com")).toBeNull();
+    // As the core's `oauth::host_of` normalises it: no default port, no userinfo.
+    expect(cliKeyringService("gitlab", "https://GitLab.com:443/")).toBe("glab:gitlab.com:token");
+    expect(cliKeyringService("gitlab", "http://gitlab.internal:80")).toBe("glab:gitlab.internal:token");
+    expect(cliKeyringService("gitlab", "https://gitlab.com?x=1")).toBe("glab:gitlab.com:token");
+    expect(cliKeyringService("gitlab", "https://me@gitlab.com")).toBeNull();
     // GitHub's prefixes are refused for GitHub only, as in the core.
     expect(findTokenPrefix("ghp_abc", "github")).toBe("ghp_");
     expect(findTokenPrefix("github_pat_abc", "github")).toBe("github_pat_");

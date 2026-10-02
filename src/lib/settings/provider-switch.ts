@@ -14,18 +14,12 @@
  * removing a key that is not in the file changes nothing.
  */
 
+import { PROVIDER_DEFAULTS, providerName } from "../providers";
 import type { Edit, Provider } from "../types";
 import { concretePath } from "./registry";
 
-/** The keys that default per provider, as the core's `Provider::default_*` gives them. */
-export const PROVIDER_DEFAULTS: Record<Provider, { base_url: string; api_path: string; header: string }> = {
-  gitlab: { base_url: "https://gitlab.com", api_path: "/api/v4", header: "PRIVATE-TOKEN" },
-  github: { base_url: "https://api.github.com", api_path: "", header: "Authorization: Bearer" },
-};
-
+/** The account keys that default per provider. */
 const KEYS = ["base_url", "api_path", "header"] as const;
-
-const NAMES: Record<Provider, string> = { gitlab: "GitLab", github: "GitHub" };
 
 /** What else a provider change writes, and the note for any value kept. */
 export interface ProviderSwitch {
@@ -51,6 +45,6 @@ export function providerSwitch(name: string, account: unknown, from: Provider, t
   const note =
     kept.length === 0
       ? null
-      : `Kept ${kept.join(", ")} (not ${NAMES[from]}'s default). Check ${kept.length === 1 ? "it suits" : "they suit"} ${NAMES[to]}.`;
+      : `Kept ${kept.join(", ")} (not ${providerName(from)}'s default). Check ${kept.length === 1 ? "it suits" : "they suit"} ${providerName(to)}.`;
   return { edits, note };
 }

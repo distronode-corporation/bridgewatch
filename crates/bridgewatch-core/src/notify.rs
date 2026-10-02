@@ -8,8 +8,9 @@
 //! tick baselines silently**: starting the app must not replay every failure of
 //! the last week as a burst of notifications.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -79,11 +80,20 @@ pub struct NotifyLedger {
     /// Watch ids whose first successful tick has happened.
     #[serde(default)]
     pub baselined: BTreeSet<String>,
+    /// The pipeline ids each primary watch last had on screen, which trimming
+    /// never touches. Rebuilt by every tick, so never written to disk.
+    #[serde(skip)]
+    on_screen: BTreeMap<String, BTreeSet<u64>>,
+    /// Something was recorded since the ledger was loaded or last saved.
+    #[serde(skip)]
+    dirty: bool,
 }
 
 /// How many keys a ledger keeps before the oldest are dropped.
 ///
-/// Keys are pipeline-scoped, so this is a few hundred pipelines' worth.
+/// Keys are pipeline-scoped, so this is a few hundred pipelines' worth. The
+/// ledger can briefly hold more when every key past the cap belongs to a
+/// pipeline still on screen; see [`NotifyLedger::record`].
 pub const LEDGER_MAX_KEYS: usize = 2000;
 
 /// The pipeline id a dedupe key begins with, for trimming.
@@ -133,28 +143,31 @@ impl NotifyLedger {
             .unwrap_or_default()
     }
 
+    /// Write the ledger if anything was recorded since it was loaded or last
+    /// saved, and remember that it now matches the file.
+    ///
+    /// ⚠️ The poller calls this every tick, a few seconds apart while
+    /// something is live, and a tick that learned nothing used to rewrite up
+    /// to [`LEDGER_MAX_KEYS`] keys anyway.
+    pub fn save_if_changed(&mut self, path: &Path) -> std::io::Result<()> {
+        if !self.dirty {
+            return Ok(());
+        }
+        self.save(path)?;
+        self.dirty = false;
+        Ok(())
+    }
+
     /// Write the ledger, creating the directory if needed.
     ///
-    /// ⚠ Written to a sibling and renamed over the target. A plain write that
-    /// was interrupted (a full disk, a kill mid-tick) left a truncated file,
-    /// which `load` reads as EMPTY: the next start then had no baselines and
+    /// ⚠ Through [`crate::config::write_atomic`]. A plain write that was
+    /// interrupted (a full disk, a kill mid-tick) left a truncated file, which
+    /// `load` reads as EMPTY: the next start then had no baselines and
     /// re-announced everything on screen.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let body = serde_json::to_string(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "notify.json".into());
-        let temp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
-        let result = std::fs::write(&temp, body).and_then(|()| std::fs::rename(&temp, path));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temp);
-        }
-        result
+        crate::config::write_atomic(path, &body)
     }
 
     /// Has this key already been delivered?
@@ -185,12 +198,24 @@ impl NotifyLedger {
     /// pipeline the moment ids cross a power of ten — and the pipeline that was
     /// just trimmed is the one still on screen, so it re-notifies on every tick
     /// until it falls off the list.
+    ///
+    /// ⛔ And never the key just recorded, nor any key of a pipeline a watch
+    /// still has on screen. The ledger is shared by every watch and ids are not
+    /// one sequence: a GitHub run id is around 1.8e10 and a quiet GitLab
+    /// project's can be nine digits, so "smallest id" was the quiet watch's
+    /// newest row, recorded and trimmed on every tick, announced every time.
+    /// When only protected keys are left the ledger runs over the cap instead,
+    /// by at most what is on screen.
     pub fn record(&mut self, key: String) {
-        self.seen.insert(key);
+        if !self.seen.insert(key.clone()) {
+            return;
+        }
+        self.dirty = true;
         while self.seen.len() > LEDGER_MAX_KEYS {
             let Some(victim) = self
                 .seen
                 .iter()
+                .filter(|k| **k != key && !self.is_on_screen(key_pipeline_id(k)))
                 .min_by_key(|k| (key_pipeline_id(k), k.as_str()))
                 .cloned()
             else {
@@ -200,6 +225,13 @@ impl NotifyLedger {
         }
     }
 
+    /// Does any watch have this pipeline on screen?
+    fn is_on_screen(&self, pipeline_id: u64) -> bool {
+        self.on_screen
+            .values()
+            .any(|ids| ids.contains(&pipeline_id))
+    }
+
     /// Has this watch had its first successful tick?
     pub fn is_baselined(&self, watch: &str) -> bool {
         self.baselined.contains(watch)
@@ -207,7 +239,9 @@ impl NotifyLedger {
 
     /// Mark a watch as baselined.
     pub fn baseline(&mut self, watch: &str) {
-        self.baselined.insert(watch.to_string());
+        if self.baselined.insert(watch.to_string()) {
+            self.dirty = true;
+        }
     }
 }
 
@@ -277,6 +311,12 @@ pub fn notifications_for(
         return Vec::new();
     }
 
+    // Before anything is recorded, so a row of this tick cannot be trimmed to
+    // make room for another of its own keys.
+    ledger
+        .on_screen
+        .insert(watch.id.clone(), view.rows.iter().map(|r| r.id).collect());
+
     let baselining = !ledger.is_baselined(&watch.id);
     let mut out = Vec::new();
 
@@ -312,9 +352,7 @@ pub fn notifications_for(
                     out.push(n);
                     said_something = true;
                 }
-                Err(e) => {
-                    tracing::warn!(watch = %watch.id, error = %e, "notification template failed")
-                }
+                Err(e) => template_failed(watch, &key, &e),
             }
         }
 
@@ -329,9 +367,7 @@ pub fn notifications_for(
                         ledger.record(key);
                         out.push(n);
                     }
-                    Err(e) => {
-                        tracing::warn!(watch = %watch.id, error = %e, "notification template failed")
-                    }
+                    Err(e) => template_failed(watch, &key, &e),
                 }
             }
         }
@@ -341,6 +377,28 @@ pub fn notifications_for(
         ledger.baseline(&watch.id);
     }
     out
+}
+
+/// Log a notification that could not be rendered: `warn` the first time this
+/// process meets the event, `debug` after that.
+///
+/// ⚠️ The key is deliberately left unrecorded, so the event is retried on every
+/// tick until the template is fixed, and warning on each retry made one broken
+/// filter an unbounded stream of identical lines that buried the first. Held
+/// per process rather than in the ledger: a restart is when somebody reads the
+/// log afresh, and should see it once more.
+fn template_failed(watch: &Watch, key: &str, error: &minijinja::Error) {
+    static WARNED: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
+    let first = WARNED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert((watch.id.clone(), key.to_string()));
+    if first {
+        tracing::warn!(watch = %watch.id, key, error = %error, "notification template failed");
+    } else {
+        tracing::debug!(watch = %watch.id, key, error = %error, "notification template failed");
+    }
 }
 
 /// Which events this row would raise, before deduplication.

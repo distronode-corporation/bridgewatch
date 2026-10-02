@@ -81,11 +81,6 @@ impl IconState {
             IconState::SucceededNoDeploy => 7,
         }
     }
-
-    /// True for the states worth interrupting somebody over.
-    pub fn is_bad(&self) -> bool {
-        matches!(self, IconState::Failed | IconState::DeployedWithFailure)
-    }
 }
 
 impl std::fmt::Display for IconState {

@@ -35,12 +35,20 @@ const snapshot: Snapshot = {
 
 const calls = { status: 0, opened: 0 };
 
+/** What the shell answers for the two "open" requests; reset per test. */
+const shell = {
+  status,
+  pipelinesUrl: (): Promise<string | null> => Promise.resolve(null),
+  openExternal: (_url: string): Promise<void> => Promise.resolve(),
+  openWizard: (): Promise<void> => Promise.resolve(),
+};
+
 vi.mock("./lib/ipc", () => ({
   inTauri: () => true,
   getSnapshot: () => Promise.resolve(snapshot),
   getStatus: () => {
     calls.status++;
-    return Promise.resolve(status);
+    return Promise.resolve(shell.status);
   },
   popoverOpened: () => {
     calls.opened++;
@@ -48,9 +56,10 @@ vi.mock("./lib/ipc", () => ({
   },
   onSnapshot: () => Promise.resolve(() => {}),
   hidePopover: () => Promise.resolve(),
-  openExternal: () => Promise.resolve(),
+  openExternal: (url: string) => shell.openExternal(url),
   openSettings: () => Promise.resolve(),
-  pipelinesUrl: () => Promise.resolve(null),
+  openWizard: () => shell.openWizard(),
+  pipelinesUrl: () => shell.pipelinesUrl(),
   quit: () => Promise.resolve(),
   refreshNow: () => Promise.resolve(true),
   resizePopover: () => Promise.resolve(),
@@ -71,6 +80,10 @@ beforeAll(async () => {
 beforeEach(() => {
   calls.status = 0;
   calls.opened = 0;
+  shell.status = status;
+  shell.pipelinesUrl = () => Promise.resolve(null);
+  shell.openExternal = () => Promise.resolve();
+  shell.openWizard = () => Promise.resolve();
   vi.useFakeTimers();
   // jsdom has no layout, so the resize measurement is a no-op; requestAnimationFrame
   // still has to exist for the click handler.
@@ -152,5 +165,56 @@ describe("PopoverApp, while nobody is looking", () => {
     const quiet = calls.status;
     h.seconds(5);
     expect(calls.status).toBe(quiet);
+  });
+});
+
+describe("PopoverApp, a request the shell could not carry out", () => {
+  async function settle() {
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    flushSync();
+  }
+  const button = (label: string) =>
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === label)!;
+  const notice = () => host.querySelector("[data-slot=popover-notice]")?.textContent?.trim() ?? "";
+
+  it("says why Pipelines opened nothing", async () => {
+    // The rejection used to be dropped, so the click did nothing at all.
+    shell.pipelinesUrl = () => Promise.resolve("https://gitlab.com/g/p/-/pipelines");
+    shell.openExternal = () => Promise.reject("the host is not a configured account's");
+    await render();
+    button("Pipelines").click();
+    await settle();
+    expect(notice()).toBe("Could not open the pipelines page: the host is not a configured account's");
+  });
+
+  it("says so when there is no pipelines page to open yet", async () => {
+    await render();
+    button("Pipelines").click();
+    await settle();
+    expect(notice()).toContain("No pipelines page");
+  });
+
+  it("says why the setup wizard did not open", async () => {
+    shell.status = {
+      ...status,
+      configOk: false,
+      firstRun: true,
+      diagnostics: [{ severity: "error", path: "", message: "No configuration yet.", line: null, col: null }],
+    };
+    shell.openWizard = () => Promise.reject({ kind: "window", message: "the wizard window could not be created" });
+    await render();
+    await settle();
+    button("Set up bridgewatch…").click();
+    await settle();
+    expect(notice()).toBe("Could not open the setup wizard: the wizard window could not be created");
+  });
+
+  it("forgets the notice once the popover is hidden", async () => {
+    await render();
+    button("Pipelines").click();
+    await settle();
+    window.dispatchEvent(new Event("blur"));
+    flushSync();
+    expect(notice()).toBe("");
   });
 });

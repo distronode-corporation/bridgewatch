@@ -196,7 +196,6 @@ fn the_plan_counts_two_requests_per_stale_pipeline() {
         1 + 2 * 2,
         "one list plus two per pipeline"
     );
-    assert!(!plan.is_idle());
 }
 
 fn bridge(name: &str, status: &str, child: Option<(u64, &str)>) -> Bridge {

@@ -1757,3 +1757,81 @@ deploy_markers = ["deploy:origins"]
         "an absent key is the GitLab account it always was"
     );
 }
+
+// ---------------------------------------------------------------------------
+// write_atomic
+// ---------------------------------------------------------------------------
+
+/// The one atomic write (config.toml, the notification ledger, the ETA
+/// history): a symlinked file stays a symlink and the real file is replaced,
+/// its mode survives, nothing temporary is left, and a missing directory is
+/// created.
+#[test]
+fn an_atomic_write_keeps_a_symlink_and_the_file_mode() {
+    let dir = std::env::temp_dir().join(format!("bw-atomic-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let real = dir.join("real.toml");
+    let link = dir.join("config.toml");
+    std::fs::write(&real, "old").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+    }
+    #[cfg(not(unix))]
+    std::fs::copy(&real, &link).unwrap();
+
+    config::write_atomic(&link, "new").unwrap();
+    assert_eq!(std::fs::read_to_string(&link).unwrap(), "new");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the symlink was replaced by a regular file"
+        );
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
+        let mode = std::fs::metadata(&real).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let leftovers: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "temporary file left behind");
+
+    let nested = dir.join("state").join("bridgewatch").join("notify.json");
+    config::write_atomic(&nested, "{}").unwrap();
+    assert_eq!(std::fs::read_to_string(&nested).unwrap(), "{}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `Account::for_instance` is the one way an account is built from a provider
+/// and an instance: trimmed of trailing slashes, and a GitHub Enterprise Server
+/// host gets its `/api/v3` where a bare `base_url` assignment left github.com's
+/// empty prefix.
+#[test]
+fn an_account_for_an_instance_carries_the_api_path_its_host_needs() {
+    use config::{Account, AuthHeader};
+
+    let ghes = Account::for_instance(Provider::Github, " https://ghe.acme.com/ ");
+    assert_eq!(ghes.base_url, "https://ghe.acme.com");
+    assert_eq!(ghes.api_path, "/api/v3");
+    assert_eq!(ghes.header, AuthHeader::AuthorizationBearer);
+
+    let hosted = Account::for_instance(Provider::Github, "https://api.github.com");
+    assert_eq!(hosted.api_path, "");
+    let residency = Account::for_instance(Provider::Github, "https://api.acme.ghe.com/");
+    assert_eq!(residency.api_path, "");
+
+    let gitlab = Account::for_instance(Provider::Gitlab, "https://gitlab.example.com//");
+    assert_eq!(gitlab.base_url, "https://gitlab.example.com");
+    assert_eq!(gitlab.api_path, "/api/v4");
+    assert_eq!(gitlab.header, AuthHeader::PrivateToken);
+}

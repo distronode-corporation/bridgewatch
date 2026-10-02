@@ -21,5 +21,7 @@ export default defineConfig({
     // theme test (which reads app.css as text) would silently read "". Only
     // the theme stylesheet is let through; no test imports it for styling.
     css: { include: [/src\/lib\/theme\/app\.css/] },
+    // Fails a test that makes Svelte warn `derived_inert`; see the file.
+    setupFiles: ["./src/vitest.setup.ts"],
   },
 });

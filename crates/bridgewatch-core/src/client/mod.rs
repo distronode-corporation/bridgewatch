@@ -272,9 +272,11 @@ fn write_forbidden_message(status: &u16, provider: &Provider) -> String {
 
 /// Everything a GitLab call can fail with.
 ///
-/// The variants are the ones the poller reacts to differently: `Auth` is worth
-/// telling the user about once and not retrying at speed, `RateLimited` drives
-/// the backoff, and `Transport` is usually somebody's Wi-Fi.
+/// The variants are the ones a user acts on differently: `Auth` means fix the
+/// token, `RateLimited` carries how long to wait, and `Transport` is usually
+/// somebody's Wi-Fi. The poller backs off on every one of them alike (see
+/// [`crate::poll::PollPolicy::on_error`]); only a `RateLimited` answer's
+/// `retry-after` or reset sets the wait.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ClientError {
     /// 401 or 403: the token is missing, wrong, or lacks the scope.
@@ -431,10 +433,7 @@ pub enum ClientError {
 /// two places to fix it. Plain words, because it is shown in the popover as it
 /// stands.
 fn sign_in_again_message(account: &str, provider: &Provider, never_signed_in: bool) -> String {
-    let name = match provider {
-        Provider::Gitlab => "GitLab",
-        Provider::Github => "GitHub",
-    };
+    let name = provider_name(provider);
     let what = if never_signed_in {
         format!("account \"{account}\" is not signed in to {name}")
     } else {
@@ -447,21 +446,11 @@ fn sign_in_again_message(account: &str, provider: &Provider, never_signed_in: bo
 }
 
 impl ClientError {
-    /// True when retrying sooner is pointless and the user has to do something.
-    pub fn is_fatal(&self) -> bool {
-        matches!(
-            self,
-            ClientError::Auth { .. }
-                | ClientError::Unsupported { .. }
-                | ClientError::SignInAgain { .. }
-                | ClientError::ActionsDisabled
-                | ClientError::WriteForbidden { .. }
-                | ClientError::JobRefused { .. }
-                | ClientError::SignInForActions { .. }
-        )
-    }
-
-    /// True when the poller should back off rather than retry at pace.
+    /// True when the server or the network is asking to be asked less often.
+    ///
+    /// Read by the OAuth device flow's polling loop, which slows down on these
+    /// and only these. The poller does not need it: it backs off on every
+    /// error (see [`crate::poll::PollPolicy::on_error`]).
     pub fn should_back_off(&self) -> bool {
         matches!(
             self,

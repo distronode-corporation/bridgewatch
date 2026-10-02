@@ -89,10 +89,10 @@ jobs:
           fi
           echo "$GITHUB_SHA is on main"
 
-      # The three version literals agree with each other AND with the tag. Without
+      # The two version literals agree with each other AND with the tag. Without
       # this a `v1.0.1` tag on an unbumped tree ships seven files named `1.0.0`,
-      # because Tauri names every bundle after tauri.conf.json and nothing compares
-      # the two.
+      # because Tauri names every bundle after Cargo.toml's version (tauri.conf.json
+      # deliberately sets none) and nothing else compares it with the tag.
       - name: Versions agree with the tag
         run: python3 scripts/check-version.py "$GITHUB_REF_NAME"
 
@@ -247,21 +247,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # Kept in step with ci.yml's LINUX_TAURI_DEPS. libssl-dev is absent from both:
-      # reqwest is built on rustls and openssl-sys appears nowhere in Cargo.lock.
+      # The same apt list ci.yml's jobs install, written once in the local composite
+      # action (no secret is passed to it, and it holds no `uses:` of its own).
+      # libssl-dev is absent: reqwest is built on rustls and openssl-sys appears
+      # nowhere in Cargo.lock.
       - name: Install Tauri system dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libsoup-3.0-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            xdg-utils
+        uses: $/.github/actions/linux-tauri-deps
 
       # Plain rustup, which every GitHub-hosted image carries, instead of a third-party
       # toolchain action: one less thing holding code execution in the job that builds
@@ -345,29 +337,13 @@ jobs:
           retryAttempts: 2
 
       # ⛔ tauri-action EXITS 0 WHEN IT FINDS NO ARTIFACTS AND HAS NOT BEEN ASKED TO
-      # UPLOAD ANY ("The action was not configured to upload artifacts, therefore this
-      # is not handled as an error"). So the step above cannot be trusted to have
-      # produced anything. This is where that is caught, per leg, by count.
+      # UPLOAD ANY, so the step above cannot be trusted to have produced anything. The
+      # local action asserts the count per leg (shared with ci.yml's `installers`).
       - name: Stage this leg's bundles
-        env:
-          BUNDLE_DIR: ${{ matrix.bundle_dir }}
-          EXPECTED: ${{ matrix.expected }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p staging
-          # -type f skips bundle/macos/*.app, which is a directory, and the name
-          # filter is the whole of what this project ships.
-          find "$BUNDLE_DIR" -maxdepth 2 -type f \
-            \( -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
-            -exec cp {} staging/ \;
-          found="$(find staging -type f | wc -l | tr -d ' ')"
-          if [ "$found" -ne "$EXPECTED" ]; then
-            echo "::error::expected $EXPECTED bundle(s) under $BUNDLE_DIR, staged $found"
-            find "$BUNDLE_DIR" -maxdepth 3 || true
-            exit 1
-          fi
-          ls -l staging
+        uses: $/.github/actions/stage-bundles
+        with:
+          bundle-dir: ${{ matrix.bundle_dir }}
+          expected: ${{ matrix.expected }}
 
       # ⛔ A tauri build with no usable identity does not fail, it ships unsigned. So
       # the .app INSIDE the staged .dmg is checked for the Developer ID signature, a
@@ -396,38 +372,24 @@ jobs:
             || { echo "::error::not signed with the Distronode Developer ID"; exit 1; }
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
-          # ⛔ A universal build that quietly produced one architecture would still
-          # sign, notarise and pass Gatekeeper, and then refuse to start on the other
-          # half of the fleet. So the executable inside the .app must be fat.
-          exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
-          lipo -info "$app/Contents/MacOS/$exe"
-          # -archs prints the architectures alone; -info also echoes the path, which a
-          # word match could hit.
-          archs="$(lipo -archs "$app/Contents/MacOS/$exe")"
-          for arch in x86_64 arm64; do
-            grep -qw "$arch" <<<"$archs" || { echo "::error::$exe is not built for $arch (has: $archs)"; exit 1; }
-          done
           # The licence files, as the bundle resources put them.
           for f in LICENSE NOTICE THIRD-PARTY-LICENSES-rust.txt THIRD-PARTY-LICENSES-npm.txt; do
             [ -s "$app/Contents/Resources/$f" ] || { echo "::error::the .app has no Contents/Resources/$f"; exit 1; }
           done
 
-      # The core shells out to `secret-tool` on Linux (tauri.conf.json declares the
-      # dependency). A package without it installs cleanly and then cannot read a
-      # keyring token, so it is asserted on the built packages, not on the config.
+      # ⛔ A universal build that quietly produced one architecture would still sign,
+      # notarise and pass Gatekeeper, and then refuse to start on the other half of the
+      # fleet, so the executable inside the .dmg's .app must be fat. Its own step (the
+      # local action re-mounts the .dmg), shared with ci.yml's `installers`.
+      - name: The .app is universal
+        if: runner.os == 'macOS'
+        uses: $/.github/actions/dmg-is-universal
+
+      # The core shells out to `secret-tool` on Linux; the local action (shared with
+      # ci.yml's `installers`) asserts it on the built packages, not on the config.
       - name: The .deb and .rpm depend on secret-tool
         if: runner.os == 'Linux'
-        run: |
-          set -euo pipefail
-          depends="$(dpkg-deb -f staging/*.deb Depends)"
-          echo "deb Depends: $depends"
-          grep -qw libsecret-tools <<<"$depends" || { echo "::error::the .deb does not depend on libsecret-tools"; exit 1; }
-          # `rpm` is on both 22.04 images today; installed if a future image drops it.
-          command -v rpm >/dev/null || { sudo apt-get update && sudo apt-get install -y rpm; }
-          requires="$(rpm -qpR staging/*.rpm)"
-          echo "rpm Requires:"
-          echo "$requires"
-          grep -qxF /usr/bin/secret-tool <<<"$requires" || { echo "::error::the .rpm does not require /usr/bin/secret-tool"; exit 1; }
+        uses: $/.github/actions/linux-packages-need-secret-tool
 
       # LICENSE, NOTICE and the third-party licence texts: in the package documentation
       # directory of the .deb and the .rpm, and among the AppImage's resources.
@@ -495,7 +457,7 @@ jobs:
 
       # ⛔ THE ASSET SET IS THE THING BEING DESIGNED OUT, SO IT IS ASSERTED BY NAME.
       # A count is not enough: a leg that built the wrong architecture, or a tree
-      # whose tauri.conf.json version drifted from the tag, both produce the right
+      # whose Cargo.toml version drifted from the tag, both produce the right
       # number of files with the wrong names. These seven names are the ones README.md
       # tells users to download, and each follows tauri-bundler's own scheme: .dmg
       # `_universal`, .deb `_amd64`/`_arm64`, .AppImage `_amd64`/`_aarch64`, and .rpm

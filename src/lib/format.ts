@@ -284,6 +284,21 @@ export function errorLines(
 }
 
 /**
+ * A rejection from the shell, as text to show.
+ *
+ * ⚠ The one place this is decided. Commands reject with a plain string, a
+ * structured failure (`{ kind, message }`) or an `Error`; `String()` on the
+ * middle one renders "[object Object]".
+ */
+export function messageOf(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (typeof error === "object" && error !== null && typeof (error as { message?: unknown }).message === "string") {
+    return (error as { message: string }).message;
+  }
+  return "Something went wrong.";
+}
+
+/**
  * Tailwind classes per tone, for the popover and Settings.
  *
  * ⚠ Literal strings in full, never `text-tone-${tone}`: Tailwind generates only

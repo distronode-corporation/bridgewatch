@@ -116,6 +116,29 @@ fn the_poll_now_hint_is_rate_gated_except_for_wake() {
     assert!(!PollNow::PopoverOpened.bypasses_gate());
 }
 
+/// A request that was passed on counts as a poll for the gate, so the two
+/// signals of one popover open are one tick, not two.
+///
+/// ⛔ The shell marks the gate when it passes a request on, before the tick it
+/// asked for has completed. Keyed on completed ticks alone, the second signal
+/// arrived while the first tick was still running and was let through too.
+#[test]
+fn a_passed_on_request_gates_the_next_one_before_any_tick_completes() {
+    let mut gate = policy();
+    let mut permits = 0;
+    for _ in 0..2 {
+        if gate.allows_poll_now(PollNow::PopoverOpened) {
+            gate.mark_polled();
+            permits += 1;
+        }
+    }
+    assert_eq!(permits, 1, "one popover open, one poll");
+    assert!(
+        gate.allows_poll_now(PollNow::Manual),
+        "a refresh someone asked for is still never refused"
+    );
+}
+
 /// A `Retry-After` big enough to overflow a clock is a broken header, not an
 /// instruction.
 ///

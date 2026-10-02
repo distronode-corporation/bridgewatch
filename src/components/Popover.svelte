@@ -20,6 +20,8 @@
      * collapse what the user opened.
      */
     expansion?: ExpansionStore;
+    /** One line saying why the last request did not happen, or empty. */
+    notice?: string;
     onrefresh?: () => void;
     onsettings?: () => void;
     onpipelines?: () => void;
@@ -35,6 +37,7 @@
     status = null,
     now = Date.now(),
     expansion = createExpansionStore(),
+    notice = "",
     onrefresh,
     onsettings,
     onpipelines,
@@ -81,6 +84,12 @@
     <Button variant="ghost" size="xs" onclick={onsettings} title="Settings">Settings</Button>
     <Button variant="ghost" size="xs" onclick={onquit} title="Quit bridgewatch">Quit</Button>
   </header>
+
+  {#if notice}
+    <p class="notice text-tone-amber border-border m-0 border-b px-3 py-1 text-xs" role="status" data-slot="popover-notice">
+      {notice}
+    </p>
+  {/if}
 
   <ErrorStrip errors={snapshot.errors} {status} {onfix} {onsetup} />
 

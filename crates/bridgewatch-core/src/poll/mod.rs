@@ -186,7 +186,7 @@ impl Poller {
             .iter()
             .filter(|(name, _)| used.contains(name.as_str()))
         {
-            let client = build_client(name, account, provider, store.clone(), ring.clone())?;
+            let client = client_for_account(name, account, None, store.clone(), ring.clone())?;
             clients.insert(name.clone(), client);
         }
         Self::with_clients(config, clients, ring).map_err(PollerError::Config)
@@ -361,8 +361,9 @@ impl Poller {
             }
         }
 
+        // Only when something was recorded: an idle tick leaves the file alone.
         if let Some(path) = &self.ledger_path
-            && let Err(e) = self.ledger.save(path)
+            && let Err(e) = self.ledger.save_if_changed(path)
         {
             tracing::warn!(error = %e, "could not persist the notification ledger");
         }
@@ -883,19 +884,25 @@ async fn fetch_detail(
 /// credential, resolved now or (for `token = { oauth = .. }`) on each request
 /// by the sign-in's own session.
 ///
-/// [`Poller::from_config`] builds every polled account's with this, and the
-/// CLI's `log`, `retry` and `play` build the one account a job URL names, so
-/// the two cannot come to disagree about how an account authenticates.
-pub fn build_client<P>(
+/// [`Poller::from_config`] builds every polled account's with this, the CLI's
+/// `log`, `retry` and `play` build the one account a job URL names, and the
+/// setup wizard's live steps build theirs, so none of them can come to
+/// disagree about how an account authenticates.
+///
+/// `token` is a credential the caller already holds (the wizard's pasted token,
+/// not yet stored anywhere); `None` resolves the account's own source through
+/// `store`. A sign-in ignores it: its credential is the session's.
+///
+/// ⚠️ Can block: resolving a source reads the OS credential store (which may
+/// raise a macOS prompt) or runs a program. An async caller runs it on a
+/// blocking thread.
+pub fn client_for_account(
     name: &str,
     account: &crate::config::Account,
-    provider: &P,
+    token: Option<crate::token::Secret>,
     store: Arc<dyn crate::token::TokenProvider>,
     ring: RequestRing,
-) -> Result<Arc<dyn CiClient>, PollerError>
-where
-    P: crate::token::TokenProvider,
-{
+) -> Result<Arc<dyn CiClient>, PollerError> {
     let transport: Arc<dyn crate::client::Transport> = Arc::new(
         crate::client::ReqwestTransport::new(std::time::Duration::from_secs(account.timeout_secs))
             .map_err(PollerError::Client)?,
@@ -922,8 +929,11 @@ where
             )
         }
         source => {
-            let token = crate::token::resolve(source, name, provider)
-                .map_err(|e| PollerError::Token(name.to_string(), e))?;
+            let token = match token {
+                Some(token) => token,
+                None => crate::token::resolve(source, name, store.as_ref())
+                    .map_err(|e| PollerError::Token(name.to_string(), e))?,
+            };
             crate::client::client_for(account, &token, transport, ring)
         }
     }

@@ -289,11 +289,6 @@ pub fn kind_for_file(name: &str) -> Option<RecordKind> {
 /// `web_url`s. The project path is already public through the shipped example
 /// config.
 ///
-/// ⚠️ `scripts/record-fixture.sh` applies the same allow-lists with a `jq`
-/// filter, and the two must be kept in step.
-/// `fixtures_contain_no_personal_data` in `tests/verdict.rs` is what catches
-/// them diverging: it asserts the allow-list against every committed fixture.
-///
 /// ```
 /// use bridgewatch_core::client::fixture::{scrub, RecordKind};
 /// use serde_json::json;
@@ -349,25 +344,33 @@ pub enum ScrubMode {
     Check,
 }
 
+/// What [`scrub_dir_with`] did to one directory.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Scrubbed {
+    /// How many recorded files it read: the `*.json` files [`kind_for_file`]
+    /// recognises. Zero means the directory holds no recording at all, which a
+    /// gate must not read as clean.
+    pub examined: usize,
+    /// The files that changed, or with [`ScrubMode::Check`] would have.
+    pub changed: Vec<PathBuf>,
+}
+
 /// Scrub every recorded `*.json` in a directory in place, preserving key order
 /// and the two-space pretty formatting so the diff stays reviewable.
 ///
 /// Files [`kind_for_file`] does not recognise — `fixture.json`, `expected.json`
-/// — are bridgewatch's own and are left alone. Returns the files that changed;
-/// running it twice changes nothing the second time.
-pub fn scrub_dir(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-    scrub_dir_with(dir, ScrubMode::Write)
-}
-
-/// [`scrub_dir`], with a say in whether anything is written.
+/// — are bridgewatch's own and are left alone. Returns how many files were
+/// examined and which changed; running it twice changes nothing the second
+/// time. With [`ScrubMode::Check`] nothing is written, and the files that WOULD
+/// change are returned.
 ///
 /// ⛔ `ScrubMode::Check` exists because `fixture scrub --check` used to scrub
 /// the directory for real and then write the old bytes back from a copy held in
 /// memory: a gate whose failure mode is "modified the tree it was checking",
 /// and which loses the file outright if the process is interrupted between the
 /// two writes. A check must read.
-pub fn scrub_dir_with(dir: &Path, mode: ScrubMode) -> std::io::Result<Vec<PathBuf>> {
-    let mut changed = Vec::new();
+pub fn scrub_dir_with(dir: &Path, mode: ScrubMode) -> std::io::Result<Scrubbed> {
+    let mut out = Scrubbed::default();
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -382,6 +385,7 @@ pub fn scrub_dir_with(dir: &Path, mode: ScrubMode) -> std::io::Result<Vec<PathBu
         let Some(kind) = kind_for_file(name) else {
             continue;
         };
+        out.examined += 1;
         let raw = std::fs::read_to_string(&path)?;
         let mut value: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -395,10 +399,10 @@ pub fn scrub_dir_with(dir: &Path, mode: ScrubMode) -> std::io::Result<Vec<PathBu
             if mode == ScrubMode::Write {
                 std::fs::write(&path, rendered)?;
             }
-            changed.push(path);
+            out.changed.push(path);
         }
     }
-    Ok(changed)
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

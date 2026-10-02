@@ -317,7 +317,14 @@ Rules the shell can rely on:
   the same failure is not news.
 - The ledger is one of two things bridgewatch persists across launches (the
   other is the deploy-time history, `eta.json` beside it). A corrupt one costs
-  one repeated notification, never a crash.
+  one repeated notification, never a crash. It is rewritten only on a tick that
+  recorded something.
+- The ledger keeps about 2000 keys and trims the oldest pipeline ids first, but
+  never a key of a pipeline some watch still has on screen, so a quiet project
+  watched beside a busy one is not announced again on every tick.
+- A notification whose template fails to render is not recorded, so it is
+  retried every tick until the template is fixed. It is logged at `warn` the
+  first time per event per process, then at `debug`.
 
 ⚠️ MiniJinja follows Jinja2: `default(x)` substitutes only for an *undefined*
 value, and `failures | join(', ')` on an empty list is the defined empty string.
@@ -359,14 +366,13 @@ employer, social handles) and the runner that ran it, including a self-hosted
 project runner's IP address, system id, tags and free-text description.
 
 `client::fixture::scrub` keeps only `PIPELINE_KEYS` and `JOB_KEYS` and **drops
-everything else**, so a field GitLab adds next month cannot leak by default. The
-`jq` filter in `scripts/record-fixture.sh` applies the same two lists; nothing
-makes them agree automatically, so `fixtures_contain_no_personal_data` asserts
-the Rust allow-list against every committed fixture and
-`the_jq_filter_names_every_allow_listed_key` checks the script still names every
-key. `bridgewatch fixture scrub <dir>` re-applies the allow-list in place, and
+everything else**, so a field GitLab adds next month cannot leak by default.
+It is the only copy of the allow-list: `scripts/record-fixture.sh` scrubs its
+raw responses with `bridgewatch fixture scrub` rather than a filter of its own.
+`fixtures_contain_no_personal_data` asserts the allow-list against every
+committed fixture. `bridgewatch fixture scrub <dir>` re-applies it in place, and
 `--check` makes it a gate.
 
 ⚠️ If the engine ever needs a field that is currently dropped, the guard's
 failure names the file, the JSON pointer and the key, and adding it means
-editing **both** lists.
+adding it to `PIPELINE_KEYS` or `JOB_KEYS`.

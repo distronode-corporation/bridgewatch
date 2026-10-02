@@ -816,3 +816,91 @@ fn a_trigger_job_that_has_not_created_its_child_yet_raises_no_blocking_failure()
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Trimming a full ledger, and writing it only when it changed
+// ---------------------------------------------------------------------------
+
+/// ⛔ The ledger is shared by every watch, and pipeline ids are not one
+/// sequence: a GitHub run id is around 1.8e10, a quiet GitLab project's
+/// pipeline id can be nine digits or fewer. Trimming the smallest id when the
+/// ledger was full dropped the key that had just been recorded, for a row
+/// still on screen, so the quiet watch announced the same pipeline on every
+/// tick forever. A row with two events was worse still: recording the second
+/// trimmed the first.
+#[test]
+fn a_full_ledger_never_trims_a_pipeline_that_is_still_on_screen() {
+    use bridgewatch_core::notify::LEDGER_MAX_KEYS;
+
+    let watch = support::config_with(&[]).watches.remove(0);
+    let mut ledger = NotifyLedger::default();
+    ledger.baseline(&watch.id);
+    // Another watch's history, in GitHub's id space, none of it on screen here.
+    for i in 0..LEDGER_MAX_KEYS {
+        ledger.record(format!(
+            "{}|finished|deployed",
+            18_000_000_000u64 + i as u64
+        ));
+    }
+
+    // A quiet project's pipeline, far below every key above: it failed, so it
+    // raises `blocking_failure` and records `finished` beside it.
+    let mut row = row_view("failed", "absent");
+    row.id = 5;
+    row.failures = vec!["lint".into()];
+    let view = view_of(&watch, row);
+
+    let first = notifications_for(&watch, &view, &mut ledger);
+    assert_eq!(
+        first.iter().map(|n| n.kind).collect::<Vec<_>>(),
+        [NotifyKind::BlockingFailure],
+        "said once"
+    );
+    for tick in 2..=4 {
+        let again = notifications_for(&watch, &view, &mut ledger);
+        assert!(
+            again.is_empty(),
+            "tick {tick} said it again: {:?}",
+            again.iter().map(|n| &n.key).collect::<Vec<_>>()
+        );
+    }
+    assert!(ledger.contains("5|blocking_failure|lint"));
+    assert!(ledger.contains("5|finished|failed"));
+    assert_eq!(
+        ledger.seen.len(),
+        LEDGER_MAX_KEYS,
+        "still bounded: the keys that went were the off-screen pipeline's"
+    );
+    assert!(
+        !ledger.contains("18000000000|finished|deployed"),
+        "and the oldest of those went first"
+    );
+}
+
+/// ⚠️ The ledger is up to 2000 keys and a tick is every few seconds while
+/// something is live. Rewriting it when nothing was recorded was a needless
+/// write, and a disk wake-up on a laptop, every tick. A tick that records
+/// nothing must leave the file alone.
+#[tokio::test]
+async fn an_idle_tick_does_not_rewrite_the_ledger() {
+    let ledger_file = TempLedger::new("bw-idle");
+    let path = ledger_file.path();
+    let _ = std::fs::remove_file(&path);
+    let config = support::config_with(&[]);
+    let dir = support::fixtures_dir().join("ca41ab28-deployed-with-failure");
+    let mut poller = support::fixture_poller(&config, &dir)
+        .0
+        .with_ledger(path.clone());
+
+    poller.tick().await;
+    assert!(path.exists(), "the baseline is news, and it was written");
+
+    // Take the file away: anything that writes it puts it back.
+    std::fs::remove_file(&path).unwrap();
+    let idle = poller.tick().await;
+    assert!(idle.notifications.is_empty());
+    assert!(
+        !path.exists(),
+        "nothing was recorded, so nothing was written"
+    );
+}

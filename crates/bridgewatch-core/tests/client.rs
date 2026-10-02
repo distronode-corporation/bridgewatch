@@ -151,14 +151,14 @@ async fn statuses_map_to_the_right_errors() {
             .expect_err("non-2xx must be an error");
 
         match (check, &err) {
-            ("auth", ClientError::Auth { .. }) => assert!(err.is_fatal()),
+            ("auth", ClientError::Auth { .. }) => {}
             ("not_found", ClientError::NotFound { .. }) => {}
             ("rate_limited", ClientError::RateLimited { .. }) => assert!(err.should_back_off()),
             ("server", ClientError::Server { .. }) => assert!(err.should_back_off()),
             ("unexpected", ClientError::Unexpected { .. }) => {}
             ("redirect", ClientError::Redirect { status: got, .. }) => {
                 assert_eq!(*got, status);
-                assert!(!err.is_fatal() && !err.should_back_off(), "{err:?}");
+                assert!(!err.should_back_off(), "{err:?}");
             }
             _ => panic!("{status} produced {err:?}"),
         }
@@ -466,9 +466,10 @@ fn a_scrub_check_reads_and_never_writes() {
     std::fs::write(&dirty, raw).unwrap();
     let modified = std::fs::metadata(&dirty).unwrap().modified().unwrap();
 
-    let changed = scrub_dir_with(&dir, ScrubMode::Check).unwrap();
+    let scrubbed = scrub_dir_with(&dir, ScrubMode::Check).unwrap();
+    assert_eq!(scrubbed.examined, 1, "the one recorded file was read");
     assert_eq!(
-        changed,
+        scrubbed.changed,
         std::slice::from_ref(&dirty),
         "the dirty file is reported"
     );
@@ -483,7 +484,7 @@ fn a_scrub_check_reads_and_never_writes() {
         "not even rewritten with the same bytes"
     );
 
-    let changed = scrub_dir_with(&dir, ScrubMode::Write).unwrap();
+    let changed = scrub_dir_with(&dir, ScrubMode::Write).unwrap().changed;
     assert_eq!(changed, std::slice::from_ref(&dirty));
     assert!(
         !std::fs::read_to_string(&dirty)
@@ -491,8 +492,20 @@ fn a_scrub_check_reads_and_never_writes() {
             .contains("A Person")
     );
     assert!(
-        scrub_dir_with(&dir, ScrubMode::Check).unwrap().is_empty(),
+        scrub_dir_with(&dir, ScrubMode::Check)
+            .unwrap()
+            .changed
+            .is_empty(),
         "and a clean directory checks clean"
+    );
+
+    // bridgewatch's own files are not recordings: a directory of nothing else
+    // examined nothing, which is what `fixture scrub` refuses on.
+    std::fs::remove_file(&dirty).unwrap();
+    std::fs::write(dir.join("expected.json"), "{}\n").unwrap();
+    assert_eq!(
+        scrub_dir_with(&dir, ScrubMode::Check).unwrap(),
+        bridgewatch_core::client::fixture::Scrubbed::default()
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

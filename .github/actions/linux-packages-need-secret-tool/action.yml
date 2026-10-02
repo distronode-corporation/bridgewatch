@@ -1,0 +1,23 @@
+name: The .deb and .rpm depend on secret-tool
+description: The staged .deb depends on libsecret-tools and the .rpm requires /usr/bin/secret-tool.
+
+# Shared by release.yml's `build` and ci.yml's `installers` (Linux legs only). The core
+# shells out to `secret-tool` on Linux (tauri.conf.json declares the dependency). A
+# package without it installs cleanly and then cannot read a keyring token, so it is
+# asserted on the built packages, not on the config.
+runs:
+  using: composite
+  steps:
+    - name: dpkg-deb and rpm
+      shell: bash
+      run: |
+        set -euo pipefail
+        depends="$(dpkg-deb -f staging/*.deb Depends)"
+        echo "deb Depends: $depends"
+        grep -qw libsecret-tools <<<"$depends" || { echo "::error::the .deb does not depend on libsecret-tools"; exit 1; }
+        # `rpm` is on both 22.04 images today; installed if a future image drops it.
+        command -v rpm >/dev/null || { sudo apt-get update && sudo apt-get install -y rpm; }
+        requires="$(rpm -qpR staging/*.rpm)"
+        echo "rpm Requires:"
+        echo "$requires"
+        grep -qxF /usr/bin/secret-tool <<<"$requires" || { echo "::error::the .rpm does not require /usr/bin/secret-tool"; exit 1; }

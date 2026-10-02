@@ -85,7 +85,6 @@ fn a_gate_counts_as_settled() {
         "a gate will still be a gate in twenty seconds"
     );
     assert!(!Status::Manual.is_live());
-    assert!(Status::Manual.is_settled());
 }
 
 /// A row that drops off the list is dropped from the cache, so a busy project

@@ -40,6 +40,10 @@ pub enum ConfigError {
         message: String,
         /// Byte range of the problem in the source, when known.
         span: Option<Range<usize>>,
+        /// The text that was parsed, which `span` indexes. Carried so a caller
+        /// turns the span into a line without reading the file a second time,
+        /// which could by then hold something else.
+        raw: String,
     },
     /// No config path could be determined and none was supplied.
     #[error("no configuration file found: pass --config, set {CONFIG_ENV}, or create {0}")]
@@ -51,6 +55,9 @@ pub enum ConfigError {
         path: PathBuf,
         /// Every problem found, not just the first.
         diagnostics: Vec<Diagnostic>,
+        /// The text that was checked, which the diagnostics' spans index. See
+        /// `Parse::raw`.
+        raw: String,
     },
     /// A pattern in the file is not a valid regex or glob.
     #[error("{0}")]
@@ -191,6 +198,47 @@ pub fn load(path: &Path) -> Result<Loaded, ConfigError> {
     parse_str(&raw, path)
 }
 
+/// Write a file by writing a sibling and renaming it over the target, creating
+/// the directory first if needed.
+///
+/// The one atomic write: the shell's `config.toml`, the notification ledger
+/// and the ETA history all go through it. A crash or a full disk mid-write used
+/// to leave a truncated file, which for `config.toml` takes the monitoring down
+/// and for a ledger reads as EMPTY (everything on screen announced again). A
+/// rename is atomic on every file system this app runs on, and the shell's file
+/// watcher already copes with it (it watches the directory for exactly that
+/// reason).
+///
+/// ⚠ A symlinked file (a dotfiles repository, typically) is resolved first and
+/// the REAL file is replaced; renaming over the link itself would swap it for a
+/// regular file and quietly detach the user's repository. The existing file's
+/// permissions are carried over, so a `0600` file stays `0600`.
+pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let dir = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "bridgewatch".into());
+    let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+
+    let result = (|| {
+        std::fs::write(&temp, text)?;
+        if let Ok(meta) = std::fs::metadata(&target) {
+            std::fs::set_permissions(&temp, meta.permissions())?;
+        }
+        std::fs::rename(&temp, &target)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
 /// Validate a configuration that is already in memory. Used by the tests, by
 /// `config validate` on stdin, and by the GUI's live preview of an edit.
 pub fn parse_str(raw: &str, path: &Path) -> Result<Loaded, ConfigError> {
@@ -210,6 +258,7 @@ pub fn parse_str(raw: &str, path: &Path) -> Result<Loaded, ConfigError> {
         return Err(ConfigError::Invalid {
             path: path.to_path_buf(),
             diagnostics,
+            raw: raw.to_string(),
         });
     }
 
@@ -257,6 +306,7 @@ fn parse_lenient(raw: &str, path: &Path) -> Result<(Config, Vec<Diagnostic>), Co
             // The span is only meaningful against the text that produced it, so
             // report it only while nothing has been stripped.
             span: diagnostics.is_empty().then(|| error.span()).flatten(),
+            raw: raw.to_string(),
         };
         if !error.message().starts_with("unknown field") {
             return Err(fatal());
@@ -284,6 +334,7 @@ fn parse_lenient(raw: &str, path: &Path) -> Result<(Config, Vec<Diagnostic>), Co
             "more than {MAX_UNKNOWN_KEYS} unrecognised keys; this does not look like a bridgewatch config"
         ),
         span: None,
+        raw: raw.to_string(),
     })
 }
 

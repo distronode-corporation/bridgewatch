@@ -121,7 +121,7 @@ impl Validation {
             Err(ConfigError::Parse { message, span, .. }) => {
                 let (line, col) = span
                     .as_ref()
-                    .map(|s| line_col(raw, s.start))
+                    .map(|s| config::line_col(raw, s.start))
                     .map(|(l, c)| (Some(l), Some(c)))
                     .unwrap_or((None, None));
                 Self {
@@ -139,21 +139,6 @@ impl Validation {
             Err(e) => Self::error(e.to_string()),
         }
     }
-}
-
-/// 1-based line and column of a byte offset.
-fn line_col(raw: &str, offset: usize) -> (usize, usize) {
-    let start = offset.min(raw.len());
-    let before = &raw[..start];
-    (
-        before.matches('\n').count() + 1,
-        before
-            .rsplit('\n')
-            .next()
-            .map(|s| s.chars().count())
-            .unwrap_or(0)
-            + 1,
-    )
 }
 
 /// What `--config` / `$BRIDGEWATCH_CONFIG` / the platform config directory
@@ -269,44 +254,7 @@ pub fn write_if_unchanged(path: &Path, base: &str, text: &str) -> Result<(), Wri
     if current != base {
         return Err(WriteError::Conflict);
     }
-    write_atomic(path, text).map_err(WriteError::Io)
-}
-
-/// Write a file by writing a sibling and renaming it over the target.
-///
-/// A crash or a full disk mid-write used to leave a truncated `config.toml`,
-/// which is the one file whose loss takes the monitoring down with it. A
-/// rename is atomic on every file system this app runs on, and the file
-/// watcher already copes with it (it watches the directory for exactly that
-/// reason).
-///
-/// ⚠ A symlinked config (a dotfiles repository, typically) is resolved first
-/// and the REAL file is replaced; renaming over the link itself would swap it
-/// for a regular file and quietly detach the user's repository. The existing
-/// file's permissions are carried over, so a `0600` file stays `0600`.
-pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let dir = target
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let name = target
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "config.toml".into());
-    let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-
-    let result = (|| {
-        std::fs::write(&temp, text)?;
-        if let Ok(meta) = std::fs::metadata(&target) {
-            std::fs::set_permissions(&temp, meta.permissions())?;
-        }
-        std::fs::rename(&temp, &target)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result
+    config::write_atomic(path, text).map_err(WriteError::Io)
 }
 
 /// Watch a config file for changes and call `on_change` once per settled edit.
@@ -319,16 +267,29 @@ pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
 /// Returns the watcher, which must be kept alive — dropping it stops the watch,
 /// silently. Boxed because the caller parks it in a `static` for the process
 /// lifetime and an opaque type cannot be named there.
+///
+/// ⚠ The error says which step failed and why. "Hot reload is off" alone gave
+/// nothing to act on, and the usual cause (inotify's watch limit, ENOSPC, on
+/// a Linux desktop with a few IDEs open) is one the user can fix.
 pub fn watch(
     path: &Path,
     on_change: impl Fn() + Send + 'static,
-) -> Option<Box<dyn Watcher + Send>> {
-    let parent = path.parent()?.to_path_buf();
+) -> Result<Box<dyn Watcher + Send>, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory to watch", path.display()))?
+        .to_path_buf();
     let target = path.to_path_buf();
     let (tx, rx) = mpsc::channel::<()>();
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        let Ok(event) = res else { return };
+        let event = match res {
+            Ok(event) => event,
+            Err(e) => {
+                tracing::debug!(error = %e, "config watcher error");
+                return;
+            }
+        };
         if !matches!(
             event.kind,
             EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
@@ -346,9 +307,11 @@ pub fn watch(
             let _ = tx.send(());
         }
     })
-    .ok()?;
+    .map_err(|e| format!("creating the watcher: {e}"))?;
 
-    watcher.watch(&parent, RecursiveMode::NonRecursive).ok()?;
+    watcher
+        .watch(&parent, RecursiveMode::NonRecursive)
+        .map_err(|e| format!("watching {}: {e}", parent.display()))?;
 
     std::thread::spawn(move || {
         while rx.recv().is_ok() {
@@ -365,7 +328,7 @@ pub fn watch(
         }
     });
 
-    Some(Box::new(watcher))
+    Ok(Box::new(watcher))
 }
 
 #[cfg(test)]
@@ -441,6 +404,20 @@ mod tests {
     }
 
     #[test]
+    fn a_watch_that_cannot_start_says_which_directory_and_why() {
+        // #52: the failure used to be `None`, logged as a fixed string.
+        let dir = scratch("watch-missing").join("not-there");
+        let err = match watch(&dir.join("config.toml"), || {}) {
+            Ok(_) => panic!("watching a directory that does not exist succeeded"),
+            Err(e) => e,
+        };
+        assert!(
+            err.starts_with(&format!("watching {}: ", dir.display())),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn a_rename_over_the_file_fires_a_reload_too() {
         // ⛔ The case the parent-directory watch exists for. vim, VS Code and
         // `sed -i` all save by writing a temporary file and renaming it over
@@ -483,46 +460,6 @@ mod tests {
         let fresh = dir.join("new.toml");
         write_if_unchanged(&fresh, "", "# created\n").expect("creating from empty");
         assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "# created\n");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn an_atomic_write_keeps_a_symlink_and_the_file_mode() {
-        let dir = scratch("atomic");
-        let real = dir.join("real.toml");
-        let link = dir.join("config.toml");
-        std::fs::write(&real, "old").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
-            std::os::unix::fs::symlink(&real, &link).unwrap();
-        }
-        #[cfg(not(unix))]
-        std::fs::copy(&real, &link).unwrap();
-
-        write_atomic(&link, "new").unwrap();
-        assert_eq!(std::fs::read_to_string(&link).unwrap(), "new");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert!(
-                std::fs::symlink_metadata(&link)
-                    .unwrap()
-                    .file_type()
-                    .is_symlink(),
-                "the symlink was replaced by a regular file"
-            );
-            assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
-            let mode = std::fs::metadata(&real).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o600);
-        }
-        let leftovers: Vec<_> = std::fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
-            .collect();
-        assert!(leftovers.is_empty(), "temporary file left behind");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

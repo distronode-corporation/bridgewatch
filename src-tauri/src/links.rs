@@ -94,14 +94,14 @@ fn trusted_origins(account: &Account) -> Vec<String> {
     }
 }
 
-/// Scheme, host (case-insensitively, as `Url` already lowercases it) and
-/// effective port. A path prefix on `base_url` (GitLab under `/gitlab`) is not
-/// required of the link: the host is the trust boundary, not the path.
+/// The core's one origin rule (`oauth::origin_of`), applied to both URLs as
+/// `Url` has already normalised them: scheme, lowercased host and effective
+/// port. A path prefix on `base_url` (GitLab under `/gitlab`) is not required
+/// of the link: the host is the trust boundary, not the path. A URL carrying
+/// credentials has no origin and matches nothing.
 fn same_origin(base: &Url, url: &Url) -> bool {
-    base.scheme() == url.scheme()
-        && base.host_str().is_some()
-        && base.host_str() == url.host_str()
-        && base.port_or_known_default() == url.port_or_known_default()
+    let origin = |u: &Url| bridgewatch_core::oauth::origin_of(u.as_str());
+    origin(base).is_some_and(|b| origin(url).is_some_and(|u| b == u))
 }
 
 /// Open `candidate` in the default browser if [`check`] allows it.
@@ -150,6 +150,9 @@ mod tests {
         let c = config(&["https://gitlab.com"]);
         assert!(check("https://gitlab.com/g/p/-/pipelines/12", Some(&c)).is_ok());
         assert!(check("https://GITLAB.com:443/g/p", Some(&c)).is_ok());
+        // And the other way round: the configured spelling is one instance too.
+        let spelled = config(&["https://GitLab.com:443/"]);
+        assert!(check("https://gitlab.com/g/p", Some(&spelled)).is_ok());
     }
 
     #[test]
@@ -181,6 +184,9 @@ mod tests {
     fn userinfo_does_not_change_the_host() {
         let c = config(&["https://gitlab.com"]);
         assert!(check("https://gitlab.com@evil.example/", Some(&c)).is_err());
+        // A link carrying credentials has no origin under the core's rule, even
+        // on the configured host: nothing bridgewatch opens carries any.
+        assert!(check("https://someone@gitlab.com/g/p", Some(&c)).is_err());
     }
 
     fn github(base: Option<&str>) -> Config {

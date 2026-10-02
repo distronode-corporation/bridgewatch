@@ -20,8 +20,8 @@ use super::ClientError;
 
 /// What a `Debug` rendering prints in place of a header value.
 ///
-/// Used by [`HttpRequest`]'s and [`super::GitLabClient`]'s `Debug`, the two
-/// types that hold the rendered credential header. It is the same text
+/// Used by [`HttpRequest`]'s and `Conn`'s `Debug`, the two types that hold the
+/// rendered credential header (both clients hold theirs in a `Conn`). It is the same text
 /// [`crate::token::Secret`] prints, so a redaction reads the same wherever it
 /// appears.
 pub const REDACTED: &str = "<redacted>";
@@ -409,6 +409,175 @@ impl Default for InFlight {
 impl Default for RequestRing {
     fn default() -> Self {
         Self::new(50)
+    }
+}
+
+/// What a client needs to talk to one account: where its API is, the rendered
+/// credential header, and the transport, ring and in-flight bound every request
+/// goes through. Both clients hold one; cloning is cheap, and clones share the
+/// transport, the ring and the bound.
+///
+/// ⛔ `Debug` is hand-written, here and only here. The derived one printed
+/// `header_value`, which is the token itself for a `PRIVATE-TOKEN` account: the
+/// whole point of [`crate::token::Secret`] is that a credential cannot reach a
+/// log line by accident, and a struct holding the already-rendered header value
+/// undid that for anyone who wrote `{:?}` on a client. The clients derive their
+/// own `Debug` over this one, so the rule is kept in one place.
+#[derive(Clone)]
+pub(crate) struct Conn {
+    base_url: String,
+    api_path: String,
+    header_name: &'static str,
+    header_value: String,
+    transport: Arc<dyn Transport>,
+    ring: RequestRing,
+    /// At most [`MAX_IN_FLIGHT`] of this account's requests at a time.
+    in_flight: InFlight,
+}
+
+impl std::fmt::Debug for Conn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Conn")
+            .field("base_url", &self.base_url)
+            .field("api_path", &self.api_path)
+            .field("header_name", &self.header_name)
+            .field("header_value", &REDACTED)
+            .field("transport", &self.transport)
+            .finish()
+    }
+}
+
+impl Conn {
+    /// The connection for an account and its already-resolved token.
+    pub(crate) fn new(
+        account: &crate::config::Account,
+        token: &crate::token::Secret,
+        transport: Arc<dyn Transport>,
+        ring: RequestRing,
+    ) -> Self {
+        Self {
+            base_url: account.base_url.trim_end_matches('/').to_string(),
+            api_path: account.api_path.clone(),
+            header_name: account.header.header_name(),
+            header_value: account.header.header_value(token.expose()),
+            transport,
+            ring,
+            in_flight: InFlight::new(),
+        }
+    }
+
+    /// The account's `base_url`, without a trailing slash.
+    pub(crate) fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// The account's `api_path`, which every request path is appended to.
+    pub(crate) fn api_path(&self) -> &str {
+        &self.api_path
+    }
+
+    /// The request ring every request is recorded in.
+    pub(crate) fn ring(&self) -> &RequestRing {
+        &self.ring
+    }
+
+    /// A request to `path` under this account's API, carrying the credential
+    /// header and nothing else. A provider adds its own headers to it.
+    pub(crate) fn request(&self, method: &'static str, path: &str) -> HttpRequest {
+        HttpRequest {
+            method,
+            url: format!("{}{}{}", self.base_url, self.api_path, path),
+            path: path.to_string(),
+            headers: vec![(self.header_name.to_string(), self.header_value.clone())],
+            body: None,
+            anonymous: false,
+            tail_bytes: None,
+        }
+    }
+
+    /// Send one request the way every request is sent: through the account's
+    /// in-flight bound, timed from when it got a slot, logged at `debug`, and
+    /// recorded in the ring. `classify` decides which answers are errors.
+    ///
+    /// ⛔ `path` is logged whole, query and all, and that is safe by
+    /// CONSTRUCTION rather than by filtering: the credential travels only in a
+    /// header (see the module docs), every API path is built from a fixed
+    /// template with its variables percent-encoded, and a log's signed redirect
+    /// is recorded without its query ([`super::log::display_path`]).
+    pub(crate) async fn send(
+        &self,
+        request: HttpRequest,
+        classify: impl Fn(&HttpResponse) -> Option<ClientError>,
+    ) -> Result<HttpResponse, ClientError> {
+        let method = request.method;
+        let path = request.path.clone();
+        // Before the clock starts: `ms` is the request, not the queue.
+        let _slot = self.in_flight.acquire().await;
+        let started = std::time::Instant::now();
+        let result = self.transport.execute(request).await;
+        let ms = started.elapsed().as_millis() as u64;
+        match result {
+            Ok(response) => {
+                let error = classify(&response);
+                // As a str, so the value is quoted: a path is free text and
+                // its end must be visible in a line of `key=value` pairs.
+                tracing::debug!(
+                    method,
+                    path = path.as_str(),
+                    status = response.status,
+                    bytes = response.body.len(),
+                    truncated = response.truncated,
+                    ms,
+                    "request"
+                );
+                self.ring.record(RequestLog {
+                    method: method.into(),
+                    path: path.clone(),
+                    status: Some(response.status),
+                    ms,
+                    ratelimit_remaining: response.ratelimit_remaining,
+                    ratelimit_reset: response.ratelimit_reset,
+                    retry_after: response.retry_after,
+                    error: error.as_ref().map(ToString::to_string),
+                    at: chrono::Utc::now(),
+                });
+                match error {
+                    Some(e) => Err(e),
+                    None => Ok(response),
+                }
+            }
+            Err(e) => {
+                tracing::debug!(method, path = path.as_str(), error = %e, ms, "request failed");
+                self.ring.record(RequestLog {
+                    method: method.into(),
+                    path,
+                    status: None,
+                    ms,
+                    ratelimit_remaining: None,
+                    ratelimit_reset: None,
+                    retry_after: e.retry_after(),
+                    error: Some(e.to_string()),
+                    at: chrono::Utc::now(),
+                });
+                Err(e)
+            }
+        }
+    }
+
+    /// [`Self::send`] a JSON read and decode its body, handing the response
+    /// back too for the headers a caller pages or reads scopes from.
+    pub(crate) async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        request: HttpRequest,
+        classify: impl Fn(&HttpResponse) -> Option<ClientError>,
+    ) -> Result<(T, HttpResponse), ClientError> {
+        let path = request.path.clone();
+        let response = self.send(request, classify).await?;
+        let value = serde_json::from_str::<T>(&response.body).map_err(|e| ClientError::Decode {
+            path,
+            message: e.to_string(),
+        })?;
+        Ok((value, response))
     }
 }
 

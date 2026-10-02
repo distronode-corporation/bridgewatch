@@ -305,10 +305,7 @@ impl OAuthSession {
         {
             Ok(reply) => {
                 let now = (self.clock)();
-                let account = Account {
-                    base_url: current.base_url.clone(),
-                    ..Account::for_provider(self.provider)
-                };
+                let account = Account::for_instance(self.provider, &current.base_url);
                 let set = reply.into_set(
                     &account,
                     &self.client_id,

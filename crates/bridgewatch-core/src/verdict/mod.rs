@@ -511,11 +511,29 @@ pub fn evaluate_pipeline(
         .map(|b| b.name.clone())
         .collect();
 
-    let parent_failures: Vec<String> = parent_classified
+    // Neither list holds anything. Read from the RAW lists, not the classified
+    // ones: a pipeline whose jobs were all hidden by `ignore` was still read,
+    // and the user has said what those jobs are worth.
+    let nothing_fetched = detail.jobs.is_empty() && detail.bridges.is_empty();
+
+    let mut parent_failures: Vec<String> = parent_classified
         .iter()
         .filter(|(c, _)| c.is_blocking_failure())
         .map(|(_, j)| j.name.clone())
         .collect();
+    // ⛔ A pipeline that failed before it had a single job. A `.gitlab-ci.yml`
+    // that does not parse yields a `failed` pipeline with no jobs, and so does a
+    // GitHub run that ended `startup_failure` (an invalid workflow file) or
+    // `timed_out` before a job reported. With both lists empty nothing below
+    // finds a failure, and the row fell through every rule to
+    // `succeeded_no_deploy`: the outline check, exit 0, no `blocking_failure`.
+    // The list row is all there is, so it is what answers, as it does for
+    // `anything_live` and `awaiting_gate` below. Only when the detail was read:
+    // an empty list from a fetch that failed means "not looked at", and rule 0
+    // already says `unknown` for that.
+    if nothing_fetched && source == DetailSource::Fetched && detail.pipeline.status.is_failed() {
+        parent_failures.push(format!("pipeline {}", detail.pipeline.status));
+    }
     // A parent job that failed AFTER the marker succeeded is a post-deploy
     // failure and takes that policy. Counting it here as well would let rule 1
     // fire first, so `post_deploy_failure = "downgrade"` could never apply to a
@@ -581,7 +599,6 @@ pub fn evaluate_pipeline(
     // The pipeline's own `running` is not enough: a parent sits `running` for as
     // long as a bridge waits on a manual child, and calling that "running" is
     // exactly the mistake this tool exists to stop making.
-    let nothing_fetched = detail.jobs.is_empty() && detail.bridges.is_empty();
     let anything_live = parent_classified.iter().any(|(c, _)| c.is_live())
         || all_bridges.iter().any(|b| b.verdict == "running")
         || (nothing_fetched && detail.pipeline.status.is_live());

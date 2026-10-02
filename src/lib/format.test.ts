@@ -10,6 +10,7 @@ import {
   deployTone,
   deployWord,
   jobTone,
+  messageOf,
   millis,
   relativeAge,
   shortPath,
@@ -273,5 +274,19 @@ describe("isFirstRun", () => {
   it("prefers the shell's own flag when it is sent", () => {
     expect(isFirstRun({ configOk: false, diagnostics: [diag("expected `=`")], firstRun: true })).toBe(true);
     expect(isFirstRun({ configOk: false, diagnostics: [diag("No configuration yet.")], firstRun: false })).toBe(false);
+  });
+});
+
+describe("messageOf", () => {
+  it("reads a string, a structured failure and an Error alike", () => {
+    expect(messageOf("keyring locked")).toBe("keyring locked");
+    expect(messageOf({ kind: "store", message: "denied" })).toBe("denied");
+    expect(messageOf(new Error("boom"))).toBe("boom");
+  });
+
+  it("never renders [object Object]", () => {
+    expect(messageOf({ kind: "store" })).toBe("Something went wrong.");
+    expect(messageOf(null)).toBe("Something went wrong.");
+    expect(messageOf(undefined)).toBe("Something went wrong.");
   });
 });

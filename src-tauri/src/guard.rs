@@ -131,18 +131,12 @@ pub fn sensitive_changes(old: Option<&Config>, new: &Config) -> Vec<String> {
     out
 }
 
-/// Scheme, host and port, lowercased, so `https://GitLab.com/` and
-/// `https://gitlab.com` are one origin. Unparsable input is its own origin.
+/// The core's one origin rule (`oauth::origin_of`: lowercased, default port
+/// dropped), so `https://GitLab.com:443/` and `https://gitlab.com` are one
+/// origin here exactly as they are to the keyring lookup and the sign-in.
+/// Input with no origin (not http(s), or carrying credentials) is its own.
 fn origin(base_url: &str) -> String {
-    match url::Url::parse(base_url.trim()) {
-        Ok(u) => format!(
-            "{}://{}:{}",
-            u.scheme(),
-            u.host_str().unwrap_or("").to_ascii_lowercase(),
-            u.port_or_known_default().unwrap_or(0)
-        ),
-        Err(_) => base_url.trim().to_string(),
-    }
+    bridgewatch_core::oauth::origin_of(base_url).unwrap_or_else(|| base_url.trim().to_string())
 }
 
 /// The one outstanding confirmation, if any.
@@ -187,8 +181,9 @@ impl Confirmations {
 
 /// An id nobody can guess from outside the process. Not a secret against a
 /// script inside the webview (see the module comment); unpredictability is
-/// only there so a stale id from an earlier question can never match.
-fn fresh_id() -> String {
+/// only there so a stale id from an earlier question can never match. Also
+/// names an OAuth sign-in flow (`oauth`), so strengthening it covers both.
+pub(crate) fn fresh_id() -> String {
     let mut hasher = RandomState::new().build_hasher();
     hasher.write_u128(
         std::time::SystemTime::now()

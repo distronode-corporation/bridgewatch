@@ -11,7 +11,10 @@
    * The log is fetched when this panel opens and not before: it is the most
    * expensive thing a provider serves, and the poller never asks for one.
    */
-  import { SHELL_API, WRITES, confirmText, errorText, type JobTools } from "./tools";
+  import { untrack } from "svelte";
+
+  import { SHELL_API, WRITES, confirmText, type JobTools } from "./tools";
+  import { messageOf } from "../../lib/format";
   import type { JobAction, JobView, LogTail } from "../../lib/types";
 
   interface Props {
@@ -39,18 +42,26 @@
   type Write = { state: "idle" } | { state: "sending" } | { state: "done"; action: JobAction } | { state: "error"; message: string };
   let write = $state<Write>({ state: "idle" });
 
+  // What the log is the log OF. A string, so a snapshot that hands this panel
+  // new `job` and `tools` objects with the same contents leaves it unchanged.
+  const logKey = $derived(log && job.web_url ? `${tools.watchId}\n${job.web_url}` : null);
+
   // Fetch when the log section opens; a closed section keeps nothing.
+  //
+  // ⛔ The effect depends on `logKey` and nothing else. It used to read
+  // `job.web_url`, `tools.watchId` and `api` directly, so every 5 s snapshot
+  // (new objects, same values) fetched the trace again and blanked the pane
+  // to "Loading" while it did.
   $effect(() => {
-    if (!log || !job.web_url) return;
-    const url = job.web_url;
+    if (logKey === null) return;
     let cancelled = false;
     loaded = { state: "loading" };
-    api.logTail(tools.watchId, url).then(
+    untrack(() => api.logTail(tools.watchId, job.web_url as string)).then(
       (tail) => {
         if (!cancelled) loaded = { state: "ready", tail };
       },
       (error) => {
-        if (!cancelled) loaded = { state: "error", message: errorText(error) };
+        if (!cancelled) loaded = { state: "error", message: messageOf(error) };
       },
     );
     return () => {
@@ -75,7 +86,7 @@
         write = { state: "done", action };
       },
       (error) => {
-        write = { state: "error", message: errorText(error) };
+        write = { state: "error", message: messageOf(error) };
       },
     );
   }

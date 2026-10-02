@@ -1,0 +1,5 @@
+{
+  "primary": 2859138213,
+  "project": 12345678,
+  "source": "SYNTHESISED from the real recording 04eff5c5-docs-only (pipeline 2859138213): its status set to `failed`, `started_at` to null, `finished_at` to two seconds after creation, and its jobs and bridges emptied. That is the shape GitLab records for a push whose `.gitlab-ci.yml` does not parse: the pipeline is created already failed, with a YAML error and no jobs at all. No other field altered."
+}

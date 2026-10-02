@@ -13,11 +13,11 @@
    * canceled job gets "retry" and a GitLab manual job "play", each of which
    * asks first (see JobPanel). Without `tools` the list is exactly what it was.
    */
+  import { TONE_DOT } from "../../lib/format";
   import type { JobAction, JobsMode, JobView } from "../../lib/types";
   import JobPanel from "./JobPanel.svelte";
   import { canPlay, canRetry, canShowLog, type JobTools } from "./tools";
   import {
-    TONE_DOT,
     classWord,
     elapsedSeconds,
     filterJobs,

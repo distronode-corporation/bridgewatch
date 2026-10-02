@@ -182,23 +182,6 @@ export function updatedAgo(at: string | number | null | undefined, now: number):
   return `updated ${Math.floor(hours / 24)}d ago`;
 }
 
-/** Tailwind classes per tone. Literal strings, so Tailwind's scanner sees them. */
-export const TONE_DOT: Record<Tone, string> = {
-  red: "bg-tone-red",
-  amber: "bg-tone-amber",
-  green: "bg-tone-green",
-  blue: "bg-tone-blue",
-  grey: "bg-tone-grey",
-};
-
-export const TONE_TEXT: Record<Tone, string> = {
-  red: "text-tone-red",
-  amber: "text-tone-amber",
-  green: "text-tone-green",
-  blue: "text-tone-blue",
-  grey: "text-tone-grey",
-};
-
 /** A job's tone, from its core-decided class. */
 export function toneOf(job: JobView): Tone {
   return jobTone(job.class);

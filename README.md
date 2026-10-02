@@ -64,7 +64,7 @@ So bridgewatch is:
 
 | State | Glyph (builtin) | Means |
 | --- | --- | --- |
-| `failed` | red octagon | The pipeline carrying the deploy marker failed before any marker succeeded, a bridge is dead (it never produced its downstream) and no marker exists, a blocking job in the parent failed, or (with no marker) a bridge failed. |
+| `failed` | red octagon | The pipeline carrying the deploy marker failed before any marker succeeded, a bridge is dead (it never produced its downstream) and no marker exists, a blocking job in the parent failed, (with no marker) a bridge failed, or the pipeline failed before it had any job. |
 | `deployed_with_failure` | amber triangle | A marker succeeded, and a sibling bridge failed or a blocking job failed around it, under the default `downgrade` policies. |
 | `deployed` | green filled check | A marker succeeded, no other marker can still move, and nothing is holding it back. |
 | `running` | blue arrows | A marker is in flight (even after another one succeeded), or (with no marker) something is still running. |
@@ -228,9 +228,12 @@ settled watch sends 30 requests an hour and spends none of its budget. The valid
 kept in memory only, so the first poll after a start is paid for in full. The Debug
 section shows the 304s and the remaining budget.
 
-An exhausted limit is a 403 or 429 carrying `x-ratelimit-remaining: 0` or `retry-after`.
-bridgewatch treats it as a rate limit, not a bad token, and waits until GitHub's reset time
-(or the `retry-after`) before asking again, whatever `rate_limit_backoff.max_secs` says.
+An exhausted limit is a 403 or 429 carrying `x-ratelimit-remaining: 0` or `retry-after`, or
+one whose message says it is a rate limit (GitHub's secondary limit can arrive with neither
+header). bridgewatch treats it as a rate limit, not a bad token, and waits until GitHub's
+reset time, the `retry-after`, or one minute when neither applies (a secondary limit with
+budget left and no `retry-after`), before asking again, whatever
+`rate_limit_backoff.max_secs` says.
 
 ### `expect`: a workflow that never started
 
@@ -809,7 +812,9 @@ both. The state is the first rule that matches:
    job exists and a bridge is dead (a trigger job that never created its child pipeline,
    or an expected GitHub workflow that never started), or a blocking job in the parent
    failed (unless it started after a successful marker, which rule 4 handles), or there
-   is no marker and any bridge failed.
+   is no marker and any bridge failed, or the pipeline itself failed with no jobs and no
+   bridges at all (a `.gitlab-ci.yml` that does not parse, a GitHub run that ended
+   `startup_failure`). That last one is named `pipeline failed` in `failures`.
 3. **`unknown`** if a marker is in a status this build does not recognise.
 4. If a marker succeeded and no marker can still move: **`failed`** when a sibling failure or post-deploy failure
    applies with policy `fail`; **`deployed_with_failure`** when one applies with policy
@@ -864,7 +869,8 @@ bridgewatch check --json                 # the whole snapshot as JSON
 bridgewatch check --fixture <dir>        # answer from a recorded fixture, no network, no token
 
 bridgewatch watch                        # poll until Ctrl-C, one line per change
-bridgewatch watch --json                 # one JSON snapshot per change instead
+bridgewatch watch --json                 # one JSON object per line: a snapshot per change,
+                                         # {"notify": {...}} per notification
 bridgewatch watch --ticks 3              # stop after three ticks
 
 bridgewatch init --project group/project --glab --deploy-marker deploy:production
@@ -895,8 +901,9 @@ GitLab, `owner/repo` or a repository URL on GitHub), `--base-url`, `--account`, 
 `--watch-id`, `--workflow` (GitHub only), `--source` (repeatable; a workflow event on
 GitHub), `--deploy-marker` (repeatable), `--schedule`, `--preflight <glob>` (GitLab
 only), `--primary`, `--live-secs`, and one token source (`--glab`, `--gh`, `--token-env
-<var>`, `--token-keyring <service>` or `--token-command <arg>...`; none means
-`own = true`). It reads no token, fetches nothing and writes nothing: it prints the file
+<var>`, `--token-keyring <service>` or `--token-command <program> <arg>...`; none means
+`own = true`). `--token-command` takes everything after it, arguments starting with `-`
+included (`--token-command gh auth token --hostname ghe.example.com`), so it goes last. It reads no token, fetches nothing and writes nothing: it prints the file
 to stdout, and if a config file already exists it prints that file edited, with its
 comments and other watches kept. When that file already has a primary watch, the new
 watch is added as secondary with a note on stderr; `--primary` keeps it primary. A new
@@ -915,7 +922,8 @@ a usage error.
 
 **`fixture record`** walks one parent pipeline and its children into a fixture directory
 for the core's tests; `fixture scrub` re-applies the allow-list that keeps personal data
-out of fixtures. Recording is GitLab-only: a github account is refused with exit 64. See
+out of fixtures. It reads each named directory's own files, not subdirectories, and a
+directory with no recorded files in it is refused with exit 64. Recording is GitLab-only: a github account is refused with exit 64. See
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Exit codes
@@ -935,7 +943,7 @@ because a secondary watch must not be able to outvote a primary one.
   2   check/watch: deployed_with_failure
   3   check/watch: running, parked_gate or canceled
   4   check/watch: unknown (nothing matched, or a request failed; errors on stderr)
-  64  usage error: bad arguments, a --watch or job URL that names nothing configured, or retry/play with no terminal and no --yes
+  64  usage error: bad arguments, a --watch, --account or job URL that names nothing configured, a fixture scrub directory with no recordings, or retry/play with no terminal and no --yes
   70  any other error (token, fixture, recording, I/O, or a log or job request that failed)
   78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true
 ```
@@ -1053,8 +1061,10 @@ On every push to `main` unless the item says otherwise:
   they are what gets bundled into the shipped frontend.
 - Dependency review on every pull request, Dependabot for Cargo, npm and the pinned
   action SHAs, and a weekly [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch).
-- Dependabot's patch and minor updates merge themselves, but only once the eight checks
-  the `main` ruleset requires have passed. A major waits for a person.
+- Dependabot's patch and minor updates merge themselves, but only once the nine checks
+  the `main` ruleset requires have passed (all three rust legs, including
+  `rust (ubuntu-22.04-arm)`, plus msrv, repo, frontend, cargo-deny, zizmor and
+  dependency-review). A major waits for a person.
 - Release builds run in a `release` environment that only a `v*` tag can reach and that
   holds the macOS signing identity as its own environment secrets, so no branch and no
   pull request can read it. Release tags are protected by a ruleset against moves and

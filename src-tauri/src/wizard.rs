@@ -6,11 +6,13 @@
 //! confirmation gate in front of that, and the write, which goes through the
 //! same `admit` + compare-and-swap path as every other write to the file.
 //!
-//! ⛔ The client is built by `client::client_for`, the core's one factory, and
-//! never by naming a provider's type here. This built a `GitLabClient`
-//! outright, so a github account would have had `/api/v4/...` paths and a
-//! `PRIVATE-TOKEN` header sent to api.github.com on the wizard's very first
-//! step, and the 401 would have read as a bad token.
+//! ⛔ The client is built by `poll::client_for_account`, the same function the
+//! poller and the CLI build theirs with, and never by naming a provider's type
+//! here. This built a `GitLabClient` outright, so a github account would have
+//! had `/api/v4/...` paths and a `PRIVATE-TOKEN` header sent to api.github.com
+//! on the wizard's very first step, and the 401 would have read as a bad
+//! token. It later wired the sign-in transport itself, a copy of the poller's
+//! that an auth change there would have left behind.
 //!
 //! ⛔ Two rules carried over from `guard`:
 //! - A `command` token source RUNS A PROGRAM, and a keyring or environment
@@ -25,10 +27,10 @@
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use bridgewatch_core::client::{CiClient, RequestRing, ReqwestTransport, client_for};
+use bridgewatch_core::client::{CiClient, RequestRing};
 use bridgewatch_core::config::{Account, Config, ProjectRef, Provider, TokenSource};
+use bridgewatch_core::poll::{self, PollerError};
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider, TokenProvider};
 use bridgewatch_core::wizard::{
     self, CliTokenDetection, FailureKind, Identity, MarkerSuggestions, ProjectListing,
@@ -168,27 +170,21 @@ pub fn connection_changes(conn: &Connection, running: Option<&Config>) -> Vec<St
     crate::guard::sensitive_changes(running, &candidate)
 }
 
-/// ⛔ `Account::for_provider`, never `Account::default()` with a provider
+/// ⛔ `Account::for_instance`, never `Account::default()` with a provider
 /// assigned afterwards: the three provider-dependent defaults (`api_path`,
 /// `header` and `base_url`) are taken when the struct is built, so the obvious
 /// spelling yields a GitHub account carrying `/api/v4` and `PRIVATE-TOKEN`.
-/// `base_url` is overridden here because the wizard always has one.
 ///
 /// ⛔ A GitHub `api_path` follows the host, exactly as the file the wizard
-/// writes will say (`wizard::github_api_path_for`): GitHub Enterprise Server
-/// serves its API under `/api/v3`, and the provider default of "" would send
-/// the wizard's own requests to the web UI's `/user` page instead.
+/// writes will say: GitHub Enterprise Server serves its API under `/api/v3`,
+/// and the provider default of "" would send the wizard's own requests to the
+/// web UI's `/user` page instead. `for_instance` decides it, for the sign-in
+/// too.
 fn account_for(conn: &Connection) -> Account {
-    let base_url = conn.base_url.trim().to_string();
-    let mut account = Account {
+    Account {
         token: conn.token.clone(),
-        ..Account::for_provider(conn.provider)
-    };
-    if conn.provider == Provider::Github {
-        account.api_path = wizard::github_api_path_for(&base_url);
+        ..Account::for_instance(conn.provider, &conn.base_url)
     }
-    account.base_url = base_url;
-    account
 }
 
 fn failure(kind: FailureKind, message: impl Into<String>) -> WizardFailure {
@@ -213,25 +209,40 @@ fn account_issue(field: &str, message: String) -> WizardFailure {
     }
 }
 
-/// The token for a connection: the pasted one, or the source resolved.
+/// The client for a connection, built exactly as the poller builds an
+/// account's (`poll::client_for_account`): a pasted token wins, otherwise the
+/// source is resolved, and a sign-in is built on its stored session.
 ///
-/// Token failures are reported against the account step's `token` field,
-/// with the core's own message (which never contains a token).
-pub fn secret_for(
+/// Token and sign-in failures are reported against the account step's `token`
+/// field, with the core's own message (which never contains a token).
+///
+/// ⚠️ Blocking: resolving a source can raise a Keychain prompt or run a
+/// program, so `connect` calls this on a blocking thread.
+pub fn client_for(
     conn: &Connection,
-    provider: &dyn TokenProvider,
-) -> Result<Secret, WizardFailure> {
-    if let Some(pasted) = conn
+    store: Arc<dyn TokenProvider>,
+) -> Result<Arc<dyn CiClient>, WizardFailure> {
+    let pasted = conn
         .secret
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
-        return Ok(Secret::new(pasted));
-    }
-    let account = conn.account.as_deref().unwrap_or(UNNAMED);
-    token::resolve(&conn.token, account, provider)
-        .map_err(|e| account_issue("token", format!("could not read the token: {e}")))
+        .map(Secret::new);
+    let name = conn.account.as_deref().unwrap_or(UNNAMED);
+    poll::client_for_account(
+        name,
+        &account_for(conn),
+        pasted,
+        store,
+        RequestRing::new(16),
+    )
+    .map_err(|e| match e {
+        PollerError::Token(_, e) => {
+            account_issue("token", format!("could not read the token: {e}"))
+        }
+        PollerError::SignIn(_, e) => account_issue("token", e.to_string()),
+        other => failure(FailureKind::Network, other.to_string()),
+    })
 }
 
 /// Check the base URL before anything is sent to it.
@@ -255,46 +266,16 @@ async fn connect(
     if let Err(request) = app.state::<WizardSession>().gate(conn, running.as_ref()) {
         return Ok(Err(request));
     }
-    let account = account_for(conn);
-    // An account that signs in is not resolved to one token: its client is
-    // built on the sign-in itself, which refreshes as it goes, exactly as the
-    // poller's is. The sign-in was stored under `conn.account` by `oauth_start`.
-    if let TokenSource::Oauth(source) = &conn.token {
-        let name = conn.account.as_deref().unwrap_or(UNNAMED);
-        let inner: Arc<dyn bridgewatch_core::client::Transport> = Arc::new(
-            ReqwestTransport::new(Duration::from_secs(account.timeout_secs))
-                .map_err(|e| failure(FailureKind::Network, e.to_string()))?,
-        );
-        let transport = bridgewatch_core::oauth::transport_for(
-            name,
-            &account,
-            source,
-            &bridgewatch_core::oauth::BuiltinClients::shipped(),
-            inner,
-            Arc::new(SystemTokenProvider),
-        )
-        .map_err(|e| account_issue("token", e.to_string()))?;
-        return client_for(
-            &bridgewatch_core::oauth::bearer_account(&account),
-            &Secret::new(""),
-            transport,
-            RequestRing::new(16),
-        )
-        .map(Ok)
-        .map_err(|e| failure(FailureKind::Network, e.to_string()));
-    }
     // Off the async threads: a keyring read can raise a Keychain prompt, and
-    // a command source runs a program.
-    let resolving = conn.clone();
-    let secret =
-        tauri::async_runtime::spawn_blocking(move || secret_for(&resolving, &SystemTokenProvider))
-            .await
-            .map_err(|e| failure(FailureKind::Network, e.to_string()))??;
-    let transport = ReqwestTransport::new(Duration::from_secs(account.timeout_secs))
-        .map_err(|e| failure(FailureKind::Network, e.to_string()))?;
-    client_for(&account, &secret, Arc::new(transport), RequestRing::new(16))
-        .map(Ok)
-        .map_err(|e| failure(FailureKind::Network, e.to_string()))
+    // a command source runs a program. A sign-in was stored under
+    // `conn.account` by `oauth_start`, and is read from there.
+    let building = conn.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        client_for(&building, Arc::new(SystemTokenProvider))
+    })
+    .await
+    .map_err(|e| failure(FailureKind::Network, e.to_string()))?
+    .map(Ok)
 }
 
 /// Every command rejects with the core's `WizardFailure` JSON,
@@ -669,26 +650,33 @@ mod tests {
         }
     }
 
+    /// The pasted token, the resolved source and a missing one, through the
+    /// same `client_for_account` the poller uses. A client cannot show its
+    /// token, so "the pasted one won" is proven by the command source NOT
+    /// running (`NoStore::run` panics).
     #[test]
     fn a_pasted_token_wins_and_a_missing_one_is_a_token_issue() {
+        let store = || Arc::new(NoStore) as Arc<dyn TokenProvider>;
         let mut c = conn("https://gitlab.com", TokenSource::Own(true));
         c.secret = Some("  pasted  ".into());
-        assert_eq!(secret_for(&c, &NoStore).unwrap().expose(), "pasted");
+        assert!(client_for(&c, store()).is_ok());
         // Even over a command source: the pasted token is what was asked for.
         c.token = TokenSource::Command(vec!["x".into()]);
-        assert_eq!(secret_for(&c, &NoStore).unwrap().expose(), "pasted");
+        assert!(client_for(&c, store()).is_ok());
 
         let env = conn("https://gitlab.com", TokenSource::Env("GL".into()));
-        assert_eq!(secret_for(&env, &NoStore).unwrap().expose(), "from-env");
+        assert!(client_for(&env, store()).is_ok());
 
-        let f = secret_for(
-            &conn("https://gitlab.com", TokenSource::Own(true)),
-            &NoStore,
-        )
-        .expect_err("no token");
+        let Err(f) = client_for(&conn("https://gitlab.com", TokenSource::Own(true)), store())
+        else {
+            panic!("a client was built with no token");
+        };
         assert_eq!(f.kind, FailureKind::Answers);
         assert_eq!(f.issues[0].field, "token");
         assert_eq!(f.issues[0].step, WizardStep::Account);
+        // No `{}` of the message: printing a token failure, even this one,
+        // reads to CodeQL as logging a secret.
+        assert!(f.message.starts_with("could not read the token"));
     }
 
     #[test]

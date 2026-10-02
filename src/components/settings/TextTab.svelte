@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
+  import { messageOf } from "../../lib/format";
   import type { Validation } from "../../lib/types";
   import { TEXTAREA } from "./styles";
 
@@ -23,6 +24,8 @@
   let dirty = $state(false);
   let saving = $state(false);
   let conflict = $state(false);
+  /** Why "Overwrite" could not re-read the file, when it could not. */
+  let readError = $state("");
   /** The disk text this draft was seeded from: what the edit is RELATIVE TO. */
   let base = $state("");
 
@@ -51,12 +54,25 @@
    * silently revert an edit made in `$EDITOR` since; now the shell answers
    * `conflict` and writes nothing. Overwriting is an explicit second act,
    * which re-reads the file and uses THAT as the base.
+   *
+   * ⛔ A failed re-read stops there and says so. It used to fall back to the
+   * stale base, which conflicts again by definition: every click showed the
+   * same banner and nothing said the file could not be read.
    */
   async function save(overwrite = false) {
     if (saving) return;
     saving = true;
     try {
-      const against = overwrite ? await diskText().catch(() => base) : base;
+      readError = "";
+      let against = base;
+      if (overwrite) {
+        try {
+          against = await diskText();
+        } catch (error) {
+          readError = `Could not re-read the file: ${messageOf(error)}`;
+          return;
+        }
+      }
       const result = await onsave(draft, against);
       if (result.conflict) {
         conflict = true;
@@ -125,10 +141,14 @@
         onclick={() => {
           dirty = false;
           conflict = false;
+          readError = "";
           onrevert();
         }}>Discard mine and reload</Button
       >
     </div>
+    {#if readError}
+      <p class="read-error text-tone-red mt-2 mb-0">{readError}</p>
+    {/if}
   </div>
 {/if}
 

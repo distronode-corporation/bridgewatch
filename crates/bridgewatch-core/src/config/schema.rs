@@ -188,6 +188,29 @@ impl Account {
             ..Account::default()
         }
     }
+
+    /// An account for `provider` on the instance at `base_url`, as the file
+    /// the wizard writes for it would say: [`Account::for_provider`], with the
+    /// `base_url` trimmed of whitespace and trailing slashes, and for GitHub
+    /// the `api_path` that host needs ([`crate::wizard::github_api_path_for`]).
+    ///
+    /// ⛔ The one place an account is built from a provider and an instance.
+    /// The shell's sign-in and wizard each wrote it out and had drifted on the
+    /// trailing slash, and four more sites set `base_url` alone, so a GitHub
+    /// Enterprise Server account built there had the `api_path` of github.com
+    /// (empty) and sent its requests to the web UI.
+    pub fn for_instance(provider: Provider, base_url: &str) -> Self {
+        let base_url = base_url.trim().trim_end_matches('/').to_string();
+        let api_path = match provider {
+            Provider::Gitlab => provider.default_api_path(),
+            Provider::Github => crate::wizard::github_api_path_for(&base_url),
+        };
+        Self {
+            base_url,
+            api_path,
+            ..Self::for_provider(provider)
+        }
+    }
 }
 
 impl Default for Account {

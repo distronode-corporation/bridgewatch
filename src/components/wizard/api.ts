@@ -309,12 +309,3 @@ export function diagnosticsOf(error: unknown): DiagnosticView[] {
       col: null,
     }));
 }
-
-/** A rejection's message, for display. */
-export function messageOf(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (typeof error === "object" && error !== null && typeof (error as { message?: unknown }).message === "string") {
-    return (error as { message: string }).message;
-  }
-  return "Something went wrong.";
-}

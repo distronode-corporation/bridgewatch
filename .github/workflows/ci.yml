@@ -5,7 +5,7 @@ name: CI
 # around a Svelte 5 frontend. `rust` covers the Rust workspace on both release
 # platforms, `frontend` the Svelte half including the Tailwind build, and `msrv` and
 # `repo` guard the claims the other jobs structurally cannot see: the declared Rust
-# floor, the version written down in three files, and the generated tray icons.
+# floor, the version written down in two files, and the generated tray icons.
 # `cargo-deny`, `dependency-review` (pull requests only) and `zizmor` are the supply
 # chain: advisories and licences for the dependency tree, and the workflows themselves.
 #
@@ -38,27 +38,13 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Tauri on Linux links against GTK/WebKitGTK, so `cargo clippy` and `cargo check`
-  # fail at BUILD time without these, not just at bundle time.
-  #   libwebkit2gtk-4.1 / libjavascriptcoregtk-4.1 / libsoup-3.0  the webview (Tauri 2 line)
-  #   libgtk-3                                                    windowing
-  #   libayatana-appindicator3                                    the tray icon
-  #   librsvg2                                                    SVG icon rendering
-  #   patchelf, xdg-utils                                         AppImage bundling
-  #
-  # ⛔ libssl-dev is deliberately NOT here. reqwest is built with
-  # `default-features = false` and the `rustls` feature: `openssl-sys` and `native-tls`
-  # appear nowhere in Cargo.lock (which is platform-independent, so that settles every
-  # target). Kept in step with release.yml's copy.
-  LINUX_TAURI_DEPS: >-
-    libwebkit2gtk-4.1-dev
-    libjavascriptcoregtk-4.1-dev
-    libsoup-3.0-dev
-    libgtk-3-dev
-    libayatana-appindicator3-dev
-    librsvg2-dev
-    patchelf
-    xdg-utils
+
+# Steps this workflow shares with release.yml and audit.yml live as local composite
+# actions under .github/actions/ (the Tauri apt list, the pinned cargo-deny install,
+# bundle staging and the bundle checks), so each is written once. They are called
+# with GitHub's self-repository syntax, `uses: $/...`, which resolves to this
+# repository at the commit that is running whatever the workspace holds (zizmor's
+# `self-repository` audit fails the `./` form). No secret is passed into any of them.
 
 jobs:
   # fmt, clippy -D warnings, the workspace tests and a check of the Tauri shell, on
@@ -85,10 +71,7 @@ jobs:
 
       - name: Install Tauri system dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          # shellcheck disable=SC2086 # deliberate word splitting into one package per arg
-          sudo apt-get install -y $LINUX_TAURI_DEPS
+        uses: $/.github/actions/linux-tauri-deps
 
       # rustup is preinstalled on every GitHub-hosted image, and rust-toolchain.toml
       # already names the channel and components, so no third-party action is needed.
@@ -149,10 +132,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          # shellcheck disable=SC2086 # deliberate word splitting into one package per arg
-          sudo apt-get install -y $LINUX_TAURI_DEPS
+        uses: $/.github/actions/linux-tauri-deps
 
       # One source of truth: the floor is read out of the manifest (1.88 today) rather
       # than duplicated here, so bumping Cargo.toml bumps this job.
@@ -208,9 +188,10 @@ jobs:
         with:
           persist-credentials: false
 
-      # Written in Cargo.toml, package.json and tauri.conf.json, and nothing derives
-      # one from another. The only thing that catches a partial bump.
-      - name: The three version literals agree
+      # Written in Cargo.toml and package.json, and neither derives from the other
+      # (tauri.conf.json carries none, so the bundles take Cargo.toml's; the script
+      # refuses one reappearing). The only thing that catches a partial bump.
+      - name: The two version literals agree
         run: python3 scripts/check-version.py
 
       # Stdlib-only regeneration check of the committed tray PNGs. Byte equality rests
@@ -262,29 +243,19 @@ jobs:
   # RustSec advisories, the licence allow-list, banned crates and allowed sources, all
   # read from deny.toml. RustSec often has an advisory days before GitHub's database,
   # so this is not a duplicate of Dependabot. The binary is the upstream release,
-  # checked against a pinned SHA-256 rather than a third-party install action, so the
-  # org's action allow-list stays short.
+  # checked against a pinned SHA-256 (the version and digest live in
+  # .github/actions/install-cargo-deny, shared with audit.yml) rather than a
+  # third-party install action, so the org's action allow-list stays short.
   cargo-deny:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    env:
-      CARGO_DENY_VERSION: 0.20.2
-      CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install cargo-deny
-        run: |
-          set -euo pipefail
-          name="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
-          curl -fsSL -o "$RUNNER_TEMP/deny.tgz" \
-            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${name}.tar.gz"
-          echo "${CARGO_DENY_SHA256}  $RUNNER_TEMP/deny.tgz" | sha256sum -c -
-          tar xzf "$RUNNER_TEMP/deny.tgz" -C "$RUNNER_TEMP"
-          install -m 0755 "$RUNNER_TEMP/${name}/cargo-deny" "$HOME/.cargo/bin/cargo-deny"
-          cargo deny --version
+        uses: $/.github/actions/install-cargo-deny
 
       - name: cargo deny check
         run: cargo deny --locked check
@@ -342,6 +313,9 @@ jobs:
       matrix:
         include:
           # Kept in step with release.yml's matrix, including its glibc-floor runners.
+          # (The matrix stays written out in both files on purpose: release.yml is the
+          # signed path and keeps its build job self-contained rather than a reusable
+          # workflow shared with an unsigned manual build.)
           - id: macos-universal
             platform: macos-latest
             args: --target universal-apple-darwin
@@ -369,10 +343,7 @@ jobs:
 
       - name: Install Tauri system dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          # shellcheck disable=SC2086 # deliberate word splitting into one package per arg
-          sudo apt-get install -y $LINUX_TAURI_DEPS
+        uses: $/.github/actions/linux-tauri-deps
 
       - name: Install the stable toolchain
         shell: bash
@@ -412,63 +383,19 @@ jobs:
       # tauri-action exits 0 when it finds no artifacts and was not asked to upload,
       # so the count is asserted here.
       - name: Stage this leg's bundles
-        env:
-          BUNDLE_DIR: ${{ matrix.bundle_dir }}
-          EXPECTED: ${{ matrix.expected }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p staging
-          find "$BUNDLE_DIR" -maxdepth 2 -type f \
-            \( -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
-            -exec cp {} staging/ \;
-          found="$(find staging -type f | wc -l | tr -d ' ')"
-          if [ "$found" -ne "$EXPECTED" ]; then
-            echo "::error::expected $EXPECTED bundle(s) under $BUNDLE_DIR, staged $found"
-            find "$BUNDLE_DIR" -maxdepth 3 || true
-            exit 1
-          fi
-          ls -l staging
+        uses: $/.github/actions/stage-bundles
+        with:
+          bundle-dir: ${{ matrix.bundle_dir }}
+          expected: ${{ matrix.expected }}
 
-      # Unsigned here, so only the architecture half of release.yml's macOS check.
-      # ⛔ The .app INSIDE the staged .dmg is what ships, so that is the one checked.
-      # `bundle/macos/` held no .app by this step on the first universal run
-      # (2026-09-26), so a check against the loose bundle dir failed a good build.
+      # Unsigned here, so only the architecture half of release.yml's macOS checks.
       - name: The .app is universal
         if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mnt="$(mktemp -d)"
-          # The .dmg carries a licence agreement that hdiutil cancels on an empty
-          # stdin; see release.yml's "Verify the macOS signature" for the `yes`.
-          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" staging/*.dmg < <(yes) >/dev/null
-          trap 'hdiutil detach "$mnt" >/dev/null || true' EXIT
-          app="$(find "$mnt" -maxdepth 1 -name '*.app' | head -1)"
-          [ -n "$app" ] || { echo "::error::no .app inside the .dmg"; exit 1; }
-          exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
-          lipo -info "$app/Contents/MacOS/$exe"
-          # -archs prints the architectures alone; -info also echoes the path, which a
-          # word match could hit.
-          archs="$(lipo -archs "$app/Contents/MacOS/$exe")"
-          for arch in x86_64 arm64; do
-            grep -qw "$arch" <<<"$archs" || { echo "::error::$exe is not built for $arch (has: $archs)"; exit 1; }
-          done
+        uses: $/.github/actions/dmg-is-universal
 
-      # The core shells out to `secret-tool` on Linux, so a package without this
-      # dependency installs cleanly and then cannot read a keyring token.
       - name: The .deb and .rpm depend on secret-tool
         if: runner.os == 'Linux'
-        run: |
-          set -euo pipefail
-          depends="$(dpkg-deb -f staging/*.deb Depends)"
-          echo "deb Depends: $depends"
-          grep -qw libsecret-tools <<<"$depends" || { echo "::error::the .deb does not depend on libsecret-tools"; exit 1; }
-          command -v rpm >/dev/null || { sudo apt-get update && sudo apt-get install -y rpm; }
-          requires="$(rpm -qpR staging/*.rpm)"
-          echo "rpm Requires:"
-          echo "$requires"
-          grep -qxF /usr/bin/secret-tool <<<"$requires" || { echo "::error::the .rpm does not require /usr/bin/secret-tool"; exit 1; }
+        uses: $/.github/actions/linux-packages-need-secret-tool
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

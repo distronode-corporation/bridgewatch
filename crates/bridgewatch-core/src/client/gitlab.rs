@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
 
-use super::http::{HttpRequest, HttpResponse, RequestLog, RequestRing, Transport};
+use super::http::{Conn, HttpResponse, RequestRing, Transport};
 use super::log::{self as joblog, JobActionOutcome, LOG_TAIL_LINES, LogTail};
 use super::wire::gitlab as wire;
 use super::{CiClient, ClientError};
@@ -141,36 +141,12 @@ impl ListQuery {
 ///
 /// Cloning is cheap: the transport, the ring and the token are shared.
 ///
-/// ⛔ `Debug` is hand-written. The derived one printed `header_value`, which is
-/// the token itself for a `PRIVATE-TOKEN` account: the whole point of
-/// [`Secret`] is that a credential cannot reach a log line by accident, and a
-/// struct holding the already-rendered header value undid that for anyone who
-/// wrote `{:?}` on a client.
-#[derive(Clone)]
+/// `Debug` is derived: the credential's redaction is `http::Conn`'s.
+#[derive(Clone, Debug)]
 pub struct GitLabClient {
-    base_url: String,
-    api_path: String,
-    header_name: &'static str,
-    header_value: String,
-    transport: Arc<dyn Transport>,
-    ring: RequestRing,
-    /// At most [`super::MAX_IN_FLIGHT`] of this client's requests at a time.
-    in_flight: super::InFlight,
+    conn: Conn,
     /// The account's `actions`: whether retry and play may be SENT.
     actions: bool,
-}
-
-impl std::fmt::Debug for GitLabClient {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GitLabClient")
-            .field("base_url", &self.base_url)
-            .field("api_path", &self.api_path)
-            .field("header_name", &self.header_name)
-            .field("header_value", &super::http::REDACTED)
-            .field("transport", &self.transport)
-            .field("actions", &self.actions)
-            .finish()
-    }
 }
 
 impl GitLabClient {
@@ -182,20 +158,14 @@ impl GitLabClient {
         ring: RequestRing,
     ) -> Self {
         Self {
-            base_url: account.base_url.trim_end_matches('/').to_string(),
-            api_path: account.api_path.clone(),
-            header_name: account.header.header_name(),
-            header_value: account.header.header_value(token.expose()),
-            transport,
-            ring,
-            in_flight: super::InFlight::new(),
+            conn: Conn::new(account, token, transport, ring),
             actions: account.actions,
         }
     }
 
     /// The request ring this client records into.
     pub fn ring(&self) -> &RequestRing {
-        &self.ring
+        self.conn.ring()
     }
 
     /// `GET /projects/{project}/pipelines`.
@@ -319,21 +289,17 @@ impl GitLabClient {
     ) -> Result<LogTail, ClientError> {
         let max_bytes = max_bytes.max(1);
         let path = format!("/projects/{}/jobs/{job_id}/trace", project.url_segment());
-        let request = HttpRequest {
-            method: "GET",
-            url: format!("{}{}{}", self.base_url, self.api_path, path),
-            path: path.clone(),
-            headers: vec![
-                (self.header_name.to_string(), self.header_value.clone()),
-                ("Range".to_string(), format!("bytes=-{max_bytes}")),
-                // A range of a gzipped body is a slice of compressed bytes.
-                ("Accept-Encoding".to_string(), "identity".to_string()),
-            ],
-            body: None,
-            anonymous: false,
-            tail_bytes: Some(max_bytes),
-        };
+        let mut request = self.conn.request("GET", &path);
+        request
+            .headers
+            .push(("Range".to_string(), format!("bytes=-{max_bytes}")));
+        // A range of a gzipped body is a slice of compressed bytes.
+        request
+            .headers
+            .push(("Accept-Encoding".to_string(), "identity".to_string()));
+        request.tail_bytes = Some(max_bytes);
         let first = self
+            .conn
             .send(request, |r| match r.status {
                 416 => None,
                 s if joblog::is_redirect(s) => None,
@@ -343,11 +309,12 @@ impl GitLabClient {
         let response = if joblog::is_redirect(first.status) {
             let next = joblog::follow(first.location.as_deref(), max_bytes, true, &path)?;
             let next_path = next.path.clone();
-            self.send(next, |r| match r.status {
-                416 => None,
-                s => joblog::blob_error(s, &next_path),
-            })
-            .await?
+            self.conn
+                .send(next, |r| match r.status {
+                    416 => None,
+                    s => joblog::blob_error(s, &next_path),
+                })
+                .await?
         } else {
             first
         };
@@ -396,34 +363,12 @@ impl GitLabClient {
             return Err(ClientError::ActionsDisabled);
         }
         let path = format!("/projects/{}/jobs/{job_id}/{verb}", project.url_segment());
-        let request = HttpRequest {
-            method: "POST",
-            url: format!("{}{}{}", self.base_url, self.api_path, path),
-            path: path.clone(),
-            headers: vec![(self.header_name.to_string(), self.header_value.clone())],
-            body: None,
-            anonymous: false,
-            tail_bytes: None,
-        };
-        let response = self.send(request, |r| write_status_error(r, &path)).await?;
+        let request = self.conn.request("POST", &path);
+        let response = self
+            .conn
+            .send(request, |r| write_status_error(r, &path))
+            .await?;
         Ok(JobActionOutcome::from_body(&response.body))
-    }
-
-    /// One request through [`joblog::send`], with this client's transport,
-    /// bound and ring.
-    async fn send(
-        &self,
-        request: HttpRequest,
-        classify: impl Fn(&HttpResponse) -> Option<ClientError>,
-    ) -> Result<HttpResponse, ClientError> {
-        joblog::send(
-            self.transport.as_ref(),
-            &self.in_flight,
-            &self.ring,
-            request,
-            classify,
-        )
-        .await
     }
 
     /// Follow `x-next-page` from `prefix` (which ends in `?` or `&`) for at
@@ -471,81 +416,18 @@ impl GitLabClient {
         self.get_json_paged::<T>(path).await.map(|(v, _)| v)
     }
 
+    /// One `GET`, decoded, with the `x-next-page` number when there is one.
     async fn get_json_paged<T: DeserializeOwned>(
         &self,
         path: &str,
     ) -> Result<(T, Option<u32>), ClientError> {
-        let url = format!("{}{}{}", self.base_url, self.api_path, path);
-        let request = HttpRequest {
-            method: "GET",
-            url,
-            path: path.to_string(),
-            headers: vec![(self.header_name.to_string(), self.header_value.clone())],
-            body: None,
-            anonymous: false,
-            tail_bytes: None,
-        };
-
-        // Before the clock starts: `ms` is the request, not the queue.
-        let _slot = self.in_flight.acquire().await;
-        let started = std::time::Instant::now();
-        let result = self.transport.execute(request).await;
-        let ms = started.elapsed().as_millis() as u64;
-
-        match result {
-            Ok(response) => {
-                let error = status_error(response.status, path, response.retry_after);
-                // ⛔ `path` is logged whole, query and all, and that is safe by
-                // CONSTRUCTION rather than by filtering: the credential travels
-                // only in a header (see the module docs on `client::http`), and
-                // every path here is built from a fixed template with its one
-                // variable percent-encoded. Redacting a query parameter that
-                // cannot exist would suggest that one could.
-                tracing::debug!(
-                    method = "GET",
-                    path,
-                    status = response.status,
-                    bytes = response.body.len(),
-                    ms,
-                    "request"
-                );
-                self.ring.record(RequestLog {
-                    method: "GET".into(),
-                    path: path.to_string(),
-                    status: Some(response.status),
-                    ms,
-                    ratelimit_remaining: response.ratelimit_remaining,
-                    ratelimit_reset: response.ratelimit_reset,
-                    retry_after: response.retry_after,
-                    error: error.as_ref().map(ToString::to_string),
-                    at: chrono::Utc::now(),
-                });
-                if let Some(e) = error {
-                    return Err(e);
-                }
-                let value =
-                    serde_json::from_str::<T>(&response.body).map_err(|e| ClientError::Decode {
-                        path: path.to_string(),
-                        message: e.to_string(),
-                    })?;
-                Ok((value, response.next_page.and_then(|p| p.parse().ok())))
-            }
-            Err(e) => {
-                tracing::debug!(method = "GET", path, error = %e, ms, "request failed");
-                self.ring.record(RequestLog {
-                    method: "GET".into(),
-                    path: path.to_string(),
-                    status: None,
-                    ms,
-                    ratelimit_remaining: None,
-                    ratelimit_reset: None,
-                    retry_after: e.retry_after(),
-                    error: Some(e.to_string()),
-                    at: chrono::Utc::now(),
-                });
-                Err(e)
-            }
-        }
+        let (value, response) = self
+            .conn
+            .get_json::<T>(self.conn.request("GET", path), |r| {
+                status_error(r.status, path, r.retry_after)
+            })
+            .await?;
+        Ok((value, response.next_page.and_then(|p| p.parse().ok())))
     }
 }
 

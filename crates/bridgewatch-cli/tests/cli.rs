@@ -322,6 +322,65 @@ fn watch_with_a_tick_limit_exits_with_the_verdict_code() {
     assert!(!stdout(&out).trim().is_empty(), "one line per change");
 }
 
+/// ⛔ `watch --json` is one JSON object per line, notifications included. They
+/// were printed as `notify [..]` text between the snapshots, so `watch --json
+/// | jq -c .` died on the first one.
+///
+/// A notification needs a CHANGE after the first tick, which only baselines,
+/// so the fixture starts with an empty pipeline list (a genuine baseline: no
+/// error, nothing matched) and the real list is put back once the first line
+/// is out. The transport reads its files on every request, and the watch
+/// polls once a second, so the second tick sees a new deployed pipeline.
+#[test]
+fn watch_json_prints_notifications_as_json_too() {
+    use std::io::BufRead;
+
+    let dir = TempDir::new("watch-json");
+    let fx = dir.0.join("fx");
+    std::fs::create_dir_all(&fx).unwrap();
+    for entry in std::fs::read_dir(fixture("4cfaced9-deployed")).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), fx.join(entry.file_name())).unwrap();
+    }
+    let list = std::fs::read_to_string(fx.join("list.json")).unwrap();
+    std::fs::write(fx.join("list.json"), "[]\n").unwrap();
+    let config = dir.write(
+        "config.toml",
+        &format!("{MINIMAL}poll = {{ live_secs = 1, idle_secs = 1 }}\n"),
+    );
+
+    let mut child = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["watch", "--json", "--ticks", "2", "--fixture"])
+        .arg(&fx)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the binary runs");
+    let mut lines = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
+    let first = lines.next().expect("a first line").unwrap();
+    std::fs::write(fx.join("list.json"), list).unwrap();
+    let mut all = vec![first];
+    all.extend(lines.map(Result::unwrap));
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(0), "{all:#?}");
+
+    let parsed: Vec<serde_json::Value> = all
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON ({e}): {l}")))
+        .collect();
+    let notes: Vec<&serde_json::Value> = parsed.iter().filter_map(|v| v.get("notify")).collect();
+    assert_eq!(notes.len(), 1, "{all:#?}");
+    assert_eq!(notes[0]["kind"], "deployed", "{all:#?}");
+    assert_eq!(notes[0]["watch"], "main-push", "{all:#?}");
+    assert_eq!(notes[0]["pipeline_id"], 2856963900u64, "{all:#?}");
+    assert!(
+        parsed.iter().any(|v| v.get("icon_state").is_some()),
+        "the snapshots are still there: {all:#?}"
+    );
+}
+
 /// ⛔ A usage error is 64, never 2: clap's own code for it is 2, which is
 /// also `deployed_with_failure`.
 #[test]
@@ -639,6 +698,94 @@ fn fixture_scrub_check_gates_without_writing() {
     assert_eq!(code(&out), 64);
 }
 
+/// ⛔ A directory with no recording in it is refused (64), with or without
+/// `--check`. The scrub reads only a directory's own files, so `--check` on
+/// the fixtures ROOT examined nothing and exited 0 while a fixture one level
+/// down held a name, and an empty directory or a typo passed the same way.
+#[test]
+fn fixture_scrub_refuses_a_directory_with_no_recordings() {
+    let dir = TempDir::new("scrub-empty");
+    let root = dir.0.join("root");
+    let dirty = root.join("dirty");
+    std::fs::create_dir_all(&dirty).unwrap();
+    let raw = "[\n  {\n    \"id\": 1,\n    \"user\": { \"email\": \"a@example.com\" }\n  }\n]\n";
+    std::fs::write(dirty.join("jobs.json"), raw).unwrap();
+    // Not a recording: the scrub would skip it, so it must not count either.
+    std::fs::write(root.join("expected.json"), "{}\n").unwrap();
+
+    for check in [true, false] {
+        let mut cmd = bin();
+        cmd.args(["fixture", "scrub"]);
+        if check {
+            cmd.arg("--check");
+        }
+        let out = run(cmd.arg(&root));
+        assert_eq!(code(&out), 64, "check={check}: {}", stdout(&out));
+        assert!(
+            stderr(&out).contains("holds no recorded files"),
+            "{}",
+            stderr(&out)
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(dirty.join("jobs.json")).unwrap(),
+        raw,
+        "nothing below the refused directory was touched"
+    );
+
+    // Refused before anything is written, even when an earlier argument is a
+    // real fixture.
+    let out = run(bin()
+        .args(["fixture", "scrub"])
+        .arg(&dirty)
+        .arg(dir.0.join("root")));
+    assert_eq!(code(&out), 64, "{}", stdout(&out));
+    assert_eq!(
+        std::fs::read_to_string(dirty.join("jobs.json")).unwrap(),
+        raw,
+        "the first directory was scrubbed before the second was refused"
+    );
+
+    // The fixture itself, named directly, is still a gate that fails.
+    let out = run(bin().args(["fixture", "scrub", "--check"]).arg(&dirty));
+    assert_eq!(code(&out), 1, "{}", stdout(&out));
+}
+
+/// ⛔ An `--account` the file does not contain is a usage error (64), as it is
+/// for log, retry, play and auth; it was 70. So is an account with no watch to
+/// take a project from. Both are refused before any token is read.
+#[test]
+fn fixture_record_on_an_unknown_account_is_a_usage_error() {
+    let dir = TempDir::new("record-unknown");
+    let path = dir.write(
+        "config.toml",
+        &format!(
+            "{MINIMAL}\n[accounts.spare]\ntoken = {{ env = \"BW_TEST_TOKEN_THAT_IS_NEVER_SET\" }}\n"
+        ),
+    );
+    let out = run(bin()
+        .args(["--config"])
+        .arg(&path)
+        .args(["fixture", "record", "1", "--account", "nope"])
+        .current_dir(&dir.0));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("no account named \"nope\""),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = run(bin()
+        .env_remove("BW_TEST_TOKEN_THAT_IS_NEVER_SET")
+        .args(["--config"])
+        .arg(&path)
+        .args(["fixture", "record", "1", "--account", "spare"])
+        .current_dir(&dir.0));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(stderr(&out).contains("pass --project"), "{}", stderr(&out));
+    assert!(!dir.0.join("1").exists(), "a fixture directory was created");
+}
+
 /// ⛔ H18. `fixture record` takes no required `--out`; the README runs it as
 /// `bridgewatch fixture record <id>`. Checked at the parser only (`--help`),
 /// because recording needs the network.
@@ -699,6 +846,32 @@ fn init_prints_a_config_that_validates_and_writes_nothing() {
         .arg(&written)
         .args(["config", "validate"]));
     assert_eq!(code(&check), 0, "{}", stderr(&check));
+}
+
+/// ⛔ `--token-command` takes arguments that start with '-'. The README's GHES
+/// recipe, `gh auth token --hostname <host>`, was refused by clap as an
+/// unexpected argument.
+#[test]
+fn init_token_command_takes_hyphenated_arguments() {
+    let dir = TempDir::new("init-token-command");
+    let path = dir.0.join("config.toml");
+    let out = run(bin().args(["--config"]).arg(&path).args([
+        "init",
+        "--project",
+        "group/app",
+        "--token-command",
+        "gh",
+        "auth",
+        "token",
+        "--hostname",
+        "ghe.example.com",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains(r#"command = ["gh", "auth", "token", "--hostname", "ghe.example.com"]"#),
+        "{text}"
+    );
 }
 
 /// Against an existing file it edits: every comment of the shipped example

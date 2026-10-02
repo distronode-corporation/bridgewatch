@@ -229,7 +229,7 @@ impl EtaHistory {
 
     /// Merge what is on disk into this history, then write the result.
     ///
-    /// ⚠ Written to a sibling and renamed over the target, as the ledger is: an
+    /// ⚠ Through [`crate::config::write_atomic`], as the ledger is: an
     /// interrupted plain write leaves a truncated file, which `load` would read
     /// as corrupt and every sample would go with it. A file that exists and
     /// does not parse is replaced by this history rather than merged, and was
@@ -238,21 +238,9 @@ impl EtaHistory {
         if let Ok(on_disk) = Self::read(path) {
             self.merge(&on_disk);
         }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let body = serde_json::to_string(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "eta.json".into());
-        let temp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
-        let result = std::fs::write(&temp, body).and_then(|()| std::fs::rename(&temp, path));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temp);
-        }
-        result
+        crate::config::write_atomic(path, &body)
     }
 }
 
