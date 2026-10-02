@@ -23,9 +23,9 @@
 - [ ] `npx vitest run` (including the Settings registry ↔ JSON Schema parity gate)
 - [ ] `npm run build` (the Vite production build, which is where Tailwind compiles)
 - [ ] Touches `src-tauri/icons/`, and so `python3 src-tauri/icons/generate.py --check` was run
-- [ ] Bumps the version, and so `python3 scripts/check-version.py` was run — it is
-      written in `Cargo.toml`, `package.json` and `src-tauri/tauri.conf.json`, and
-      Tauri names every release asset after the third one
+- [ ] Bumps the version, and so `python3 scripts/check-version.py` was run: it is
+      written in `Cargo.toml` and `package.json`, and Tauri names every release
+      asset after the first one (`src-tauri/tauri.conf.json` sets no version)
 
 ## Verdict changes
 

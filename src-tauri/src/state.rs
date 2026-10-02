@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use bridgewatch_core::client::CiClient;
-use bridgewatch_core::config::Config;
-use bridgewatch_core::poll::{POLL_NOW_MIN_GAP, PollNow};
+use bridgewatch_core::config::{Config, PollConfig, RateLimitBackoff};
+use bridgewatch_core::poll::{PollNow, PollPolicy};
 use bridgewatch_core::verdict::Snapshot;
 use serde::Serialize;
 use tokio::sync::Notify;
@@ -29,8 +29,12 @@ pub struct Inner {
     pub config: Option<Config>,
     /// The result of the most recent load or reload, good or bad.
     pub validation: Validation,
-    /// When the last tick completed.
+    /// When the last tick completed, for the debug pane.
     pub last_poll: Option<Instant>,
+    /// The out-of-band poll gate: the core's, marked when a request is passed
+    /// on AND when a tick completes. Only its gate half is used; its interval
+    /// and backoff belong to the per-watch policies inside the poller.
+    pub poll_gate: PollPolicy,
     /// When the next one is due, so the debug pane can count down.
     pub next_poll_at: Option<Instant>,
     /// True when this run created the config file from the shipped example.
@@ -104,6 +108,7 @@ impl AppState {
                 config: resolved.loaded.map(|l| l.config),
                 validation: resolved.validation,
                 last_poll: None,
+                poll_gate: PollPolicy::new(&PollConfig::default(), &RateLimitBackoff::default()),
                 next_poll_at: None,
                 seeded: resolved.seeded,
                 settings_tab: None,
@@ -147,13 +152,20 @@ impl AppState {
     /// the popover is a thing people do idly, and it must not become a request
     /// storm. A manual refresh, a wake and a config change all bypass it,
     /// which is [`PollNow::bypasses_gate`]'s judgement, not this file's.
+    ///
+    /// ⛔ The gate is [`PollPolicy::allows_poll_now`], and a request that passes
+    /// marks it at once (check and mark under one lock). One popover open
+    /// raises two requests, `show_popover` and then the webview's focus
+    /// handler; gated on the last COMPLETED tick alone, the second arrived
+    /// before the first tick finished and queued a second tick behind it.
     pub fn request_poll(&self, reason: PollNow) -> bool {
         let allowed = {
-            let inner = self.lock();
-            reason.bypasses_gate()
-                || inner
-                    .last_poll
-                    .is_none_or(|t| t.elapsed() >= POLL_NOW_MIN_GAP)
+            let mut inner = self.lock();
+            let allowed = inner.poll_gate.allows_poll_now(reason);
+            if allowed {
+                inner.poll_gate.mark_polled();
+            }
+            allowed
         };
         if allowed {
             self.poll_now.notify_one();
@@ -186,12 +198,13 @@ impl AppState {
         }
     }
 
-    /// Record a completed tick.
-    pub fn record_tick(&self, snapshot: Snapshot, next_interval: Duration) {
+    /// Record a completed tick's timings. The snapshot itself is stored by
+    /// `poller::publish`, its one writer.
+    pub fn record_tick(&self, next_interval: Duration) {
         let mut inner = self.lock();
-        inner.snapshot = snapshot;
         let now = Instant::now();
         inner.last_poll = Some(now);
+        inner.poll_gate.mark_polled();
         // `checked_add`: an interval derived from a server's `Retry-After` is
         // not something to trust with a panic.
         inner.next_poll_at = now.checked_add(next_interval);
@@ -258,15 +271,29 @@ mod tests {
     #[test]
     fn an_idle_popover_open_is_gated_and_a_manual_refresh_is_not() {
         let state = state_with("");
-        state.record_tick(Snapshot::empty(), Duration::from_secs(60));
+        state.record_tick(Duration::from_secs(60));
         assert!(!state.request_poll(PollNow::PopoverOpened));
         assert!(state.request_poll(PollNow::Manual));
     }
 
     #[test]
+    fn one_popover_open_is_one_permit_even_before_any_tick_completes() {
+        // #12: one open raises two requests (`show_popover`, then the webview's
+        // focus handler). The gate keyed on the last COMPLETED tick, which the
+        // first request had not produced yet, so both passed and the open
+        // cost two back-to-back ticks.
+        let state = state_with("");
+        assert!(state.request_poll(PollNow::PopoverOpened));
+        assert!(
+            !state.request_poll(PollNow::PopoverOpened),
+            "the second signal of the same open was passed on"
+        );
+    }
+
+    #[test]
     fn a_huge_retry_after_cannot_panic_the_tick_bookkeeping() {
         let state = state_with("");
-        state.record_tick(Snapshot::empty(), Duration::MAX);
+        state.record_tick(Duration::MAX);
         assert!(state.status(false).next_poll_secs.is_none());
     }
 }

@@ -1,13 +1,26 @@
+<script lang="ts" module>
+  import { createSingleFlight } from "../../lib/single-flight";
+
+  /**
+   * The credential-store writes (save, forget, sign out), one per account at
+   * a time. Module-wide, as the job tools' guard is, so a form re-rendered by
+   * a reload mid-write is still guarded.
+   */
+  const TOKEN_WRITES = createSingleFlight();
+</script>
+
 <script lang="ts">
   import { untrack } from "svelte";
 
   import { Button } from "$lib/components/ui/button/index.js";
   import DeviceSignIn from "../DeviceSignIn.svelte";
   import { setOwnToken, clearOwnToken, inTauri, oauthApi } from "../../lib/ipc";
-  import { defaultBaseUrl, providerName, type OAuthApi, type OAuthAvailability, type SignInStatus } from "../../lib/oauth";
+  import { messageOf } from "../../lib/format";
+  import type { OAuthApi, OAuthAvailability, SignInStatus } from "../../lib/oauth";
+  import { cliName, defaultBaseUrl, providerName } from "../../lib/providers";
   import type { Edit, Provider } from "../../lib/types";
   import { concretePath, entry as registryEntry } from "../../lib/settings/registry";
-  import { cliKeyringService } from "../wizard/model";
+  import { cliKeyringService, formatCommand, parseCommand } from "../wizard/model";
   import { CHECK, FIELD_LABEL, FIELD_ROW, HINT, INPUT } from "./styles";
 
   interface Props {
@@ -37,7 +50,7 @@
 
   const github = $derived(provider === "github");
   /** glab for a GitLab account, gh for a GitHub one: never offered across. */
-  const cli = $derived(github ? "gh" : "glab");
+  const cli = $derived(cliName(provider));
   const preset = $derived(cliKeyringService(provider, baseUrl));
   const kinds = $derived<[Kind, string][]>([
     ["keyring", `${cli} / OS keyring`],
@@ -87,8 +100,11 @@
         return { kind: "env", service: "", user: "", env: String(v.env ?? ""), command: "", clientId: "" };
       }
       if ("command" in v) {
+        // ⛔ Shown and written back with the wizard's quote-aware pair. A plain
+        // join/split broke `sh -c 'pass show gitlab/pat'` into five words the
+        // first time anybody pressed "Use this source" on it.
         const argv = Array.isArray(v.command) ? (v.command as string[]) : [];
-        return { kind: "command", service: "", user: "", env: "", command: argv.join(" "), clientId: "" };
+        return { kind: "command", service: "", user: "", env: "", command: formatCommand(argv), clientId: "" };
       }
       return { kind: "own", service: "", user: "", env: "", command: "", clientId: "" };
     },
@@ -104,6 +120,8 @@
   let clientId = $state("");
   let availability = $state<OAuthAvailability | null>(null);
   let status = $state<SignInStatus | null>(null);
+  /** Why the stored sign-in could not be read, when it could not. */
+  let statusError = $state("");
 
   /** Ask the shell whether sign-in can work here, whenever the instance or the typed client id changes. */
   let availabilitySeq = 0;
@@ -137,8 +155,12 @@
     if (!oauth) return;
     try {
       status = await oauth.status(account);
-    } catch {
+      statusError = "";
+    } catch (error) {
+      // ⛔ Not "Not signed in.": a locked keychain or a denied prompt is not
+      // the absence of a sign-in, and saying so sent people to sign in again.
       status = null;
+      statusError = `Could not read the sign-in: ${messageOf(error)}`;
     }
   }
   $effect(() => {
@@ -212,8 +234,8 @@
     // worded by Rust and tied to the exact text, and writes nothing until the
     // settings window sends it back. The question this component used to ask
     // was advisory: "Edit as text" and a raw `apply_config_edits` walked past it.
-    const argv = command.split(/\s+/).filter((s) => s.length > 0);
-    if (argv.length === 0) {
+    const argv = parseCommand(command);
+    if (argv.length === 0 || !argv[0].trim()) {
       message = "A command source needs a program to run.";
       return;
     }
@@ -242,16 +264,29 @@
     ]);
   }
 
-  async function signOut() {
-    if (!oauth) return;
-    message = "";
-    try {
-      await oauth.signOut(account);
-      status = null;
-      message = "Signed out. The sign-in is removed from the credential store.";
-    } catch (error) {
-      message = String(error);
-    }
+  /**
+   * Run one credential-store write unless this account already has one on its
+   * way. ⛔ Save, Forget and Sign out share the key, so a double click sends
+   * one write and a Forget cannot race a Save still in flight.
+   */
+  function storeWrite(task: () => Promise<void>) {
+    void TOKEN_WRITES.run(`token:${account}`, task);
+  }
+
+  function signOut() {
+    const api = oauth;
+    if (!api) return;
+    storeWrite(async () => {
+      message = "";
+      try {
+        await api.signOut(account);
+        status = null;
+        statusError = "";
+        message = "Signed out. The sign-in is removed from the credential store.";
+      } catch (error) {
+        message = messageOf(error);
+      }
+    });
   }
 
   function apply() {
@@ -274,27 +309,31 @@
     }
   }
 
-  async function saveToken() {
-    message = "";
-    try {
-      await setOwnToken(account, pasted);
-      // ⛔ Cleared immediately. The token has gone to the OS credential store
-      // and must not sit in a DOM node for the life of the window.
-      pasted = "";
-      message = "Saved to the credential store.";
-    } catch (error) {
-      message = String(error);
-    }
+  function saveToken() {
+    storeWrite(async () => {
+      message = "";
+      try {
+        await setOwnToken(account, pasted);
+        // ⛔ Cleared immediately. The token has gone to the OS credential store
+        // and must not sit in a DOM node for the life of the window.
+        pasted = "";
+        message = "Saved to the credential store.";
+      } catch (error) {
+        message = messageOf(error);
+      }
+    });
   }
 
-  async function forgetToken() {
-    message = "";
-    try {
-      await clearOwnToken(account);
-      message = "Removed from the credential store.";
-    } catch (error) {
-      message = String(error);
-    }
+  function forgetToken() {
+    storeWrite(async () => {
+      message = "";
+      try {
+        await clearOwnToken(account);
+        message = "Removed from the credential store. This account stops polling until a token is set again.";
+      } catch (error) {
+        message = messageOf(error);
+      }
+    });
   }
 </script>
 
@@ -339,6 +378,8 @@
         <p class="signed-in m-0 text-[13px]" data-slot="oauth-status">
           Signed in as <code>@{status.login ?? "unknown"}</code>
         </p>
+      {:else if statusError}
+        <p class="text-tone-red m-0 text-[13px]" data-slot="oauth-status" role="alert">{statusError}</p>
       {:else if current.kind === "oauth"}
         <p class={["hint m-0", HINT]} data-slot="oauth-status">Not signed in.</p>
       {/if}
@@ -362,7 +403,7 @@
           }}
         />
         {#if status}
-          <Button variant="ghost" size="sm" class="sign-out" onclick={() => void signOut()}>Sign out</Button>
+          <Button variant="ghost" size="sm" class="sign-out" onclick={signOut}>Sign out</Button>
         {/if}
       </div>
       {#if provider === "github" && availability?.install_url}

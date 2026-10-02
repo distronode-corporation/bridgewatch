@@ -24,7 +24,7 @@
     takeSettingsTab,
     validateConfigText,
   } from "./lib/ipc";
-  import { isFirstRun } from "./lib/format";
+  import { isFirstRun, messageOf } from "./lib/format";
   import type { Edit, Status, Validation } from "./lib/types";
 
   type TabId = Tab | "text";
@@ -46,6 +46,8 @@
   let status = $state<Status | null>(null);
   let validation = $state<Validation | null>(null);
   let notice = $state("");
+  /** The text this window's last successful text-tab save wrote, if any. */
+  let savedText: string | null = null;
 
   /**
    * Re-read everything the pane renders.
@@ -60,15 +62,23 @@
    * already on screen: a REFUSED save explains why it was refused, and the file
    * on disk is unchanged, so re-seeding from it would replace the reason with
    * the state of a file the user did not just try to write.
+   *
+   * ⛔ `"if-ours"` is the config-changed case: keep a "valid" only while the
+   * file still holds exactly what this window saved. A save announces itself
+   * with that event too, so the verdict has to survive it; but a file broken
+   * in $EDITOR afterwards announces itself the same way, and kept the stale
+   * "valid" with no diagnostics.
    */
-  async function load(keepValidation = false) {
+  async function load(keepValidation: boolean | "if-ours" = false) {
     if (!inTauri()) return;
     const payload = await getConfigJson();
     config = payload?.config ?? null;
     jobOrder = payload?.job_order ?? [];
     text = await readConfigText();
     status = await getStatus();
-    if (keepValidation) return;
+    const keep =
+      keepValidation === "if-ours" ? validation?.ok === true && text === savedText : keepValidation;
+    if (keep) return;
     // A first launch has no file YET: that is the wizard's moment, not an
     // error to list in red under every tab.
     validation =
@@ -88,7 +98,7 @@
     // file; the shell says so, and every copy this window holds follows. The
     // text tab keeps a DIRTY buffer regardless, and the shell's
     // compare-and-swap refuses a save based on the old text.
-    const unlistenChanged = onConfigChanged(() => void load(validation?.ok === true));
+    const unlistenChanged = onConfigChanged(() => void load("if-ours"));
     return () => {
       void unlisten.then((f) => f());
       void unlistenChanged.then((f) => f());
@@ -197,6 +207,11 @@
     );
   }
 
+  /** Ask the shell to open something; say why when it could not. */
+  function openOrSay(what: string, request: () => Promise<void>) {
+    request().catch((error) => (notice = `Could not open ${what}: ${messageOf(error)}`));
+  }
+
   async function addWatch(answers: Record<string, string>) {
     asking = null;
     const accounts = accountNames();
@@ -238,10 +253,10 @@
       {/each}
     </div>
     <span class="flex-1"></span>
-    <Button variant="ghost" size="sm" class="wizard" title="Walk through the basics again" onclick={() => void openWizard()}
+    <Button variant="ghost" size="sm" class="wizard" title="Walk through the basics again" onclick={() => openOrSay("the setup wizard", openWizard)}
       >Setup wizard…</Button
     >
-    <Button variant="outline" size="sm" onclick={() => void openConfigFile()}>Open file</Button>
+    <Button variant="outline" size="sm" onclick={() => openOrSay("the file", openConfigFile)}>Open file</Button>
     <Button
       variant="outline"
       size="sm"
@@ -261,7 +276,7 @@
         No configuration yet. The setup wizard writes one; or write it yourself on the "Edit as text" tab, where
         Save creates the file.
       </span>
-      <Button size="sm" onclick={() => void openWizard()}>Open the setup wizard</Button>
+      <Button size="sm" onclick={() => openOrSay("the setup wizard", openWizard)}>Open the setup wizard</Button>
     </div>
   {/if}
 
@@ -331,6 +346,7 @@
             return result;
           }
           validation = result;
+          if (result.ok) savedText = t;
           notice = result.ok ? "Saved." : "Not saved — the file was left alone.";
           // ⚠ Kept either way, unlike a form save: this tab RENDERS the
           // validation, so re-seeding it from the file would replace both

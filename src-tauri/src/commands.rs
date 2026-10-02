@@ -245,6 +245,12 @@ pub(crate) fn read_or_empty(path: &std::path::Path) -> std::io::Result<String> {
     }
 }
 
+/// The file's text for a reload: a missing file reads as empty, any other
+/// failure is an error that names the file.
+fn read_for_reload(path: &std::path::Path) -> Result<String, String> {
+    read_or_empty(path).map_err(|e| format!("could not read {}: {e}", path.display()))
+}
+
 /// The event the settings window listens to, so a copy it holds of the file
 /// is never older than the file without it knowing.
 pub const CONFIG_CHANGED_EVENT: &str = "config-changed";
@@ -264,10 +270,30 @@ pub const CONFIG_CHANGED_EVENT: &str = "config-changed";
 /// prompt can appear again) and drops every cache. "Reload config" forces,
 /// since a user asking for it wants the rebuild even for an unchanged file,
 /// e.g. after fixing a credential.
+///
+/// ⚠ A file that exists but cannot be read (EACCES, EISDIR, EIO) is reported
+/// as exactly that, and the running configuration is kept as for any failed
+/// reload. It used to read as empty, so a `chmod 000` told the user to add
+/// an account to a file full of them. The last-seen text is forgotten, so the
+/// reload after the fix goes ahead even when the file holds what it did
+/// before.
 pub fn reload_from_disk(app: &AppHandle, force: bool) {
     let state = app.state::<Arc<AppState>>();
     let path = state.config_path.clone();
-    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let raw = match read_for_reload(&path) {
+        Ok(raw) => raw,
+        Err(e) => {
+            tracing::warn!(error = %e, "reload failed; the running configuration is kept");
+            {
+                let mut inner = state.lock();
+                inner.validation = Validation::error(e);
+                inner.disk_text = None;
+            }
+            let _ = app.emit(CONFIG_CHANGED_EVENT, ());
+            crate::poller::republish_errors(app);
+            return;
+        }
+    };
     if !state.note_disk_text(&raw, force) {
         return;
     }
@@ -508,38 +534,53 @@ pub fn quit(app: AppHandle) {
 /// ⛔ The token is passed through to the core and never stored in the config
 /// file, never logged, and never echoed back: `token = { own = true }` is how
 /// it is read again. The frontend sends it once and forgets it.
+///
+/// ⚠ Async, with the store call on a blocking thread, like the wizard's: a
+/// synchronous command runs on the main thread, so a Keychain prompt (or a
+/// slow Secret Service) froze the tray and both windows until it was answered.
 #[tauri::command]
-pub fn set_own_token(account: String, token: String, state: Shared<'_>) -> Result<(), String> {
-    if token.trim().is_empty() {
+pub async fn set_own_token(
+    account: String,
+    token: String,
+    state: Shared<'_>,
+) -> Result<(), String> {
+    let pasted = token.trim().to_string();
+    if pasted.is_empty() {
         return Err("the token is empty".into());
     }
-    token::set_own_token(&account, &Secret::new(token.trim()), &SystemTokenProvider)
-        .map_err(|e| e.to_string())?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        token::set_own_token(&account, &Secret::new(pasted), &SystemTokenProvider)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
     state.request_reload();
     Ok(())
 }
 
 /// Remove bridgewatch's own credential-store entry for an account.
+///
+/// ⛔ Reloads on success, like [`set_own_token`]. Own tokens are resolved once,
+/// when the poller is built, so without the rebuild a forgotten token went on
+/// being sent by the poller and by job actions until the next restart. Off the
+/// main thread for the same reason as [`set_own_token`].
 #[tauri::command]
-pub fn clear_own_token(account: String) -> Result<(), String> {
-    token::clear_own_token(&account, &SystemTokenProvider).map_err(|e| e.to_string())
-}
-
-/// Read the OS's login-item state.
-#[tauri::command]
-pub fn get_launch_at_login(app: AppHandle) -> bool {
-    app.autolaunch().is_enabled().unwrap_or(false)
-}
-
-/// Register or unregister the login item, and record the intent in the file.
-#[tauri::command]
-pub fn set_launch_at_login(enabled: bool, app: AppHandle) -> Result<bool, String> {
-    set_login_item(&app, enabled)
+pub async fn clear_own_token(account: String, state: Shared<'_>) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        token::clear_own_token(&account, &SystemTokenProvider)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    state.request_reload();
+    Ok(())
 }
 
 /// Change the OS login item, mirror what the OS then reports into the file,
 /// and put the tray's checkbox right. Every route to the setting ends here:
-/// the tray menu, the command, and a form edit of `ui.launch_at_login`.
+/// the tray menu and a form edit of `ui.launch_at_login`.
 pub fn set_login_item(app: &AppHandle, enabled: bool) -> Result<bool, String> {
     let manager = app.autolaunch();
     let result = if enabled {
@@ -669,6 +710,21 @@ mod tests {
         std::fs::write(&big, vec![b' '; THEME_CSS_MAX_BYTES as usize + 1]).unwrap();
         assert!(read_stylesheet(&big).is_err());
         assert!(read_stylesheet(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reload_that_cannot_read_the_file_says_so_and_a_missing_one_is_empty() {
+        // #13: an unreadable file (here a directory, EISDIR) read as "" and was
+        // published as "no accounts defined" over a file full of accounts.
+        let dir = std::env::temp_dir().join(format!("bw-reload-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = read_for_reload(&dir).expect_err("an unreadable file read as text");
+        assert!(
+            err.starts_with(&format!("could not read {}: ", dir.display())),
+            "{err}"
+        );
+        assert_eq!(read_for_reload(&dir.join("missing.toml")).unwrap(), "");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

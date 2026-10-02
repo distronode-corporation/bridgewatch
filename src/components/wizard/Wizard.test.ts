@@ -114,6 +114,12 @@ async function settle() {
   await tick();
 }
 
+/** Let `n` animation frames pass, then render. */
+async function frames(n: number) {
+  for (let i = 0; i < n; i++) await new Promise((r) => requestAnimationFrame(r));
+  await settle();
+}
+
 async function start(api: WizardApi, extra: Record<string, unknown> = {}) {
   const onFinish = vi.fn();
   const onSkip = vi.fn();
@@ -291,6 +297,9 @@ describe("command token source", () => {
     expect(api.testConnection).not.toHaveBeenCalled();
 
     await click('[data-slot="confirm-dialog"] [data-action="cancel"]');
+    // The dialog leaves after its exit animation, as in the webview: bits-ui
+    // waits two animation frames for one before it unmounts the content.
+    await frames(2);
     expect(q('[data-slot="confirm-dialog"]')).toBeNull();
     expect(api.testConnection).not.toHaveBeenCalled();
 

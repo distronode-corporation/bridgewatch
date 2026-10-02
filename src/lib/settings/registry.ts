@@ -19,6 +19,7 @@
  * component may invent a path.
  */
 
+import { providerName } from "../providers";
 import type { Provider } from "../types";
 
 /** Which settings tab a key lives on. */
@@ -446,7 +447,7 @@ export const REGISTRY: RegistryEntry[] = [
  */
 export function inapplicableNote(entry: RegistryEntry, provider: Provider | null | undefined): string | null {
   if (!entry.provider || !provider || entry.provider === provider) return null;
-  return entry.providerNote ?? `Only used by ${entry.provider === "github" ? "GitHub" : "GitLab"} accounts.`;
+  return entry.providerNote ?? `Only used by ${providerName(entry.provider)} accounts.`;
 }
 
 /** The provider an account in the parsed document talks to; an account without the key is gitlab. */

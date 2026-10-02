@@ -1,5 +1,5 @@
-//! The end of a job's log, fetched on demand and cleaned for display; and the
-//! request plumbing the job actions (retry, play) share with it.
+//! The end of a job's log, fetched on demand and cleaned for display; and what
+//! the job actions (retry, play) answer with.
 //!
 //! # Fetching
 //!
@@ -39,13 +39,12 @@
 //! and a 28-character timestamp on every line leaves no room for the line.
 
 use std::sync::LazyLock;
-use std::time::Instant;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use super::ClientError;
-use super::http::{HttpRequest, HttpResponse, InFlight, RequestLog, RequestRing, Transport};
+use super::http::HttpRequest;
 use crate::config::Provider;
 
 /// How many lines of a log are kept.
@@ -406,71 +405,4 @@ pub fn sanitize_message(body: &str) -> Option<String> {
         short.push('…');
     }
     Some(short)
-}
-
-/// Send one request the way every request is sent: through the account's
-/// in-flight bound, timed from when it got a slot, logged at `debug`, and
-/// recorded in the ring. `classify` decides which answers are errors.
-///
-/// The JSON reads keep their own loops in each client; this is the path for
-/// the requests that are not JSON reads (a log's two legs, a job action),
-/// which differ in what counts as success and share everything else.
-pub async fn send(
-    transport: &dyn Transport,
-    in_flight: &InFlight,
-    ring: &RequestRing,
-    request: HttpRequest,
-    classify: impl Fn(&HttpResponse) -> Option<ClientError>,
-) -> Result<HttpResponse, ClientError> {
-    let method = request.method;
-    let path = request.path.clone();
-    // Before the clock starts: `ms` is the request, not the queue.
-    let _slot = in_flight.acquire().await;
-    let started = Instant::now();
-    let result = transport.execute(request).await;
-    let ms = started.elapsed().as_millis() as u64;
-    match result {
-        Ok(response) => {
-            let error = classify(&response);
-            tracing::debug!(
-                method,
-                path = %path,
-                status = response.status,
-                bytes = response.body.len(),
-                truncated = response.truncated,
-                ms,
-                "request"
-            );
-            ring.record(RequestLog {
-                method: method.into(),
-                path: path.clone(),
-                status: Some(response.status),
-                ms,
-                ratelimit_remaining: response.ratelimit_remaining,
-                ratelimit_reset: response.ratelimit_reset,
-                retry_after: response.retry_after,
-                error: error.as_ref().map(ToString::to_string),
-                at: chrono::Utc::now(),
-            });
-            match error {
-                Some(e) => Err(e),
-                None => Ok(response),
-            }
-        }
-        Err(e) => {
-            tracing::debug!(method, path = %path, error = %e, ms, "request failed");
-            ring.record(RequestLog {
-                method: method.into(),
-                path,
-                status: None,
-                ms,
-                ratelimit_remaining: None,
-                ratelimit_reset: None,
-                retry_after: e.retry_after(),
-                error: Some(e.to_string()),
-                at: chrono::Utc::now(),
-            });
-            Err(e)
-        }
-    }
 }

@@ -36,8 +36,54 @@ body line with a bracket.
   of defaulting to one.
 - The bug report form asks for the provider and host (GitHub.com, GitHub Enterprise
   Server, GitLab.com or self-managed GitLab) and the Linux architecture.
+- `bridgewatch watch --json` prints each notification as a JSON line,
+  `{"notify": {...}}`, between the snapshots. It used to print plain text there, which
+  broke `| jq`.
+- Usage mistakes exit 64: an unknown `--account` in `fixture record`, and a
+  `fixture scrub` directory holding no recordings (which used to pass `--check`
+  having read nothing).
+- `init --token-command` takes everything after it, hyphenated arguments included, so
+  `--token-command gh auth token --hostname ghe.example.com` works. Put it last.
+- `scripts/record-fixture.sh` scrubs through `bridgewatch fixture scrub`, so the Rust
+  allow-list is the only one (it now needs `cargo`), takes the project id from the
+  recorded pipeline, and refuses a non-numeric pipeline id before any request.
+- A host written with a default port or in upper case (`https://GitLab.com:443`) is one
+  host everywhere: the CLI keyring item is `glab:gitlab.com:token`, and GitHub's next
+  page is followed. Before, each place parsed the URL its own way.
+- The notification ledger is written only when it changed, not on every tick, and the
+  ledger and `eta.json` keep a symlink and the file's permissions when saved.
+- `tauri.conf.json` no longer carries a version; Tauri reads `Cargo.toml`'s.
 
 ### Fixed
+
+- **A pipeline that failed before it had a job read green.** A `.gitlab-ci.yml` that
+  does not parse, or a GitHub run that ended `startup_failure` or `timed_out` with no
+  jobs, showed the outline check and `check` exited 0. It is now a blocking failure,
+  `pipeline failed`.
+- **One quiet watch could repeat a notification on every tick.** Once the ledger held
+  2000 keys, trimming dropped the smallest pipeline id, which next to GitHub's run ids
+  was a quiet GitLab project's newest row: the key just recorded. Trimming now spares
+  every pipeline still on screen.
+- A GitHub secondary rate limit that arrived as a 403 with no `retry-after` read as
+  "not authorised, check the token" and was retried within seconds. It is a rate limit,
+  and waits a minute.
+- **Forget** in Settings left the forgotten token in use until a restart; the account
+  now stops polling. Saving or forgetting a token no longer freezes the tray while a
+  Keychain prompt waits.
+- A sign-in closed or double-clicked while starting went on polling the provider for up
+  to 15 minutes.
+- Opening the popover ran two polls back to back instead of one.
+- An open job log was fetched again, and blanked, on every tick.
+- A token command with a quoted argument (`sh -c "pass show …"`) was split on spaces
+  when Settings saved it.
+- Settings kept saying "valid" after another editor broke the file, said "Not signed
+  in." when the keychain could not be read, and said nothing when **Open file**, the
+  popover's **Pipelines** or **Overwrite** failed.
+- An unreadable config file was reported as "no accounts defined" instead of the read
+  error, and "hot reload is off" now says why.
+- The wizard refused watch ids with a dot or a space that Settings and the core accept,
+  and kept a pasted URL's `?tab=…` or `#…` in the project path.
+- A notification template that fails to render warns once, not on every tick.
 
 - `SECURITY.md` described bridgewatch as sending authenticated `GET` requests and
   nothing else, and as following no redirect. Since 1.0 it also signs in through the

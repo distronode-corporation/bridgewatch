@@ -1,0 +1,34 @@
+name: The .app is universal
+description: The executable inside the staged .dmg's .app carries both x86_64 and arm64.
+
+# Shared by release.yml's `build` and ci.yml's `installers` (macOS legs only). ⛔ A
+# universal build that quietly produced one architecture would still sign, notarise and
+# pass Gatekeeper, and then refuse to start on the other half of the fleet, so the
+# executable inside the .app must be fat. ⛔ The .app INSIDE the staged .dmg is what
+# ships, so that is the one checked: `bundle/macos/` held no .app by this point on the
+# first universal run (2026-09-26), so a check against the loose bundle dir failed a
+# good build.
+runs:
+  using: composite
+  steps:
+    - name: lipo
+      shell: bash
+      run: |
+        set -euo pipefail
+        mnt="$(mktemp -d)"
+        # ⛔ The .dmg carries a software licence agreement (the Apache licence), which
+        # hdiutil asks to be accepted and CANCELS on an empty stdin. `yes` accepts it,
+        # fed by process substitution rather than a pipe so pipefail cannot trip on
+        # yes's SIGPIPE.
+        hdiutil attach -nobrowse -readonly -mountpoint "$mnt" staging/*.dmg < <(yes) >/dev/null
+        trap 'hdiutil detach "$mnt" >/dev/null || true' EXIT
+        app="$(find "$mnt" -maxdepth 1 -name '*.app' | head -1)"
+        [ -n "$app" ] || { echo "::error::no .app inside the .dmg"; exit 1; }
+        exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+        lipo -info "$app/Contents/MacOS/$exe"
+        # -archs prints the architectures alone; -info also echoes the path, which a
+        # word match could hit.
+        archs="$(lipo -archs "$app/Contents/MacOS/$exe")"
+        for arch in x86_64 arm64; do
+          grep -qw "$arch" <<<"$archs" || { echo "::error::$exe is not built for $arch (has: $archs)"; exit 1; }
+        done

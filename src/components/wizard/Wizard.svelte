@@ -12,6 +12,8 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Stepper } from "$lib/components/ui/stepper/index.js";
   import type { DiagnosticView } from "../../lib/types";
+  import { messageOf } from "../../lib/format";
+  import { cliName } from "../../lib/providers";
   import type { OAuthApi, OAuthAvailability, SignedIn } from "../../lib/oauth";
   import AccountStep from "./AccountStep.svelte";
   import ProjectStep from "./ProjectStep.svelte";
@@ -23,7 +25,6 @@
   import {
     diagnosticsOf,
     issuesOf,
-    messageOf,
     needsConfirm,
     type Confirmable,
     type CliTokenDetection,
@@ -42,7 +43,6 @@
     STEPS,
     answersOf,
     baseUrlOf,
-    cliName,
     draftFromAnswers,
     emptyDraft,
     formatCommand,

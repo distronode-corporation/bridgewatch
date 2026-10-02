@@ -89,16 +89,6 @@ export interface OAuthApi {
   onProgress?(handler: (progress: SignInProgress) => void): Promise<() => void>;
 }
 
-/** The instance root an account talks to when its file does not say. */
-export function defaultBaseUrl(provider: Provider): string {
-  return provider === "github" ? "https://api.github.com" : "https://gitlab.com";
-}
-
-/** "GitHub" or "GitLab", for a button. */
-export function providerName(provider: Provider): string {
-  return provider === "github" ? "GitHub" : "GitLab";
-}
-
 /** A rejection's kind, when it is a `SignInFailure`. */
 export function failureOf(error: unknown): SignInFailure {
   if (typeof error === "object" && error !== null && typeof (error as { message?: unknown }).message === "string") {

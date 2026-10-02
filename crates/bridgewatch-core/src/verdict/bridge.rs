@@ -90,11 +90,6 @@ impl BridgeVerdict {
     pub fn is_live(&self) -> bool {
         matches!(self, BridgeVerdict::Running)
     }
-
-    /// True when a human is being waited on.
-    pub fn is_awaiting_gate(&self) -> bool {
-        matches!(self, BridgeVerdict::AwaitingGate { .. })
-    }
 }
 
 /// The class the trigger job itself has, after `[watches.jobs]` and its own

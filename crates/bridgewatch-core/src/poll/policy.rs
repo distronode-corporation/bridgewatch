@@ -206,7 +206,13 @@ impl PollPolicy {
         }
     }
 
-    /// Whether an out-of-band poll should be honoured now.
+    /// Whether an out-of-band poll should be honoured now: always for a reason
+    /// that [`PollNow::bypasses_gate`], otherwise only when the last poll
+    /// [`mark_polled`](Self::mark_polled) recorded is at least
+    /// [`POLL_NOW_MIN_GAP`] old on whichever clock says longer.
+    ///
+    /// This is the gate the shell ships (`AppState::request_poll`), so the
+    /// sleep-awareness proved here is the app's, not a model of it.
     pub fn allows_poll_now(&self, reason: PollNow) -> bool {
         if reason.bypasses_gate() {
             return true;
@@ -217,8 +223,14 @@ impl PollPolicy {
         }
     }
 
-    /// Pretend the last poll happened now. Used by the poller after a tick it
-    /// did not drive itself.
+    /// Record a poll as of now: one that completed, or one that was just
+    /// ASKED FOR and passed on.
+    ///
+    /// ⛔ The shell calls this when it passes on an out-of-band request, not
+    /// only when a tick completes. One popover open raises two requests (the
+    /// window shown, then the webview's focus handler) well inside the first
+    /// tick, and a gate keyed on completed ticks alone let both through, so
+    /// every open cost two back-to-back ticks.
     pub fn mark_polled(&mut self) {
         self.last_poll = Some(Stamp::now());
     }

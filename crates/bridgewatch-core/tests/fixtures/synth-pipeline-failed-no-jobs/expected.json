@@ -1,0 +1,39 @@
+{
+  "cases": [
+    {
+      "icon_state": "failed",
+      "name": "default",
+      "watches": {
+        "hourly": {
+          "icon_state": null,
+          "rows": []
+        },
+        "main-push": {
+          "icon_state": "failed",
+          "rows": [
+            {
+              "bridges": {},
+              "deploy": "absent",
+              "deploy_marker": null,
+              "failures": [
+                "pipeline failed"
+              ],
+              "gates": [],
+              "id": 2859138213,
+              "post_deploy_failures": [],
+              "sibling_failures": [],
+              "state": "failed",
+              "warnings": []
+            }
+          ]
+        },
+        "preflights": {
+          "icon_state": null,
+          "rows": []
+        }
+      }
+    }
+  ],
+  "note": "A pipeline that failed before it had a single job. The rules read only jobs and bridges, so with both lists empty nothing was blocking, nothing was live and nothing was gated, and a broken `.gitlab-ci.yml` fell through every rule to `succeeded_no_deploy`: the outline check, exit 0 and no `blocking_failure`. With nothing else to read, the pipeline's own `failed` is the failure.",
+  "source": "SYNTHESISED from the real recording 04eff5c5-docs-only (pipeline 2859138213): its status set to `failed`, `started_at` to null, `finished_at` to two seconds after creation, and its jobs and bridges emptied. That is the shape GitLab records for a push whose `.gitlab-ci.yml` does not parse: the pipeline is created already failed, with a YAML error and no jobs at all. No other field altered."
+}

@@ -388,10 +388,7 @@ pub fn availability(
     client_id: Option<&str>,
     builtin: &BuiltinClients,
 ) -> Availability {
-    let account = Account {
-        base_url: base_url.trim().to_string(),
-        ..Account::for_provider(provider)
-    };
+    let account = Account::for_instance(provider, base_url);
     let typed = client_id.is_some_and(|c| !c.trim().is_empty());
     let has_builtin = builtin_client_id(&account, builtin).is_some();
     Availability {
@@ -406,6 +403,12 @@ pub fn availability(
 /// Scheme, host and port of an http(s) URL, lowercased, default port
 /// dropped: `https://GitHub.com:443/x` is `https://github.com`. `None` for
 /// anything else, including a URL carrying credentials.
+///
+/// ⛔ The ONE Rust answer to "which instance is this?". The wizard's keyring
+/// lookups ([`host_of`]), GitHub's next-page check and the shell's write guard
+/// and link gate all compare through it; when each had its own parser,
+/// `https://GitLab.com:443/` was four different instances depending on which
+/// feature asked.
 ///
 /// Written out rather than taken from a URL crate because the core has none of
 /// its own, and every URL it compares is one bridgewatch built or one it is
@@ -427,7 +430,8 @@ pub fn origin_of(url: &str) -> Option<String> {
     Some(format!("{scheme}://{authority}"))
 }
 
-/// The host of an http(s) URL, for sentences.
+/// The host (and any non-default port) of an http(s) URL, as [`origin_of`]
+/// normalises it: for sentences and for the CLI keyring service names.
 pub fn host_of(url: &str) -> Option<String> {
     origin_of(url).and_then(|o| o.split_once("://").map(|(_, h)| h.to_string()))
 }

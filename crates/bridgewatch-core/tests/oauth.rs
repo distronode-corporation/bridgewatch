@@ -1158,7 +1158,6 @@ async fn a_refused_refresh_says_sign_in_again_once_and_stops_asking() {
     let client = client_over(&account, t.clone(), session);
 
     let err = client.current_user().await.unwrap_err();
-    assert!(err.is_fatal(), "the poller does not retry it at pace");
     let text = err.to_string();
     assert!(
         text.contains("GitLab sign-in of account \"gl\" has expired or was revoked"),

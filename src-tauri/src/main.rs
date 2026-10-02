@@ -118,8 +118,6 @@ fn main() {
             commands::quit,
             commands::set_own_token,
             commands::clear_own_token,
-            commands::get_launch_at_login,
-            commands::set_launch_at_login,
             jobs::job_log_tail,
             jobs::job_action,
             wizard::wizard_detect_cli_token,
@@ -166,12 +164,15 @@ fn main() {
 
             let handle = app.handle().clone();
             let watch_state = state.clone();
-            if let Some(watcher) = config::watch(&watch_state.config_path.clone(), move || {
+            match config::watch(&watch_state.config_path.clone(), move || {
                 commands::reload_from_disk(&handle, false);
             }) {
-                let _ = WATCHER.set(Mutex::new(watcher));
-            } else {
-                tracing::warn!("could not watch the configuration file; hot reload is off");
+                Ok(watcher) => {
+                    let _ = WATCHER.set(Mutex::new(watcher));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not watch the configuration file; hot reload is off");
+                }
             }
 
             let handle = app.handle().clone();

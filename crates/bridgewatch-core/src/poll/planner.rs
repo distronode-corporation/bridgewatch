@@ -44,11 +44,6 @@ impl Plan {
             .map(PipelinePlan::request_count)
             .sum::<usize>()
     }
-
-    /// True when nothing but the list request is needed.
-    pub fn is_idle(&self) -> bool {
-        self.pipelines.is_empty()
-    }
 }
 
 /// GitLab.com's documented ceiling for authenticated API traffic, per user per

@@ -596,8 +596,9 @@ async fn the_byte_bound_holds_and_an_oversized_body_is_not_stored() {
 /// ⚠️ A 304 to a request that carried no validator should not happen. It must
 /// not panic, and it must not be served as an empty body: there is nothing to
 /// serve, and retrying without a validator is the request that produced it.
-/// It is an `Unexpected` error, which is neither fatal nor a backoff, so the
-/// next tick simply asks again; and it is in the request log with its path.
+/// It is an `Unexpected` error, not one of `should_back_off`'s, so the poller
+/// asks again after its ordinary backoff; and it is in the request log with
+/// its path.
 #[tokio::test]
 async fn an_unsolicited_304_is_an_error_and_not_a_panic() {
     let transport = Scripted::new(vec![Reply::not_modified("\"from-nowhere\"")]);
@@ -608,7 +609,6 @@ async fn an_unsolicited_304_is_an_error_and_not_a_panic() {
         matches!(error, ClientError::Unexpected { status: 304, .. }),
         "{error:?}"
     );
-    assert!(!error.is_fatal());
     assert!(!error.should_back_off());
     let entry = &ring.entries()[0];
     assert!(

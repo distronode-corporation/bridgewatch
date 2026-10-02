@@ -117,24 +117,11 @@ impl SignIns {
     }
 }
 
-/// A fresh, unguessable id for a flow.
-fn new_id() -> String {
-    use std::hash::{BuildHasher, Hasher};
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u128(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-    );
-    format!("{:016x}", hasher.finish())
-}
-
 /// The account a request signs in for: the running configuration's, when it
 /// has one of that name on the same host (so its `api_path` is used), else
 /// one built from the request with the provider's defaults.
 ///
-/// ⛔ `Account::for_provider`, as in `wizard::account_for`: taking
+/// ⛔ `Account::for_instance`, as in `wizard::account_for`: taking
 /// `Account::default()` and setting the provider afterwards leaves GitLab's
 /// `/api/v4` on a GitHub account.
 pub fn account_for(request: &SignInRequest, running: Option<&bridgewatch_core::Config>) -> Account {
@@ -145,12 +132,7 @@ pub fn account_for(request: &SignInRequest, running: Option<&bridgewatch_core::C
     {
         return existing.clone();
     }
-    let mut account = Account::for_provider(request.provider);
-    if request.provider == Provider::Github {
-        account.api_path = bridgewatch_core::wizard::github_api_path_for(&base_url);
-    }
-    account.base_url = base_url;
-    account
+    Account::for_instance(request.provider, &base_url)
 }
 
 fn source_of(request: &SignInRequest) -> OAuthSource {
@@ -216,7 +198,7 @@ pub async fn oauth_start(
         .await
         .map_err(|e| SignInFailure::from(&e))?;
 
-    let id = new_id();
+    let id = crate::guard::fresh_id();
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     let (result_tx, result_rx) = tokio::sync::watch::channel::<Outcome>(None);
     let started = StartedSignIn {
@@ -356,10 +338,7 @@ pub fn oauth_open_install(
     base_url: String,
     app: AppHandle,
 ) -> Result<(), String> {
-    let account = Account {
-        base_url: base_url.trim().to_string(),
-        ..Account::for_provider(provider)
-    };
+    let account = Account::for_instance(provider, &base_url);
     let url = oauth::install_url(&account, &BuiltinClients::shipped())
         .ok_or("this build does not know where to install the app")?;
     let config = app.state::<Arc<AppState>>().config();

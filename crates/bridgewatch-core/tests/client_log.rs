@@ -62,5 +62,8 @@ fn the_request_debug_line_never_carries_the_token() {
             log.contains("status=200") && log.contains("bytes=2"),
             "{log}"
         );
+        // A JSON read goes through the same send as a log's legs, so its line
+        // says whether the body was cut, as theirs always did.
+        assert!(log.contains("truncated=false"), "{log}");
     }
 }

@@ -4,7 +4,20 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { reactive } from "../../lib/__tests__/props.svelte";
 import type { OAuthApi, SignInStatus } from "../../lib/oauth";
 import type { Edit } from "../../lib/types";
+import { formatCommand, parseCommand } from "../wizard/model";
 import TokenField from "./TokenField.svelte";
+
+/** The two credential-store writes, scripted; everything else is the real module. */
+const store = vi.hoisted(() => ({
+  setOwnToken: vi.fn((_account: string, _token: string) => Promise.resolve()),
+  clearOwnToken: vi.fn((_account: string) => Promise.resolve()),
+}));
+
+vi.mock("../../lib/ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/ipc")>()),
+  setOwnToken: store.setOwnToken,
+  clearOwnToken: store.clearOwnToken,
+}));
 
 /**
  * The token source: four mutually exclusive variants of one enum, edited by
@@ -23,6 +36,8 @@ afterEach(() => {
   if (component) void unmount(component);
   component = null;
   host?.remove();
+  store.setOwnToken.mockReset();
+  store.clearOwnToken.mockReset();
 });
 
 function render(account: string, value: unknown) {
@@ -177,6 +192,21 @@ describe("TokenField, the command source", () => {
     expect(host.textContent).toContain("needs a program");
   });
 
+  it("keeps an argument with a space in it whole, as the wizard wrote it", () => {
+    // ⛔ The field showed `argv.join(" ")` and wrote back `split(/\s+/)`, so
+    // "Use this source" on an untouched `sh -c '...'` command broke the quoted
+    // argument into words and the token stopped resolving.
+    const argv = parseCommand("sh -c 'pass show gitlab/pat'");
+    const h = render("work", { command: argv });
+    expect(h.field("pass gitlab").value).toBe(formatCommand(argv));
+    h.apply();
+    expect(h.edits[0]).toContainEqual({
+      op: "set",
+      path: "accounts.work.token.command",
+      value: { array: argv.map((a) => ({ string: a })) },
+    });
+  });
+
   it("says so on the form for as long as the file says it, not just once", () => {
     // The dialog is a moment; a program that runs on every token refresh is a
     // standing fact, and the core warns about it on every load for the same
@@ -216,6 +246,59 @@ describe("TokenField, across an unrelated save", () => {
       host.querySelector<HTMLInputElement>('input[type=radio][value="env"]')!.checked,
     ).toBe(true);
     expect(h.field("BRIDGEWATCH_TOKEN").value).toBe("BRIDGEWATCH_TOKEN_GITLAB");
+  });
+});
+
+describe("TokenField, bridgewatch's own entry", () => {
+  /** A promise and the hand that settles it. */
+  function pending() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  async function settle() {
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+      flushSync();
+    }
+  }
+
+  it("sends one credential-store write for a double click, and nothing else until it lands", async () => {
+    // Two clicks can both land before the first one's re-render, and a
+    // locked keychain then prompts twice. Forget while Save is on its way
+    // would race it.
+    const save = pending();
+    store.setOwnToken.mockImplementation(() => save.promise);
+    const h = render("work", { own: true });
+    h.type("glpat", "glpat-xxxxxxxxxxxxxxxxxxxx");
+    const saveButton = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save token")!;
+    const forgetButton = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Forget")!;
+    saveButton.click();
+    saveButton.click();
+    forgetButton.click();
+    expect(store.setOwnToken).toHaveBeenCalledTimes(1);
+    expect(store.clearOwnToken).not.toHaveBeenCalled();
+    save.resolve();
+    await settle();
+    expect(host.textContent).toContain("Saved to the credential store.");
+    // Once it has landed, the next write goes out.
+    forgetButton.click();
+    await settle();
+    expect(store.clearOwnToken).toHaveBeenCalledTimes(1);
+    expect(store.clearOwnToken).toHaveBeenCalledWith("work");
+    // The shell reloads the poller on Forget, so the account goes quiet.
+    expect(host.querySelector(".message")?.textContent).toBe(
+      "Removed from the credential store. This account stops polling until a token is set again.",
+    );
+  });
+
+  it("shows a structured refusal's message, not [object Object]", async () => {
+    store.clearOwnToken.mockImplementation(() => Promise.reject({ kind: "store", message: "the keychain is locked" }));
+    render("work", { own: true });
+    [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Forget")!.click();
+    await settle();
+    expect(host.querySelector(".message")?.textContent).toBe("the keychain is locked");
   });
 });
 
@@ -443,6 +526,32 @@ describe("TokenField, sign in", () => {
     expect(oauth.signOut).toHaveBeenCalledWith("gh");
     expect(host.textContent).toContain("Signed out.");
     expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("Not signed in");
+  });
+
+  it("says the sign-in could not be read, rather than that there is none", async () => {
+    // ⛔ A locked keychain or a denied prompt made `oauth_status` reject, and
+    // the form said "Not signed in." for an account that is: the user signed
+    // in again, minting a device authorisation for nothing.
+    const oauth = fake(true);
+    oauth.status.mockRejectedValue("the keychain is locked");
+    await renderWith(oauth, { oauth: true });
+    const line = host.querySelector('[data-slot="oauth-status"]')?.textContent ?? "";
+    expect(line).toContain("Could not read the sign-in: the keychain is locked");
+    expect(line).not.toContain("Not signed in");
+  });
+
+  it("signs out once for a double click", async () => {
+    let finish!: () => void;
+    const oauth = fake(true, SIGNED_IN);
+    oauth.signOut.mockImplementation(() => new Promise<void>((r) => (finish = r)));
+    await renderWith(oauth, { oauth: true });
+    const button = host.querySelector<HTMLButtonElement>("button.sign-out")!;
+    button.click();
+    button.click();
+    expect(oauth.signOut).toHaveBeenCalledTimes(1);
+    finish();
+    await settle();
+    expect(host.textContent).toContain("Signed out.");
   });
 
   it("switching away from a sign-in removes it from the file", async () => {

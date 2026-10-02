@@ -60,9 +60,6 @@ pub mod wizard;
 pub use config::Config;
 pub use verdict::{IconState, Snapshot};
 
-/// The crate version, for user agents and `--version`.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 /// The README's examples, compiled so they cannot rot.
 ///
 /// P2 builds the GUI from that file; an example in it that does not compile is

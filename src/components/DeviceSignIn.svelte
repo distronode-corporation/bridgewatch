@@ -10,10 +10,10 @@
    */
   import { onDestroy } from "svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { providerName } from "../lib/providers";
   import {
     failureOf,
     failureSentence,
-    providerName,
     shortUrl,
     type OAuthApi,
     type SignInFailure,
@@ -45,12 +45,24 @@
   let copied = $state(false);
   let polls = $state(0);
   let unsubscribe: (() => void) | null = null;
-  /** Bumped by every start and every stop, so a late answer to an old one is ignored. */
+  /** Bumped by every start, every stop and the destroy, so a late answer to an old one is ignored. */
   let generation = 0;
+  let destroyed = false;
 
   const buttonLabel = $derived(label ?? `Sign in with ${providerName(request().provider)}`);
 
+  /**
+   * Start a flow and wait for it.
+   *
+   * ⛔ A flow is the shell polling the provider until the code is entered or
+   * expires (15 minutes). One this component started and will never show (it
+   * went away, or another start replaced it, before `start` answered) is
+   * cancelled HERE: nothing else knows its id. The synchronous `starting`
+   * check stops a double click, whose two clicks both land before the
+   * re-render that disables the button, from starting two.
+   */
   async function begin() {
+    if (phase === "starting") return;
     const mine = ++generation;
     const req = request();
     phase = "starting";
@@ -59,15 +71,22 @@
     polls = 0;
     try {
       const s = await api.start(req);
-      if (mine !== generation) return;
+      if (mine !== generation) {
+        void api.cancel(s.id).catch(() => {});
+        return;
+      }
       started = s;
       host = s.host;
       phase = "waiting";
       if (api.onProgress && !unsubscribe) {
-        unsubscribe = await api.onProgress((p) => {
+        const off = await api.onProgress((p) => {
           if (started && p.id === started.id && p.state === "waiting") polls = p.polls;
         });
+        // Gone while subscribing: onDestroy had nothing to unsubscribe yet.
+        if (destroyed) off();
+        else unsubscribe = off;
       }
+      if (mine !== generation) return;
       const signed = await api.wait(s.id);
       if (mine !== generation) return;
       phase = "done";
@@ -99,7 +118,11 @@
   }
 
   onDestroy(() => {
+    // First, so a `start` still in flight finds itself stale and cancels.
+    destroyed = true;
+    generation++;
     unsubscribe?.();
+    unsubscribe = null;
     // A window closed mid-sign-in stops polling rather than leaving the shell
     // waiting on a code nobody will enter.
     if (started) void api.cancel(started.id).catch(() => {});

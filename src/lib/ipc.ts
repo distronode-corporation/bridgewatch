@@ -83,9 +83,6 @@ export const quit = () => invoke<void>("quit");
 export const setOwnToken = (account: string, token: string) =>
   invoke<void>("set_own_token", { account, token });
 export const clearOwnToken = (account: string) => invoke<void>("clear_own_token", { account });
-export const getLaunchAtLogin = () => invoke<boolean>("get_launch_at_login");
-export const setLaunchAtLogin = (enabled: boolean) =>
-  invoke<boolean>("set_launch_at_login", { enabled });
 
 /**
  * The end of one job's log. The job is named by its watch and its page URL;

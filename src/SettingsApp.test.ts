@@ -1,5 +1,5 @@
 import { flushSync, mount, unmount } from "svelte";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Edit, Status, Validation } from "./lib/types";
 
@@ -63,6 +63,8 @@ const shell = {
   /** The `config-changed` listener SettingsApp registered, if any. */
   changed: null as null | (() => void),
   wizardOpened: 0,
+  /** What `open_config_file` and `open_wizard` reject with, if anything. */
+  openError: null as string | null,
 };
 
 vi.mock("./lib/ipc", () => ({
@@ -93,10 +95,10 @@ vi.mock("./lib/ipc", () => ({
     shell.moves.push([id, delta]);
     return Promise.resolve(shell.moveResult);
   },
-  openConfigFile: () => Promise.resolve(),
+  openConfigFile: () => (shell.openError ? Promise.reject(shell.openError) : Promise.resolve()),
   openWizard: () => {
     shell.wizardOpened++;
-    return Promise.resolve();
+    return shell.openError ? Promise.reject(shell.openError) : Promise.resolve();
   },
   reloadConfig: () => Promise.resolve(),
   saveConfigText: (text: string, base: string, confirm?: string) => {
@@ -108,6 +110,14 @@ vi.mock("./lib/ipc", () => ({
 
 let host: HTMLDivElement;
 let component: Record<string, unknown> | null = null;
+let SettingsApp: typeof import("./SettingsApp.svelte").default;
+
+// ⚠ Imported once, here, as PopoverApp.test.ts does: a cold import compiles the
+// whole settings tree, and inside the first test that ran into the 5 s test
+// timeout on a loaded machine (seen 2026-10-02 in a full parallel run).
+beforeAll(async () => {
+  ({ default: SettingsApp } = await import("./SettingsApp.svelte"));
+}, 120_000);
 
 beforeEach(() => {
   shell.status = HEALTHY;
@@ -124,6 +134,7 @@ beforeEach(() => {
   shell.saveQueue = [];
   shell.changed = null;
   shell.wizardOpened = 0;
+  shell.openError = null;
 });
 
 afterEach(() => {
@@ -134,7 +145,6 @@ afterEach(() => {
 
 /** Mount, and let the mount-time IPC round trips resolve. */
 async function render() {
-  const { default: SettingsApp } = await import("./SettingsApp.svelte");
   host = document.createElement("div");
   document.body.append(host);
   component = mount(SettingsApp, { target: host, props: {} });
@@ -457,6 +467,33 @@ describe("SettingsApp, the file changing underneath it (H15)", () => {
     expect(host.querySelector<HTMLTextAreaElement>("textarea.editor")!.value).toBe("# mine\n");
   });
 
+  it("drops a save's 'valid' when another writer then breaks the file", async () => {
+    // ⛔ The verdict of this window's own save is kept across the
+    // config-changed event that save causes. It used to be kept across EVERY
+    // later one too, so a file broken in $EDITOR after a good save still read
+    // "valid", with no diagnostics.
+    shell.tab = "text";
+    await render();
+    const editor = host.querySelector<HTMLTextAreaElement>("textarea.editor")!;
+    editor.value = "# mine\n";
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    host.querySelector<HTMLButtonElement>("button.save")!.click();
+    await settle();
+    // The shell announces this window's own write: the verdict stays.
+    shell.text = "# mine\n";
+    shell.changed!();
+    await settle();
+    expect(host.querySelector(".verdict")?.textContent?.trim()).toBe("valid");
+    // $EDITOR breaks the file; the shell reloads, fails, and says so.
+    shell.text = "# mine\nbroken = \n";
+    shell.status = BROKEN;
+    shell.changed!();
+    await settle();
+    expect(host.querySelector(".verdict")?.textContent?.trim()).not.toBe("valid");
+    expect(host.textContent).toContain("expected `=` after a key");
+  });
+
   it("asks the shell's question for a text save too, and resends with the id (Lo13)", async () => {
     shell.tab = "text";
     shell.saveQueue = [
@@ -482,6 +519,28 @@ describe("SettingsApp, the setup wizard", () => {
     expect(shell.wizardOpened).toBe(1);
     // Opening the wizard writes nothing by itself.
     expect(shell.edits).toEqual([]);
+  });
+});
+
+describe("SettingsApp, opening things the shell may fail to open", () => {
+  it("says why 'Open file' did nothing", async () => {
+    // A desktop with no `.toml` handler (common on Linux), or no file yet:
+    // the rejection used to be dropped, so the click did nothing at all.
+    shell.openError = "no application is registered for .toml files";
+    const h = await render();
+    await h.clickText("Open file");
+    expect(host.querySelector(".notice")?.textContent).toContain(
+      "Could not open the file: no application is registered for .toml files",
+    );
+  });
+
+  it("says why the wizard did not open", async () => {
+    shell.openError = "the wizard window could not be created";
+    const h = await render();
+    await h.clickText("Setup wizard…");
+    expect(host.querySelector(".notice")?.textContent).toContain(
+      "Could not open the setup wizard: the wizard window could not be created",
+    );
   });
 });
 

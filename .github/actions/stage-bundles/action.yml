@@ -1,0 +1,40 @@
+name: Stage this leg's bundles
+description: Copy the leg's .dmg/.deb/.rpm/.AppImage into staging/ and assert the count.
+
+# Shared by release.yml's `build` and ci.yml's `installers`, which build the same
+# matrix. ⛔ tauri-action EXITS 0 WHEN IT FINDS NO ARTIFACTS AND HAS NOT BEEN ASKED TO
+# UPLOAD ANY ("The action was not configured to upload artifacts, therefore this is
+# not handled as an error"), so the build step cannot be trusted to have produced
+# anything. This is where that is caught, per leg, by count.
+inputs:
+  bundle-dir:
+    description: The leg's bundle directory, e.g. target/release/bundle.
+    required: true
+  expected:
+    description: How many bundles the leg must produce.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Stage and count
+      shell: bash
+      # Through `env:`, never interpolated into the script (zizmor's template-injection).
+      env:
+        BUNDLE_DIR: ${{ inputs.bundle-dir }}
+        EXPECTED: ${{ inputs.expected }}
+      run: |
+        set -euo pipefail
+        mkdir -p staging
+        # -type f skips bundle/macos/*.app, which is a directory, and the name
+        # filter is the whole of what this project ships.
+        find "$BUNDLE_DIR" -maxdepth 2 -type f \
+          \( -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
+          -exec cp {} staging/ \;
+        found="$(find staging -type f | wc -l | tr -d ' ')"
+        if [ "$found" -ne "$EXPECTED" ]; then
+          echo "::error::expected $EXPECTED bundle(s) under $BUNDLE_DIR, staged $found"
+          find "$BUNDLE_DIR" -maxdepth 3 || true
+          exit 1
+        fi
+        ls -l staging

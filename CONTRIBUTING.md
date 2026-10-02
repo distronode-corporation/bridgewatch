@@ -66,7 +66,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo check -p bridgewatch-app --locked
-python3 scripts/check-version.py            # Cargo.toml, package.json, tauri.conf.json agree
+python3 scripts/check-version.py            # Cargo.toml and package.json agree; tauri.conf.json sets no version
 python3 src-tauri/icons/generate.py --check # tray icons match the generator
 npm run typecheck                           # tsc
 npm run check                               # svelte-check
@@ -112,19 +112,21 @@ scripts/record-fixture.sh <pipeline-id> <name> <project> [--list]
 ```
 
 The CLI walks the pipeline through bridgewatch's own client and your config's account and
-token. The script does the same walk with `glab api`, so an authenticated glab is all it
-needs. Both write the parent pipeline, its jobs, its bridges and every child pipeline's
-jobs.
+token. The script does the same walk with `glab api`, so an authenticated glab (plus `jq`
+and cargo) is all it needs; `<project>` may be an id or a URL-encoded path. Both write the
+parent pipeline, its jobs, its bridges and every child pipeline's jobs.
 
 **Recordings are filtered through an allow-list before they are written.** A raw GitLab
 payload carries committers' names and email addresses, commit messages, the pushing
 user's profile and runner details; fixtures are committed to a public repository, so
 only the fields the engine reads are kept (`PIPELINE_KEYS` and `JOB_KEYS` in
-`crates/bridgewatch-core/src/client/fixture.rs`, mirrored by the `jq` filter in the
-script). The `fixtures_contain_no_personal_data` test checks every committed fixture
-against the Rust list, and another test checks the script names every key.
-`bridgewatch fixture scrub <dir>...` re-applies the list in place; `--check` reports
-without writing.
+`crates/bridgewatch-core/src/client/fixture.rs`, the one copy of the list). The script
+writes the raw responses to a temp directory, runs `bridgewatch fixture scrub` on it
+(through `cargo run`), and only then moves the files into place. The
+`fixtures_contain_no_personal_data` test checks every committed fixture against the list.
+`bridgewatch fixture scrub <dir>...` re-applies it in place and `--check` reports without
+writing; each `<dir>` is one fixture directory (its subdirectories are not read), and a
+directory with no recorded files in it is refused with exit 64.
 
 **GitHub has no recorder yet.** `bridgewatch fixture record` refuses a github account
 (exit 64), because a run payload carries author and committer names and email addresses,

@@ -47,9 +47,11 @@
 //!
 //! ⛔ **A 403 is not necessarily an auth failure.** An exhausted primary rate
 //! limit arrives as a 403 (or a 429) carrying `x-ratelimit-remaining: 0`, and a
-//! secondary limit as a 403 carrying `retry-after`. Classifying either as
-//! [`ClientError::Auth`] parks the account as a bad token, which is why
-//! [`status_error`] here is not the GitLab one.
+//! secondary limit as a 403 carrying `retry-after`, or carrying only a message
+//! that says so. Classifying any of them as [`ClientError::Auth`] tells the
+//! user to fix a token that works and backs off from the live interval rather
+//! than waiting the limit out, which is why [`status_error`] here is not the
+//! GitLab one.
 //!
 //! Every response is decoded into [`super::wire::github`] and converted into
 //! [`crate::model`] before it leaves this module.
@@ -71,7 +73,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 
-use super::http::{HttpRequest, HttpResponse, RequestLog, RequestRing, Transport};
+use super::http::{Conn, HttpRequest, HttpResponse, RequestRing, Transport};
 use super::log::{self as joblog, JobActionOutcome, LOG_TAIL_LINES, LogTail};
 use super::wire::github as wire;
 use super::{CiClient, ClientError, ListQuery};
@@ -106,18 +108,11 @@ pub const JOB_PAGES: u32 = 10;
 ///
 /// Cloning is cheap: the transport, the ring and the token are shared.
 ///
-/// ⛔ `Debug` is hand-written for the same reason [`super::GitLabClient`]'s is:
-/// the derived one printed the rendered credential header.
+/// ⛔ `Debug` is hand-written only because `clock` has none; the credential's
+/// redaction is `http::Conn`'s, which this prints.
 #[derive(Clone)]
 pub struct GitHubClient {
-    base_url: String,
-    api_path: String,
-    header_name: &'static str,
-    header_value: String,
-    transport: Arc<dyn Transport>,
-    ring: RequestRing,
-    /// At most [`super::MAX_IN_FLIGHT`] of this client's requests at a time.
-    in_flight: super::InFlight,
+    conn: Conn,
     /// The commit groups the last grouped list presented. See [`group::Memo`].
     groups: Arc<Mutex<group::Memo>>,
     /// What `expect` measures a group's window against. The wall clock, except
@@ -130,13 +125,9 @@ pub struct GitHubClient {
 impl std::fmt::Debug for GitHubClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GitHubClient")
-            .field("base_url", &self.base_url)
-            .field("api_path", &self.api_path)
-            .field("header_name", &self.header_name)
-            .field("header_value", &super::http::REDACTED)
-            .field("transport", &self.transport)
+            .field("conn", &self.conn)
             .field("actions", &self.actions)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -149,13 +140,7 @@ impl GitHubClient {
         ring: RequestRing,
     ) -> Self {
         Self {
-            base_url: account.base_url.trim_end_matches('/').to_string(),
-            api_path: account.api_path.clone(),
-            header_name: account.header.header_name(),
-            header_value: account.header.header_value(token.expose()),
-            transport,
-            ring,
-            in_flight: super::InFlight::new(),
+            conn: Conn::new(account, token, transport, ring),
             groups: Arc::new(Mutex::new(group::Memo::default())),
             clock: Arc::new(Utc::now),
             actions: account.actions,
@@ -174,7 +159,7 @@ impl GitHubClient {
 
     /// The request ring this client records into.
     pub fn ring(&self) -> &RequestRing {
-        &self.ring
+        self.conn.ring()
     }
 
     /// `GET /repos/{owner}/{repo}/actions/runs`, or that workflow's own runs
@@ -368,6 +353,7 @@ impl GitHubClient {
         let mut request = self.request("GET", &path);
         request.tail_bytes = Some(max_bytes);
         let first = self
+            .conn
             .send(request, |r| match r.status {
                 s if joblog::is_redirect(s) => None,
                 s => status_error(s, &path, r),
@@ -378,7 +364,8 @@ impl GitHubClient {
             // and the transport keeps only the tail either way.
             let next = joblog::follow(first.location.as_deref(), max_bytes, false, &path)?;
             let next_path = next.path.clone();
-            self.send(next, |r| joblog::blob_error(r.status, &next_path))
+            self.conn
+                .send(next, |r| joblog::blob_error(r.status, &next_path))
                 .await?
         } else {
             first
@@ -408,44 +395,24 @@ impl GitHubClient {
             repo_segment(project)?
         );
         let request = self.request("POST", &path);
-        self.send(request, |r| write_status_error(r, &path)).await?;
+        self.conn
+            .send(request, |r| write_status_error(r, &path))
+            .await?;
         Ok(JobActionOutcome::default())
     }
 
     /// A request to this account's API, credential and GitHub's two pinned
-    /// headers included. What [`Self::get_json`] builds, for the requests that
-    /// are not JSON reads.
+    /// headers included. Every request this client sends to the API starts
+    /// here.
     fn request(&self, method: &'static str, path: &str) -> HttpRequest {
-        HttpRequest {
-            method,
-            url: format!("{}{}{}", self.base_url, self.api_path, path),
-            path: path.to_string(),
-            headers: vec![
-                (self.header_name.to_string(), self.header_value.clone()),
-                ("Accept".to_string(), ACCEPT.to_string()),
-                ("X-GitHub-Api-Version".to_string(), API_VERSION.to_string()),
-            ],
-            body: None,
-            anonymous: false,
-            tail_bytes: None,
-        }
-    }
-
-    /// One request through [`joblog::send`], with this client's transport,
-    /// bound and ring.
-    async fn send(
-        &self,
-        request: HttpRequest,
-        classify: impl Fn(&HttpResponse) -> Option<ClientError>,
-    ) -> Result<HttpResponse, ClientError> {
-        joblog::send(
-            self.transport.as_ref(),
-            &self.in_flight,
-            &self.ring,
-            request,
-            classify,
-        )
-        .await
+        let mut request = self.conn.request(method, path);
+        request
+            .headers
+            .push(("Accept".to_string(), ACCEPT.to_string()));
+        request
+            .headers
+            .push(("X-GitHub-Api-Version".to_string(), API_VERSION.to_string()));
+        request
     }
 
     /// The jobs and bridges of a commit-group row: one bridge per run in the
@@ -518,7 +485,7 @@ impl GitHubClient {
     fn workflow_url(&self, repo: &str, file: &str) -> String {
         format!(
             "{}/{repo}/actions/workflows/{}",
-            group::web_origin(&self.base_url),
+            group::web_origin(self.conn.base_url()),
             urlencoding::encode(file)
         )
     }
@@ -527,7 +494,7 @@ impl GitHubClient {
     fn commit_url(&self, repo: &str, sha: &str) -> String {
         format!(
             "{}/{repo}/commit/{}/checks",
-            group::web_origin(&self.base_url),
+            group::web_origin(self.conn.base_url()),
             urlencoding::encode(sha)
         )
     }
@@ -572,25 +539,31 @@ impl GitHubClient {
     /// Refusing loudly rather than stopping quietly is deliberate too, because
     /// the failure a silent stop produces is a short job list that looks like a
     /// short run.
+    ///
+    /// Both sides go through [`crate::oauth::origin_of`], so a `Link` whose host
+    /// differs from `base_url` only by case or by a spelled-out default port is
+    /// the same origin, and a URL carrying userinfo has none and is refused.
     fn local_path(&self, url: &str) -> Result<String, ClientError> {
-        let base_origin = origin_of(&self.base_url);
-        let next_origin = origin_of(url);
-        if next_origin.is_empty() || next_origin != base_origin {
+        let base_origin = crate::oauth::origin_of(self.conn.base_url());
+        let next_origin = crate::oauth::origin_of(url);
+        if next_origin.is_none() || next_origin != base_origin {
             return Err(ClientError::Unsupported {
                 message: format!(
-                    "the next page of results is at {next_origin:?}, which is not this \
-                     account's {base_origin:?}. bridgewatch will not send the token to a \
-                     host a response header named; check base_url and any proxy in front \
-                     of the API"
+                    "the next page of results is at {:?}, which is not this account's {:?}. \
+                     bridgewatch will not send the token to a host a response header named; \
+                     check base_url and any proxy in front of the API",
+                    next_origin.as_deref().unwrap_or("an origin it cannot use"),
+                    base_origin.as_deref().unwrap_or("base_url"),
                 ),
             });
         }
-        let rest = &url[next_origin.len()..];
+        let rest = after_origin(url);
         // The prefix is stripped when it is there so the request log reads like
         // every other line. GitHub rewrites the path itself (to
         // `/repositories/<id>/...`), which is left exactly as it came.
-        Ok(match rest.strip_prefix(self.api_path.as_str()) {
-            Some(p) if !self.api_path.is_empty() => p.to_string(),
+        let api_path = self.conn.api_path();
+        Ok(match rest.strip_prefix(api_path) {
+            Some(p) if !api_path.is_empty() => p.to_string(),
             _ => rest.to_string(),
         })
     }
@@ -600,84 +573,19 @@ impl GitHubClient {
         &self,
         path: &str,
     ) -> Result<(T, ResponseMeta), ClientError> {
-        let url = format!("{}{}{}", self.base_url, self.api_path, path);
-        let request = HttpRequest {
-            method: "GET",
-            url,
-            path: path.to_string(),
-            headers: vec![
-                (self.header_name.to_string(), self.header_value.clone()),
-                ("Accept".to_string(), ACCEPT.to_string()),
-                ("X-GitHub-Api-Version".to_string(), API_VERSION.to_string()),
-            ],
-            body: None,
-            anonymous: false,
-            tail_bytes: None,
-        };
-
-        // Before the clock starts: `ms` is the request, not the queue.
-        let _slot = self.in_flight.acquire().await;
-        let started = std::time::Instant::now();
-        let result = self.transport.execute(request).await;
-        let ms = started.elapsed().as_millis() as u64;
-
-        match result {
-            Ok(response) => {
-                let error = status_error(response.status, path, &response);
-                // Safe to log whole for the same reason GitLab's path is: the
-                // credential travels only in a header, and every path here is a
-                // fixed template with its variables percent-encoded.
-                tracing::debug!(
-                    method = "GET",
-                    path,
-                    status = response.status,
-                    bytes = response.body.len(),
-                    ms,
-                    "request"
-                );
-                self.ring.record(RequestLog {
-                    method: "GET".into(),
-                    path: path.to_string(),
-                    status: Some(response.status),
-                    ms,
-                    ratelimit_remaining: response.ratelimit_remaining,
-                    ratelimit_reset: response.ratelimit_reset,
-                    retry_after: response.retry_after,
-                    error: error.as_ref().map(ToString::to_string),
-                    at: chrono::Utc::now(),
-                });
-                if let Some(e) = error {
-                    return Err(e);
-                }
-                let value =
-                    serde_json::from_str::<T>(&response.body).map_err(|e| ClientError::Decode {
-                        path: path.to_string(),
-                        message: e.to_string(),
-                    })?;
-                Ok((
-                    value,
-                    ResponseMeta {
-                        link: response.link,
-                        oauth_scopes: response.oauth_scopes,
-                    },
-                ))
-            }
-            Err(e) => {
-                tracing::debug!(method = "GET", path, error = %e, ms, "request failed");
-                self.ring.record(RequestLog {
-                    method: "GET".into(),
-                    path: path.to_string(),
-                    status: None,
-                    ms,
-                    ratelimit_remaining: None,
-                    ratelimit_reset: None,
-                    retry_after: e.retry_after(),
-                    error: Some(e.to_string()),
-                    at: chrono::Utc::now(),
-                });
-                Err(e)
-            }
-        }
+        let (value, response) = self
+            .conn
+            .get_json::<T>(self.request("GET", path), |r| {
+                status_error(r.status, path, r)
+            })
+            .await?;
+        Ok((
+            value,
+            ResponseMeta {
+                link: response.link,
+                oauth_scopes: response.oauth_scopes,
+            },
+        ))
     }
 }
 
@@ -777,14 +685,13 @@ pub fn next_link(header: &str) -> Option<String> {
     None
 }
 
-/// `scheme://host[:port]` of a URL, or an empty string when it has no scheme.
-fn origin_of(url: &str) -> &str {
-    let Some(after_scheme) = url.find("://").map(|i| i + 3) else {
-        return "";
-    };
+/// What follows `scheme://authority` in a URL: its path, query and fragment.
+/// Empty when there is nothing after the authority.
+fn after_origin(url: &str) -> &str {
+    let after_scheme = url.find("://").map_or(0, |i| i + 3);
     match url[after_scheme..].find(['/', '?', '#']) {
-        Some(end) => &url[..after_scheme + end],
-        None => url,
+        Some(end) => &url[after_scheme + end..],
+        None => "",
     }
 }
 
@@ -929,13 +836,23 @@ impl CiClient for GitHubClient {
 /// "not authorised". GitHub signals an exhausted PRIMARY limit with a **403 or
 /// a 429 carrying `x-ratelimit-remaining: 0`**, and a SECONDARY limit with a
 /// **403 carrying `retry-after`**. Reading either as [`ClientError::Auth`]
-/// makes it fatal: the account parks itself with "check the token's scope" and
-/// stays parked through a limit that would have cleared on its own.
+/// tells the user "check the token's scope" about a token that works, and the
+/// poller then backs off from its live interval, as it does on any error, rather
+/// than waiting until the limit says it will clear.
 ///
-/// So the signals decide, and only a 401, or a 403 with neither signal, which
-/// is the shape of a token that genuinely cannot see the repository, is auth.
+/// ⛔ **A secondary limit can also arrive with NEITHER header**, a 403 whose
+/// body says "You have exceeded a secondary rate limit" and a budget nowhere
+/// near spent. GitHub documents that case as "wait at least one minute", so a
+/// 403 or 429 whose message mentions a rate limit is one, and when no header
+/// says how long, it waits [`SECONDARY_LIMIT_WAIT_SECS`]. Read as auth it told
+/// the user to fix a working token and asked again on the live interval,
+/// which is what extends a secondary limit.
 ///
-/// ⚠️ The signals are read from the RESPONSE HEADERS and never from
+/// So the signals decide, and only a 401, or a 403 with no signal at all,
+/// which is the shape of a token that genuinely cannot see the repository, is
+/// auth.
+///
+/// ⚠️ The header signals are read from the RESPONSE and never from
 /// `GET /rate_limit`, which was measured reporting `used: 0` while a response
 /// on the same token seconds earlier reported 138, on two different
 /// fine-grained tokens on two machines. The headers are authoritative; the
@@ -943,16 +860,24 @@ impl CiClient for GitHubClient {
 pub fn status_error(status: u16, path: &str, response: &HttpResponse) -> Option<ClientError> {
     let exhausted = response.ratelimit_remaining == Some(0);
     let told_to_wait = response.retry_after.is_some();
+    let says_rate_limit = matches!(status, 403 | 429)
+        && joblog::sanitize_message(&response.body)
+            .is_some_and(|m| m.to_ascii_lowercase().contains("rate limit"));
+    let limited = || ClientError::RateLimited {
+        // An exhausted primary limit has its reset; anything else the body
+        // alone called a limit waits GitHub's documented minute.
+        retry_after: response
+            .retry_after
+            .or((says_rate_limit && !exhausted).then_some(SECONDARY_LIMIT_WAIT_SECS)),
+        reset: response.ratelimit_reset,
+    };
     match status {
         200..=299 => None,
         401 => Some(ClientError::Auth {
             status,
             provider: Provider::Github,
         }),
-        403 if exhausted || told_to_wait => Some(ClientError::RateLimited {
-            retry_after: response.retry_after,
-            reset: response.ratelimit_reset,
-        }),
+        403 if exhausted || told_to_wait || says_rate_limit => Some(limited()),
         403 => Some(ClientError::Auth {
             status,
             provider: Provider::Github,
@@ -971,10 +896,7 @@ pub fn status_error(status: u16, path: &str, response: &HttpResponse) -> Option<
             status,
             path: path.to_string(),
         }),
-        429 => Some(ClientError::RateLimited {
-            retry_after: response.retry_after,
-            reset: response.ratelimit_reset,
-        }),
+        429 => Some(limited()),
         500..=599 => Some(ClientError::Server { status }),
         other => Some(ClientError::Unexpected {
             status: other,
@@ -982,6 +904,12 @@ pub fn status_error(status: u16, path: &str, response: &HttpResponse) -> Option<
         }),
     }
 }
+
+/// How long a secondary limit that named no wait is waited out, in seconds.
+///
+/// GitHub's own words for a secondary limit with no `retry-after` and a budget
+/// left: "wait for at least one minute before retrying".
+pub const SECONDARY_LIMIT_WAIT_SECS: u64 = 60;
 
 /// [`status_error`] for a WRITE.
 ///

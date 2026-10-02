@@ -1,0 +1,39 @@
+name: Install Tauri system dependencies
+description: The apt packages the Tauri shell needs to build and bundle on Linux.
+
+# One list for every Linux job that builds the shell: ci.yml's `rust`, `msrv` and
+# `installers`, and release.yml's `build`. Linux runners only; the callers gate it on
+# `runner.os == 'Linux'`.
+#
+# Tauri on Linux links against GTK/WebKitGTK, so `cargo clippy` and `cargo check`
+# fail at BUILD time without these, not just at bundle time.
+#   libwebkit2gtk-4.1 / libjavascriptcoregtk-4.1 / libsoup-3.0  the webview (Tauri 2 line)
+#   libgtk-3                                                    windowing
+#   libayatana-appindicator3                                    the tray icon
+#   librsvg2                                                    SVG icon rendering
+#   patchelf, xdg-utils                                         AppImage bundling
+#
+# ⛔ libssl-dev is deliberately NOT here. reqwest is built with
+# `default-features = false` and the `rustls` feature: `openssl-sys` and `native-tls`
+# appear nowhere in Cargo.lock (which is platform-independent, so that settles every
+# target).
+#
+# ⛔ No `uses:` in here, on purpose: dependabot.yml's github-actions entry scans only
+# `.github/workflows`, so a pinned action inside a local composite action would never
+# be bumped.
+runs:
+  using: composite
+  steps:
+    - name: apt-get install
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libwebkit2gtk-4.1-dev \
+          libjavascriptcoregtk-4.1-dev \
+          libsoup-3.0-dev \
+          libgtk-3-dev \
+          libayatana-appindicator3-dev \
+          librsvg2-dev \
+          patchelf \
+          xdg-utils

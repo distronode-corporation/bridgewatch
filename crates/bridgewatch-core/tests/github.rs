@@ -81,6 +81,11 @@ impl Reply {
         self.ratelimit_reset = Some(at);
         self
     }
+
+    fn body(mut self, body: &str) -> Self {
+        self.body = body.to_string();
+        self
+    }
 }
 
 /// A transport that replays scripted responses in order and records what it was
@@ -255,7 +260,6 @@ fn the_two_github_fields_fold_onto_one_status() {
     // fast poll interval is held open all weekend.
     assert!(Status::from_github("completed", Some("action_required")).is_gate());
     assert!(!Status::from_github("completed", Some("action_required")).is_failed());
-    assert!(Status::from_github("waiting", None).is_settled());
     assert!(!Status::from_github("waiting", None).is_live());
 
     // And the open vocabulary: a value GitHub adds tomorrow keeps its name and
@@ -499,7 +503,6 @@ async fn a_numeric_project_is_refused_without_a_request() {
         error.to_string().contains("owner/repo"),
         "the message says what to write: {error}"
     );
-    assert!(error.is_fatal(), "no amount of retrying invents the URL");
     assert!(
         transport.paths().is_empty(),
         "and nothing was sent anywhere"
@@ -673,14 +676,61 @@ async fn a_next_page_on_another_host_is_refused_rather_than_followed() {
     );
 }
 
+/// The origin check compares instances, not spellings: a `Link` whose host
+/// differs from `base_url` only by case or by a spelled-out default port is
+/// this account's own next page. It used to compare the raw text, so GitHub
+/// pagination refused its own header.
+#[tokio::test]
+async fn a_next_page_on_the_same_origin_spelled_differently_is_followed() {
+    for link in [
+        "<https://API.GitHub.com/repositories/1/jobs?page=2>; rel=\"next\"",
+        "<https://api.github.com:443/repositories/1/jobs?page=2>; rel=\"next\"",
+    ] {
+        let page = |id, name| {
+            jobs_body(&[job_body(
+                id,
+                name,
+                "success",
+                "2026-09-18T09:00:30Z",
+                "2026-09-18T09:01:00Z",
+            )])
+        };
+        let transport = Scripted::new(vec![
+            Reply::ok(&page(9001, "build")).link(link),
+            Reply::ok(&page(9002, "publish")),
+        ]);
+        let (client, _) = github_client(transport.clone());
+        let jobs = client.pipeline_jobs(&repo(), 4001).await.unwrap();
+        assert_eq!(jobs.len(), 2, "{link}");
+        assert_eq!(
+            transport.paths()[1],
+            "/repositories/1/jobs?page=2",
+            "{link}"
+        );
+    }
+
+    // ...while one carrying userinfo still has no origin, and is refused.
+    let transport =
+        Scripted::new(vec![Reply::ok(&jobs_body(&[])).link(
+            "<https://user@api.github.com/repositories/1/jobs?page=2>; rel=\"next\"",
+        )]);
+    let (client, _) = github_client(transport.clone());
+    let error = client.pipeline_jobs(&repo(), 4001).await.unwrap_err();
+    assert!(
+        matches!(error, ClientError::Unsupported { .. }),
+        "{error:?}"
+    );
+    assert_eq!(transport.paths().len(), 1);
+}
+
 // ---------------------------------------------------------------------------
 // What a 403 means
 // ---------------------------------------------------------------------------
 
 /// ⛔ The inherited defect, fixed: an exhausted GitHub rate limit arrives as a
-/// **403**, and GitLab's classifier reads a 403 as `Auth`, which `is_fatal()`.
-/// That parks the account with "check the token's scope" through a limit that
-/// would have cleared on its own. The signals decide instead.
+/// **403**, and GitLab's classifier reads a 403 as `Auth`. That tells the user
+/// "check the token's scope" about a token that works, and backs off from the
+/// live interval instead of waiting the limit out. The signals decide instead.
 #[tokio::test]
 async fn a_403_is_a_rate_limit_when_the_headers_say_so_and_auth_when_they_do_not() {
     // The primary hourly budget: 403, remaining 0, and a reset rather than a
@@ -693,7 +743,6 @@ async fn a_403_is_a_rate_limit_when_the_headers_say_so_and_auth_when_they_do_not
     };
     assert_eq!(*retry_after, None, "GitHub sends none for a primary limit");
     assert_eq!(*reset, Some(1_789_672_980));
-    assert!(!error.is_fatal(), "a limit clears on its own");
     assert!(error.should_back_off());
 
     // A secondary limit: 403 with a retry-after and a budget that is not spent.
@@ -720,7 +769,7 @@ async fn a_403_is_a_rate_limit_when_the_headers_say_so_and_auth_when_they_do_not
     ));
 
     // ⚠️ And a 403 with NEITHER signal really is a permission problem: a token
-    // that cannot see this repository. It stays fatal.
+    // that cannot see this repository. It stays auth.
     let transport = Scripted::new(vec![Reply::status(403).remaining(4_900)]);
     let (client, _) = github_client(transport);
     let error = client.get_pipeline(&repo(), 4001).await.unwrap_err();
@@ -728,7 +777,6 @@ async fn a_403_is_a_rate_limit_when_the_headers_say_so_and_auth_when_they_do_not
         matches!(error, ClientError::Auth { status: 403, .. }),
         "{error:?}"
     );
-    assert!(error.is_fatal());
 
     // As does a 401, whatever the headers say.
     let transport = Scripted::new(vec![Reply::status(401).remaining(0)]);
@@ -736,6 +784,94 @@ async fn a_403_is_a_rate_limit_when_the_headers_say_so_and_auth_when_they_do_not
     let error = client.get_pipeline(&repo(), 4001).await.unwrap_err();
     assert!(
         matches!(error, ClientError::Auth { status: 401, .. }),
+        "{error:?}"
+    );
+}
+
+/// ⛔ GitHub's documented secondary limit can arrive with NO header at all: a
+/// 403 with a budget nowhere near spent and only the body saying so. Read as
+/// `Auth` it told the user to fix a working token and asked again on the live
+/// interval, which extends the limit. GitHub says to wait at least a minute.
+#[tokio::test]
+async fn a_403_whose_body_names_a_secondary_limit_waits_a_minute_with_no_header() {
+    const SECONDARY: &str = r#"{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api#about-secondary-rate-limits","status":"403"}"#;
+
+    let transport = Scripted::new(vec![Reply::status(403).remaining(4_812).body(SECONDARY)]);
+    let (client, ring) = github_client(transport);
+    let error = client.get_pipeline(&repo(), 4001).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ClientError::RateLimited {
+                retry_after: Some(60),
+                ..
+            }
+        ),
+        "a secondary limit with no header waits GitHub's minute: {error:?}"
+    );
+    assert_eq!(
+        ring.entries()[0].error.as_deref(),
+        Some("rate limited; retry after 60s")
+    );
+
+    // A 429 with the same body and no header is the same minute.
+    let transport = Scripted::new(vec![Reply::status(429).remaining(4_812).body(SECONDARY)]);
+    let (client, _) = github_client(transport);
+    assert!(matches!(
+        client.get_pipeline(&repo(), 4001).await.unwrap_err(),
+        ClientError::RateLimited {
+            retry_after: Some(60),
+            ..
+        }
+    ));
+
+    // A header still wins over the default.
+    let transport = Scripted::new(vec![
+        Reply::status(403)
+            .remaining(4_812)
+            .retry_after(90)
+            .body(SECONDARY),
+    ]);
+    let (client, _) = github_client(transport);
+    assert!(matches!(
+        client.get_pipeline(&repo(), 4001).await.unwrap_err(),
+        ClientError::RateLimited {
+            retry_after: Some(90),
+            ..
+        }
+    ));
+
+    // An exhausted primary limit whose body says "rate limit" keeps waiting for
+    // its reset, not a minute: the reset is the authoritative time.
+    let transport = Scripted::new(vec![
+        Reply::status(403)
+            .remaining(0)
+            .reset(1_789_672_980)
+            .body(r#"{"message":"API rate limit exceeded for user ID 1."}"#),
+    ]);
+    let (client, _) = github_client(transport);
+    let error = client.get_pipeline(&repo(), 4001).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ClientError::RateLimited {
+                retry_after: None,
+                reset: Some(1_789_672_980)
+            }
+        ),
+        "{error:?}"
+    );
+
+    // ⚠️ And a permission 403 whose message says nothing about a limit stays
+    // auth, exactly as before.
+    let transport =
+        Scripted::new(vec![Reply::status(403).remaining(4_812).body(
+            r#"{"message":"Resource not accessible by personal access token"}"#,
+        )]);
+    let (client, _) = github_client(transport);
+    let error = client.get_pipeline(&repo(), 4001).await.unwrap_err();
+    assert!(
+        matches!(error, ClientError::Auth { status: 403, .. }),
         "{error:?}"
     );
 }

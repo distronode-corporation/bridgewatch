@@ -2,7 +2,7 @@ name: Dependabot auto-merge
 
 # Dependabot opens grouped minor+patch pull requests every week against three
 # ecosystems (github-actions, cargo, npm), and each one otherwise waits on a human to
-# press the button after the same eight checks have already gone green. This workflow
+# press the button after the same nine checks have already gone green. This workflow
 # turns on GitHub's own auto-merge for the routine half of that: a Dependabot PR whose
 # highest semver change is patch or minor is queued to squash-merge itself once the
 # `main` ruleset is satisfied. A major is deliberately left for a person, which is the
@@ -13,10 +13,13 @@ name: Dependabot auto-merge
 # after publication.
 #
 # Auto-merge is a queue, not a merge: GitHub completes it only when the `main` ruleset
-# is satisfied. Read from the ruleset itself, that is 8 required status checks green
-# (rust on both platforms, msrv, repo, frontend, cargo-deny, zizmor, dependency-review)
-# and `required_approving_review_count: 0`, so nothing waits on a review that will never
-# come on a solo repository. The ruleset also sets `required_linear_history` and allows
+# is satisfied. Read from the ruleset itself, that is 9 required status checks green
+# (rust on all three legs: ubuntu-22.04, ubuntu-22.04-arm and macos-latest; then msrv,
+# repo, frontend, cargo-deny, zizmor, dependency-review) and
+# `required_approving_review_count: 0`, so nothing waits on a review that will never
+# come on a solo repository. ⛔ A rust leg added to ci.yml's matrix is not required until
+# it is also added to the ruleset, and until then a Dependabot PR red only on that leg
+# can still merge itself. The ruleset also sets `required_linear_history` and allows
 # only squash and rebase, which is why `--squash` is the method rather than a merge
 # commit.
 #
@@ -112,7 +115,7 @@ jobs:
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
 
       # `--auto` queues the merge rather than performing it, so this step finishing is
-      # not a merge: the eight required checks still have to pass first, and a red one
+      # not a merge: the nine required checks still have to pass first, and a red one
       # leaves the PR sitting open exactly as it does today.
       #
       # ⚠️ `PR_URL` goes through `env:` rather than being interpolated into the `run:`

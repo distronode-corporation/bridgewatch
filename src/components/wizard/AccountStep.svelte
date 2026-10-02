@@ -8,8 +8,9 @@
   import FieldMessage from "./FieldMessage.svelte";
   import DeviceSignIn from "../DeviceSignIn.svelte";
   import type { CliTokenDetection, Identity, Provider } from "./api";
-  import { baseUrlOf, cliName, type Draft, type StepErrors, type TokenMode } from "./model";
-  import { providerName, type OAuthApi, type OAuthAvailability, type SignedIn } from "../../lib/oauth";
+  import { baseUrlOf, type Draft, type StepErrors, type TokenMode } from "./model";
+  import type { OAuthApi, OAuthAvailability, SignedIn } from "../../lib/oauth";
+  import { cliName, providerName } from "../../lib/providers";
 
   interface Props {
     draft: Draft;

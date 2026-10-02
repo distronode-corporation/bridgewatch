@@ -274,13 +274,6 @@ pub struct Identity {
     pub warnings: Vec<String>,
 }
 
-impl Identity {
-    /// Whether the project picker can list projects for this token.
-    pub fn can_list_projects(&self) -> bool {
-        !matches!(self.token, TokenKind::Project { .. })
-    }
-}
-
 /// Classify a token from its user and whether `/personal_access_tokens/self`
 /// recognised it.
 ///
@@ -470,24 +463,18 @@ impl KeyringProbe for SystemKeyringProbe {
     }
 }
 
-/// The host part of an instance URL, lowercased and including any port.
-/// `None` for anything that is not an `http(s)` URL with a host.
-pub fn host_of(base_url: &str) -> Option<String> {
-    let trimmed = base_url.trim();
-    let rest = trimmed
-        .strip_prefix("https://")
-        .or_else(|| trimmed.strip_prefix("http://"))?;
-    let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
-    (!host.is_empty()).then_some(host)
-}
-
 /// The keyring service `glab` stores an instance's token under:
 /// `glab:<host>:token`, with an empty user. `None` for a URL with no host.
+///
+/// ⚠️ The host is [`crate::oauth::host_of`]'s, the one Rust spelling of an
+/// instance's identity: lowercased, a default port dropped. So
+/// `https://GitLab.com:443/` finds the same item as `https://gitlab.com`; it
+/// used to ask for `glab:gitlab.com:443:token`, which glab never writes.
 ///
 /// Verified for gitlab.com (see [`crate::token`]); the self-managed form
 /// follows glab's own naming and has not been checked against a live install.
 pub fn glab_service_for(base_url: &str) -> Option<String> {
-    host_of(base_url).map(|host| format!("glab:{host}:token"))
+    crate::oauth::host_of(base_url).map(|host| format!("glab:{host}:token"))
 }
 
 /// The keyring service `gh` stores a host's token under: `gh:<host>`, from
@@ -501,7 +488,7 @@ pub fn glab_service_for(base_url: &str) -> Option<String> {
 /// prefix rather than a subdomain. Stripping one leading `api.` covers all
 /// three, and getting it wrong is a lookup that quietly finds nothing.
 pub fn gh_service_for(base_url: &str) -> Option<String> {
-    let host = host_of(base_url)?;
+    let host = crate::oauth::host_of(base_url)?;
     let host = host.strip_prefix("api.").unwrap_or(&host);
     (!host.is_empty()).then(|| format!("gh:{host}"))
 }
@@ -511,15 +498,6 @@ pub fn cli_service_for(provider: Provider, base_url: &str) -> Option<String> {
     match provider {
         Provider::Gitlab => glab_service_for(base_url),
         Provider::Github => gh_service_for(base_url),
-    }
-}
-
-/// The name of the CLI whose keyring item [`detect_cli_token`] looks for, for a
-/// sentence on a form.
-pub fn cli_name_for(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Gitlab => "glab",
-        Provider::Github => "gh",
     }
 }
 
@@ -698,7 +676,7 @@ pub async fn list_projects(
 ///
 /// GitLab accepts a numeric id, `group/project`, and a pasted project URL
 /// (`https://gitlab.com/group/project`, with or without `.git`, a trailing
-/// slash or a `/-/...` suffix).
+/// slash, a `/-/...` suffix, a query or a fragment).
 ///
 /// ⛔ **GitHub accepts `owner/repo` and no numeric id.** There is no
 /// `/repos/<id>` endpoint, so an id could only ever 404, and
@@ -736,6 +714,10 @@ pub fn parse_project_input(input: &str, provider: Provider) -> Result<ProjectRef
     let mut was_url = false;
     for scheme in ["https://", "http://"] {
         if let Some(rest) = path.strip_prefix(scheme) {
+            // A URL from the address bar carries a query or a fragment (GitHub
+            // adds `?tab=readme-ov-file`); neither is part of the path, and kept
+            // they made a project that 404s.
+            let rest = rest.split(['?', '#']).next().unwrap_or("");
             path = rest.split_once('/').map(|(_, p)| p).unwrap_or("");
             was_url = true;
         }
@@ -1135,7 +1117,7 @@ impl Default for WizardAnswers {
         Self {
             provider: Provider::Gitlab,
             account: "gitlab".into(),
-            base_url: "https://gitlab.com".into(),
+            base_url: Provider::Gitlab.default_base_url(),
             token: TokenSource::Own(true),
             project: None,
             watch_id: "main".into(),
@@ -1161,7 +1143,7 @@ impl Default for WizardAnswers {
 /// `api.github.com` is `api`, which names nothing. One leading `api.` is
 /// stripped first, exactly as [`gh_service_for`] does and for the same reason.
 pub fn suggest_account_name(provider: Provider, base_url: &str) -> String {
-    let host = host_of(base_url).unwrap_or_default();
+    let host = crate::oauth::host_of(base_url).unwrap_or_default();
     let host = match provider {
         Provider::Gitlab => host.as_str(),
         Provider::Github => host.strip_prefix("api.").unwrap_or(&host),
@@ -1267,7 +1249,9 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
         );
     }
     let url = answers.base_url.trim();
-    if !(url.starts_with("https://") || url.starts_with("http://")) || host_of(url).is_none() {
+    if !(url.starts_with("https://") || url.starts_with("http://"))
+        || crate::oauth::host_of(url).is_none()
+    {
         issue(
             Account,
             "base_url",
@@ -1319,10 +1303,7 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
             String::new()
         }
         TokenSource::Oauth(source) => {
-            let account = crate::config::Account {
-                base_url: answers.base_url.trim().to_string(),
-                ..crate::config::Account::for_provider(answers.provider)
-            };
+            let account = crate::config::Account::for_instance(answers.provider, &answers.base_url);
             if let Err(e) = crate::oauth::client_id_for(
                 &account,
                 source,
@@ -1573,7 +1554,7 @@ pub const GITHUB_IDLE_SECS: u64 = 120;
 /// prefix at all, exactly as github.com does. The leading `api.` is therefore
 /// the discriminator, and it is the only one available offline.
 pub fn github_api_path_for(base_url: &str) -> String {
-    match host_of(base_url) {
+    match crate::oauth::host_of(base_url) {
         Some(host) if host.starts_with("api.") => String::new(),
         _ => "/api/v3".to_string(),
     }

@@ -8,6 +8,7 @@
  * `StepIssue`s are shown on the page they name.
  */
 
+import { PROVIDER_DEFAULTS, cliName, defaultBaseUrl, providerName } from "../../lib/providers";
 import type { NotifyAnswers, ProjectRef, Provider, TokenSource, WizardAnswers, WizardStepId } from "./api";
 
 export type StepId = WizardStepId | "review";
@@ -42,11 +43,6 @@ export function stepTitle(step: StepInfo, provider: Provider): string {
  */
 export type TokenMode = "oauth" | "cli" | "paste" | "env" | "command";
 
-/** The CLI whose keyring item the `cli` token mode reads. */
-export function cliName(provider: Provider): "glab" | "gh" {
-  return provider === "github" ? "gh" : "glab";
-}
-
 /**
  * The keyring service the provider's CLI keeps a host's token under, with an
  * EMPTY user in both cases: `glab:<host>:token` (`glab_service_for` in the
@@ -55,9 +51,13 @@ export function cliName(provider: Provider): "glab" | "gh" {
  * loses one leading `api.`, because gh names the WEB host. Null without a host.
  */
 export function cliKeyringService(provider: Provider, baseUrl: string): string | null {
-  const match = /^https?:\/\/([^/]+)/i.exec(baseUrl.trim());
-  if (!match) return null;
-  const host = match[1].toLowerCase();
+  // ⛔ Normalised as the core's `oauth::host_of` does (lowercase, no default
+  // port, no userinfo), so Settings names the same keyring item the shell reads.
+  const match = /^(https?):\/\/([^/?#]+)/i.exec(baseUrl.trim());
+  if (!match || match[2].includes("@")) return null;
+  const defaultPort = match[1].toLowerCase() === "https" ? ":443" : ":80";
+  const authority = match[2].toLowerCase();
+  const host = authority.endsWith(defaultPort) ? authority.slice(0, -defaultPort.length) : authority;
   if (provider === "github") {
     const web = host.startsWith("api.") ? host.slice(4) : host;
     return web ? `gh:${web}` : null;
@@ -65,19 +65,9 @@ export function cliKeyringService(provider: Provider, baseUrl: string): string |
   return `glab:${host}:token`;
 }
 
-/** `Provider::default_base_url` in the core: the hosted service's API root. */
-export function hostedBaseUrl(provider: Provider): string {
-  return provider === "github" ? "https://api.github.com" : "https://gitlab.com";
-}
-
-/**
- * The live poll interval a new watch starts at: `GITHUB_LIVE_SECS` in the
- * core for GitHub, the schema default for GitLab. GitHub's budget is 5,000
- * requests an HOUR per token, about 24 times less than gitlab.com's, so a
- * GitHub watch starts at 30 s rather than 5.
- */
-export function defaultLiveSecs(provider: Provider): number {
-  return provider === "github" ? 30 : 5;
+/** The live poll interval a new watch starts at (see `PROVIDER_DEFAULTS`). */
+function defaultLiveSecs(provider: Provider): number {
+  return PROVIDER_DEFAULTS[provider].live_secs;
 }
 
 /** The GitLab pipeline sources the watch step offers. The core knows more; these are the useful ones. */
@@ -347,7 +337,7 @@ export function draftFromAnswers(answers: Partial<WizardAnswers>): Draft {
 
 export function baseUrlOf(draft: Draft): string {
   return draft.instance === "hosted"
-    ? hostedBaseUrl(draft.provider)
+    ? defaultBaseUrl(draft.provider)
     : draft.selfManagedUrl.trim().replace(/\/+$/, "");
 }
 
@@ -504,7 +494,7 @@ export function validateStep(step: StepId, draft: Draft): StepErrors {
       switch (draft.tokenMode) {
         case "oauth":
           if (!draft.oauthLogin && !draft.oauthStored)
-            errors.token = `Sign in with ${github ? "GitHub" : "GitLab"} first, or choose another source.`;
+            errors.token = `Sign in with ${providerName(draft.provider)} first, or choose another source.`;
           break;
         case "cli":
           if (!draft.cliSource)
@@ -542,9 +532,11 @@ export function validateStep(step: StepId, draft: Draft): StepErrors {
       break;
     case "watch": {
       if (!draft.refName.trim()) errors.ref_name = "Name the branch to watch.";
+      // ⛔ Non-empty is the whole rule, as in the core and in Settings. A
+      // stricter pattern here refused ids (`api.main`, `deploy prod`) that the
+      // core loads, so re-running the wizard on such a file was stuck on this
+      // step. `__fixtures__/validation-cases.json` holds both sides to it.
       if (!draft.watchId.trim()) errors.watch_id = "The watch needs an id.";
-      else if (!/^[A-Za-z0-9_-]+$/.test(draft.watchId.trim()))
-        errors.watch_id = "A watch id is letters, digits, - and _.";
       if (draft.sources.length === 0)
         errors.sources =
           draft.provider === "github" ? "Choose at least one event." : "Choose at least one pipeline source.";

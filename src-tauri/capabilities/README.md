@@ -22,7 +22,8 @@ Rust, where the ACL does not apply:
   internet.
 - `notification`: a tick's notifications are delivered by the poller.
 - `positioner`: the popover is placed by `windows::show_popover`.
-- `autostart`: the tray checkbox and the `set_launch_at_login` command.
+- `autostart`: the tray checkbox and a settings edit of `ui.launch_at_login`,
+  both through `commands::set_login_item`.
 
 Granting any of these to JavaScript would hand them to whatever script runs in
 the webview for no feature that needs them. Add one only together with the

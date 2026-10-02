@@ -9,6 +9,7 @@
  */
 
 import { jobAction, jobLogTail } from "../../lib/ipc";
+import { createSingleFlight } from "../../lib/single-flight";
 import type { JobAction, JobActionOutcome, JobView, LogTail, Provider } from "../../lib/types";
 
 /** What a job list needs to offer the tools, passed down from the watch. */
@@ -84,45 +85,7 @@ export function confirmText(action: JobAction, job: JobView, context: string): s
 }
 
 /**
- * One request per key at a time.
- *
- * ⛔ A ref, not the button's `disabled`: two clicks can both land before
- * Svelte has re-rendered the first one's disabled state, and both would then
- * go out. The set is checked and filled synchronously, before the first
- * `await`, so the second click finds the key taken and sends nothing.
- */
-export function createSingleFlight() {
-  const busy = new Set<string>();
-  return {
-    /** Run `task` unless `key` is already running; `null` when it was. */
-    run<T>(key: string, task: () => Promise<T>): Promise<T> | null {
-      if (busy.has(key)) return null;
-      busy.add(key);
-      let pending: Promise<T>;
-      try {
-        pending = task();
-      } catch (error) {
-        busy.delete(key);
-        return Promise.reject(error);
-      }
-      return pending.finally(() => busy.delete(key));
-    },
-    /** Whether `key` is running now. */
-    busy(key: string): boolean {
-      return busy.has(key);
-    },
-  };
-}
-
-/**
  * The one guard every job's tools share, keyed by watch, job URL and action.
  * Module-wide so a row re-rendered by a snapshot mid-request is still guarded.
  */
 export const WRITES = createSingleFlight();
-
-/** The text an error from the shell carries. */
-export function errorText(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  return String(error);
-}

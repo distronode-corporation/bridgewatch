@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JobAction, JobActionOutcome, LogTail } from "../../lib/types";
 import { PARENT_JOBS, job } from "./__fixtures__/pipeline";
+import { reactive } from "../../lib/__tests__/props.svelte";
 import JobList from "./JobList.svelte";
-import { canPlay, canRetry, canShowLog, confirmText, createSingleFlight, projectOf, type JobTools } from "./tools";
+import { createSingleFlight } from "../../lib/single-flight";
+import { canPlay, canRetry, canShowLog, confirmText, projectOf, type JobTools } from "./tools";
 
 /**
  * The job view's log, retry and play tools, against a scripted shell. Nothing
@@ -145,6 +147,31 @@ describe("the log", () => {
     click($('[data-job-id="101"] [data-slot="job-log-toggle"]'));
     await settle();
     expect($('[data-slot="job-log-empty"]')).not.toBeNull();
+  });
+});
+
+describe("the log across snapshots", () => {
+  it("an open log is fetched once, not again on every identical tick", async () => {
+    // ⛔ Every snapshot hands the list new `jobs` and `tools` objects with the
+    // same contents. The fetch effect tracked those objects, so an open log
+    // was fetched again on every 5 s tick, blanking to "Loading" each time.
+    const t = tools();
+    t.api!.logTail = vi.fn(() => Promise.resolve({ lines: ["x"], truncated: false }));
+    const props = reactive({ jobs: PARENT_JOBS, onOpen: vi.fn(), now: 0, tools: t });
+    component = mount(JobList, { target: host, props });
+    flushSync();
+    click($('[data-job-id="101"] [data-slot="job-log-toggle"]'));
+    await settle();
+    expect(t.api!.logTail).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 3; i++) {
+      props.jobs = structuredClone(PARENT_JOBS);
+      props.tools = { ...t };
+      flushSync();
+      expect($('[data-slot="job-log-loading"]'), "the log blanked on a tick").toBeNull();
+      await settle();
+    }
+    expect(t.api!.logTail).toHaveBeenCalledTimes(1);
+    expect($('[data-slot="job-log-text"]')?.textContent).toBe("x");
   });
 });
 

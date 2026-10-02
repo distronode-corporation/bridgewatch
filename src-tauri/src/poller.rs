@@ -150,7 +150,7 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             let tick = poller.tick().await;
 
             set_icon(&app, tick.snapshot.icon_state);
-            state.record_tick(tick.snapshot.clone(), tick.next_interval);
+            state.record_tick(tick.next_interval);
             publish(&app, &state, tick.snapshot);
             deliver(&app, &tick.notifications);
 

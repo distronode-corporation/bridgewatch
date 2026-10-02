@@ -155,7 +155,6 @@ async fn a_personal_token_names_its_user_and_has_nothing_to_warn_about() {
     assert_eq!(id.scopes, ["read_api"]);
     assert_eq!(id.expires_at.as_deref(), Some("2027-01-01"));
     assert!(id.warnings.is_empty(), "{:?}", id.warnings);
-    assert!(id.can_list_projects());
     assert_eq!(t.seen(), ["/user", "/personal_access_tokens/self"]);
 }
 
@@ -182,7 +181,6 @@ async fn a_project_token_is_named_and_warned_about() {
             project_id: Some(12345678)
         }
     );
-    assert!(!id.can_list_projects());
     assert_eq!(id.warnings.len(), 1, "{:?}", id.warnings);
     assert!(
         id.warnings[0].contains("project access token") && id.warnings[0].contains("12345678"),
@@ -1566,6 +1564,42 @@ fn what_people_type_for_a_github_repository_is_understood() {
     }
 }
 
+/// A URL copied from the address bar carries a query or a fragment (GitHub adds
+/// `?tab=readme-ov-file`), and neither is part of the project's path: kept, it
+/// became a project that 404s.
+#[test]
+fn a_pasted_url_loses_its_query_and_fragment() {
+    for (provider, url) in [
+        (
+            Provider::Github,
+            "https://github.com/acme-corp/monorepo?tab=readme-ov-file",
+        ),
+        (
+            Provider::Github,
+            "https://github.com/acme-corp/monorepo#readme",
+        ),
+        (
+            Provider::Github,
+            "https://github.com/acme-corp/monorepo.git?x=1",
+        ),
+        (
+            Provider::Gitlab,
+            "https://gitlab.com/acme-corp/monorepo?tab=readme",
+        ),
+        (Provider::Gitlab, "https://gitlab.com/acme-corp/monorepo#ci"),
+        (
+            Provider::Gitlab,
+            "https://gitlab.com/acme-corp/monorepo/?a=b#c",
+        ),
+    ] {
+        assert_eq!(
+            wizard::parse_project_input(url, provider).unwrap(),
+            ProjectRef::Path("acme-corp/monorepo".into()),
+            "{url}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_github_repository_resolves_to_the_path_it_must_be_written_as() {
     let t = Routed::new().route(
@@ -1716,6 +1750,42 @@ fn gh_s_keyring_item_is_looked_for_at_the_web_host_with_an_empty_user() {
         wizard::detect_cli_token(&probe, Provider::Github, "https://ghe.acme.com"),
         CliTokenDetection::NotFound { .. }
     ));
+}
+
+/// ⛔ One instance, one identity: `https://GitLab.com:443/` is gitlab.com to
+/// the keyring lookup, to the sign-in's origin check and to the account-name
+/// suggestion alike. The wizard had its own host parser that kept the port, so
+/// this spelling asked for `glab:gitlab.com:443:token`, an item glab never
+/// writes. A non-default port is part of the identity and stays.
+#[test]
+fn an_instance_spelled_with_case_and_a_default_port_is_one_identity() {
+    let spelled = "https://GitLab.com:443/";
+    assert_eq!(
+        bridgewatch_core::oauth::origin_of(spelled).as_deref(),
+        Some("https://gitlab.com")
+    );
+    assert_eq!(
+        bridgewatch_core::oauth::host_of(spelled).as_deref(),
+        Some("gitlab.com")
+    );
+    assert_eq!(
+        wizard::glab_service_for(spelled).as_deref(),
+        Some("glab:gitlab.com:token")
+    );
+    assert_eq!(
+        wizard::gh_service_for("https://API.GitHub.com:443").as_deref(),
+        Some("gh:github.com")
+    );
+    assert_eq!(
+        wizard::suggest_account_name(Provider::Gitlab, spelled),
+        "gitlab"
+    );
+    assert_eq!(
+        wizard::glab_service_for("https://gitlab.example.com:8443").as_deref(),
+        Some("glab:gitlab.example.com:8443:token")
+    );
+    // Credentials in the URL give it no identity at all.
+    assert_eq!(wizard::glab_service_for("https://me@gitlab.com"), None);
 }
 
 /// On GitHub the deploy step is one level deep by construction: there are no

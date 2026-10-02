@@ -24,10 +24,10 @@
   import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
-  import { bridgeTone, bridgeWord } from "../../lib/format";
+  import { TONE_DOT, TONE_TEXT, bridgeTone, bridgeWord } from "../../lib/format";
   import type { BridgeView, JobsMode, Provider } from "../../lib/types";
   import JobList from "./JobList.svelte";
-  import { TONE_DOT, TONE_TEXT, filterJobs, type ExpansionStore } from "./jobs";
+  import { filterJobs, type ExpansionStore } from "./jobs";
   import type { JobTools } from "./tools";
 
   interface Props {

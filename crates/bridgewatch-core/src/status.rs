@@ -110,14 +110,6 @@ impl Status {
         matches!(self, Status::Failed)
     }
 
-    /// True when no further progress is expected without human action.
-    ///
-    /// A gate counts as settled: the poller must not spin at the fast interval
-    /// because somebody has not pressed a button.
-    pub fn is_settled(&self) -> bool {
-        !self.is_live()
-    }
-
     /// GitHub Actions splits one status into two fields, and neither is
     /// enumerated on a workflow run.
     ///
@@ -133,8 +125,8 @@ impl Status {
     /// contributor produces a run that is `completed` with `conclusion:
     /// action_required` and **zero jobs**, waiting for a maintainer to press
     /// Approve. Reading "conclusion is not success, so it failed" turns every such
-    /// run red; it is [`Status::Manual`], which `is_settled()` already treats as
-    /// "no further progress without a human" and which the icon rules draw as
+    /// run red; it is [`Status::Manual`], which [`Status::is_live`] already answers
+    /// false for ("no further progress without a human") and which the icon rules draw as
     /// `parked_gate`.
     ///
     /// ⛔ **`waiting` is the mirror image.** A run held by a deployment protection

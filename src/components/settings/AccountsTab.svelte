@@ -1,6 +1,7 @@
 <script lang="ts">
   import { concretePath, entriesFor, providerOf } from "../../lib/settings/registry";
   import { providerSwitch } from "../../lib/settings/provider-switch";
+  import { defaultBaseUrl } from "../../lib/providers";
   import { getAt } from "../../lib/settings/values";
   import type { Edit, Provider } from "../../lib/types";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -76,7 +77,7 @@
       {
         op: "set",
         path: concretePath("accounts.*.base_url", name),
-        value: { string: "https://gitlab.com" },
+        value: { string: defaultBaseUrl("gitlab") },
       },
       token,
     ]);

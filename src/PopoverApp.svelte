@@ -16,6 +16,7 @@
     refreshNow,
     resizePopover,
   } from "./lib/ipc";
+  import { messageOf } from "./lib/format";
   import type { Snapshot, Status } from "./lib/types";
 
   // An empty snapshot rather than a null one: the popover renders the same way
@@ -30,6 +31,8 @@
   });
   let status = $state<Status | null>(null);
   let now = $state(Date.now());
+  /** Why the last thing asked of the shell did not happen; cleared when the popover hides. */
+  let notice = $state("");
 
   onMount(() => {
     if (!inTauri()) return;
@@ -84,7 +87,10 @@
       wake();
       void popoverOpened();
     };
-    const onBlur = () => (visible = false);
+    const onBlur = () => {
+      visible = false;
+      notice = "";
+    };
     const onVisibility = () => {
       if (document.visibilityState === "hidden") visible = false;
       else wake();
@@ -148,9 +154,26 @@
     if (inTauri()) requestAnimationFrame(measureAndResize);
   });
 
+  /**
+   * Ask the shell to open something; say why when it could not.
+   *
+   * ⛔ These were `void` calls, so a rejection (no handler for the URL, a
+   * window that could not be created) left a button that did nothing at all.
+   */
+  function openOrSay(what: string, request: () => Promise<void>) {
+    notice = "";
+    request().catch((error) => (notice = `Could not open ${what}: ${messageOf(error)}`));
+  }
+
   async function openPipelines() {
     const url = await pipelinesUrl();
-    if (url) await openExternal(url);
+    // The shell answers nothing rather than a URL that would 404: a project
+    // addressed by numeric id has no page it can name before a pipeline shows.
+    if (!url) {
+      notice = "No pipelines page to open yet.";
+      return;
+    }
+    await openExternal(url);
   }
 </script>
 
@@ -158,10 +181,11 @@
   {snapshot}
   {status}
   {now}
+  {notice}
   onrefresh={() => void refreshNow()}
   onsettings={() => void openSettings()}
-  onpipelines={() => void openPipelines()}
+  onpipelines={() => openOrSay("the pipelines page", openPipelines)}
   onquit={() => void quit()}
   onfix={() => void openSettings("text")}
-  onsetup={() => void openWizard()}
+  onsetup={() => openOrSay("the setup wizard", openWizard)}
 />

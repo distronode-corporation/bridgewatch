@@ -314,8 +314,6 @@ fn a_verdict_script_cannot_call_eval() {
 /// fixture, so:
 ///
 /// - a recording made before the allow-list existed fails until it is scrubbed;
-/// - `scripts/record-fixture.sh`'s `jq` filter drifting from the Rust one fails,
-///   which is the only thing keeping those two implementations in step;
 /// - a field GitLab adds next month is *dropped* by default rather than
 ///   published, and if it is genuinely wanted the failure names it.
 #[test]
@@ -420,8 +418,8 @@ fn fixtures_contain_no_personal_data() {
             if !allowed.contains(&key) {
                 self.problems.push(format!(
                     "{file}{at}: {key:?} is not in the {kind:?} allow-list. If the engine now \
-                     needs it, add it to {name} in client::fixture AND to the jq filter in \
-                     scripts/record-fixture.sh; otherwise run: bridgewatch fixture scrub <dir>"
+                     needs it, add it to {name} in client::fixture; otherwise run: \
+                     bridgewatch fixture scrub <dir>"
                 ));
                 return false;
             }
@@ -478,33 +476,6 @@ fn fixtures_contain_no_personal_data() {
         "{} fixture problem(s) across {files} files:\n  {}",
         sweep.problems.len(),
         sweep.problems.join("\n  ")
-    );
-}
-
-/// The two places the allow-list is written down must not drift apart silently.
-///
-/// This cannot compare the `jq` filter to the Rust constants directly — one is a
-/// shell string — so it asserts the thing that matters: every key name in either
-/// allow-list appears verbatim in `scripts/record-fixture.sh`.
-#[test]
-fn the_jq_filter_names_every_allow_listed_key() {
-    use bridgewatch_core::client::fixture::{JOB_KEYS, PIPELINE_KEYS};
-
-    let script = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/record-fixture.sh"),
-    )
-    .expect("scripts/record-fixture.sh exists");
-
-    for key in PIPELINE_KEYS.iter().chain(JOB_KEYS.iter()) {
-        assert!(
-            script.contains(&format!("\"{key}\"")),
-            "scripts/record-fixture.sh's jq filter does not mention {key:?}; the shell recorder \
-             and client::fixture have drifted apart"
-        );
-    }
-    assert!(
-        script.contains("MUST AGREE WITH `PIPELINE_KEYS` AND `JOB_KEYS`"),
-        "the script must say out loud that it duplicates the Rust allow-list"
     );
 }
 
@@ -1269,6 +1240,93 @@ fn a_shipped_marker_beside_an_unborn_marker_lane_reads_running_not_deployed() {
     assert_eq!(view.deploy, "in_progress");
     assert_eq!(view.state.as_str(), "running");
     assert!(view.failures.is_empty(), "{:?}", view.failures);
+}
+
+// ---------------------------------------------------------------------------
+// A pipeline that failed before it had a job
+// ---------------------------------------------------------------------------
+
+/// ⛔ A GitHub run whose workflow file does not parse is `completed` with
+/// `conclusion: startup_failure` and **zero jobs**; one that hit the run limit
+/// before a job reported can be `timed_out` with none either. Both fold onto
+/// `failed`. The rules read jobs and bridges, both lists were empty, and the
+/// run fell through every rule to `succeeded_no_deploy`: a broken workflow
+/// drew the outline check and `check` exited 0. The GitLab half of this is the
+/// `synth-pipeline-failed-no-jobs` fixture.
+///
+/// ⚠️ **Hand-built**, as `tests/github.rs` is: GitHub has no recorder yet
+/// (CONTRIBUTING § Fixtures), so the run carries only the keys the engine reads,
+/// with invented values.
+#[test]
+fn a_github_run_that_failed_before_any_job_is_failed_not_green() {
+    use bridgewatch_core::status::Status;
+    use bridgewatch_core::verdict::{DetailSource, evaluate_pipeline};
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/github.toml");
+    let raw = std::fs::read_to_string(&path).expect("examples/github.toml exists");
+    let loaded =
+        bridgewatch_core::config::parse_str(&raw, &path).expect("the GitHub example loads");
+    let watch = &loaded.config.watches[0];
+    let rules = bridgewatch_core::config::WatchRules::compile(watch).unwrap();
+
+    for conclusion in ["startup_failure", "timed_out"] {
+        let mut detail = detail_from(serde_json::json!({
+            "pipeline": { "id": 4001, "ref": "main", "status": "completed", "sha": "0f1e2d3c" },
+            "jobs": [],
+            "bridges": [],
+            "child_jobs": {}
+        }));
+        detail.pipeline.status = Status::from_github("completed", Some(conclusion));
+
+        let (view, _) = evaluate_pipeline(&detail, DetailSource::Fetched, watch, &rules, None);
+        assert_eq!(view.state.as_str(), "failed", "{conclusion}");
+        assert_eq!(view.failures, ["pipeline failed"], "{conclusion}");
+        assert!(!view.live, "{conclusion}");
+
+        // Unread is not the same thing: with no detail the answer stays
+        // `unknown`, because an empty list then means "not looked at".
+        let (unread, _) =
+            evaluate_pipeline(&detail, DetailSource::Unavailable, watch, &rules, None);
+        assert_eq!(unread.state.as_str(), "unknown", "{conclusion}");
+    }
+
+    // The gate shape is untouched: `action_required` with no jobs is parked.
+    let mut parked = detail_from(serde_json::json!({
+        "pipeline": { "id": 4002, "ref": "main", "status": "completed", "sha": "0f1e2d3c" },
+        "jobs": [],
+        "bridges": [],
+            "child_jobs": {}
+    }));
+    parked.pipeline.status = Status::from_github("completed", Some("action_required"));
+    let (view, _) = evaluate_pipeline(&parked, DetailSource::Fetched, watch, &rules, None);
+    assert_eq!(view.state.as_str(), "parked_gate");
+    assert!(view.failures.is_empty());
+}
+
+/// The guard reads the RAW job list, not the classified one. A pipeline whose
+/// jobs all exist but are all hidden by `ignore` has been read, and the user
+/// said what those jobs are worth; the pipeline's own `failed` must not
+/// overrule that.
+#[test]
+fn a_failed_pipeline_whose_jobs_are_all_ignored_is_not_red_by_its_own_status() {
+    use bridgewatch_core::verdict::{DetailSource, evaluate_pipeline};
+
+    let config = support::config_with(&[Edit::Set {
+        path: "watches.0.jobs.lint".into(),
+        value: bridgewatch_core::config::edit::EditValue::String("ignore".into()),
+    }]);
+    let watch = &config.watches[0];
+    let rules = bridgewatch_core::config::WatchRules::compile(watch).unwrap();
+    let detail = detail_from(serde_json::json!({
+        "pipeline": { "id": 1, "ref": "main", "status": "failed", "sha": "abc" },
+        "jobs": [job_json(10, "lint", "failed", Some("2026-09-17T07:00:00Z"))],
+        "bridges": [],
+            "child_jobs": {}
+    }));
+
+    let (view, _) = evaluate_pipeline(&detail, DetailSource::Fetched, watch, &rules, None);
+    assert!(view.failures.is_empty(), "{:?}", view.failures);
+    assert_ne!(view.state.as_str(), "failed");
 }
 
 // ---------------------------------------------------------------------------

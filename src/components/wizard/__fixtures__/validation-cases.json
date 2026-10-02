@@ -1,0 +1,102 @@
+{
+  "about": "One table, read by two tests: src/components/wizard/core-parity.test.ts feeds each case to the wizard's validateStep, and crates/bridgewatch-core/tests/wizard_validation_parity.rs feeds the same case to core validate_answers. Each case is `base` with `answers` laid over it (key by key), and `fields` is every field the named step must refuse, sorted; an empty list means the step accepts it. Only rules both sides enforce belong here.",
+  "base": {
+    "provider": "gitlab",
+    "account": "gitlab",
+    "base_url": "https://gitlab.com",
+    "token": { "env": "BRIDGEWATCH_TOKEN_GITLAB" },
+    "project": 12345678,
+    "watch_id": "main",
+    "ref_name": "main",
+    "sources": ["push"],
+    "deploy_markers": [],
+    "live_secs": 5
+  },
+  "cases": [
+    { "name": "the base answers", "step": "account", "answers": {}, "fields": [] },
+    { "name": "an empty account name", "step": "account", "answers": { "account": "" }, "fields": ["account"] },
+    {
+      "name": "a self-managed instance",
+      "step": "account",
+      "answers": { "base_url": "https://gitlab.example.com" },
+      "fields": []
+    },
+    { "name": "an instance that is not a URL", "step": "account", "answers": { "base_url": "gitlab" }, "fields": ["base_url"] },
+    { "name": "an empty variable name", "step": "account", "answers": { "token": { "env": "" } }, "fields": ["token"] },
+    {
+      "name": "a variable name with a dash",
+      "step": "account",
+      "answers": { "token": { "env": "MY-TOKEN" } },
+      "fields": ["token"]
+    },
+    {
+      "name": "a token pasted where a variable name goes",
+      "step": "account",
+      "answers": { "token": { "env": "glpat-AAAAAAAAAAAAAAAAAAAA" } },
+      "fields": ["token"]
+    },
+    {
+      "name": "a command",
+      "step": "account",
+      "answers": { "token": { "command": ["sh", "-c", "pass show gitlab/pat"] } },
+      "fields": []
+    },
+    { "name": "an empty command", "step": "account", "answers": { "token": { "command": [] } }, "fields": ["token"] },
+    {
+      "name": "a command that contains a token",
+      "step": "account",
+      "answers": { "token": { "command": ["echo", "glpat-AAAAAAAAAAAAAAAAAAAA"] } },
+      "fields": ["token"]
+    },
+    {
+      "name": "a GitHub token prefix on a GitLab account is not refused",
+      "step": "account",
+      "answers": { "token": { "command": ["printf", "ghp_"] } },
+      "fields": []
+    },
+    {
+      "name": "a GitHub token in a GitHub account's command",
+      "step": "account",
+      "answers": {
+        "provider": "github",
+        "account": "github",
+        "base_url": "https://api.github.com",
+        "project": "acme/web",
+        "token": { "command": ["echo", "ghp_AAAAAAAAAAAAAAAAAAAA"] },
+        "live_secs": 30
+      },
+      "fields": ["token"]
+    },
+    { "name": "no project", "step": "project", "answers": { "project": null }, "fields": ["project"] },
+    { "name": "a project by path", "step": "project", "answers": { "project": "acme/web" }, "fields": [] },
+    { "name": "a plain watch id", "step": "watch", "answers": { "watch_id": "main-push" }, "fields": [] },
+    { "name": "a watch id with a dot", "step": "watch", "answers": { "watch_id": "api.main" }, "fields": [] },
+    { "name": "a watch id with a space", "step": "watch", "answers": { "watch_id": "deploy prod" }, "fields": [] },
+    { "name": "an empty watch id", "step": "watch", "answers": { "watch_id": "" }, "fields": ["watch_id"] },
+    { "name": "a blank watch id", "step": "watch", "answers": { "watch_id": "   " }, "fields": ["watch_id"] },
+    { "name": "an empty branch", "step": "watch", "answers": { "ref_name": "" }, "fields": ["ref_name"] },
+    {
+      "name": "both empty",
+      "step": "watch",
+      "answers": { "watch_id": "", "ref_name": "" },
+      "fields": ["ref_name", "watch_id"]
+    },
+    {
+      "name": "a GitHub watch id with a dot",
+      "step": "watch",
+      "answers": {
+        "provider": "github",
+        "account": "github",
+        "base_url": "https://api.github.com",
+        "project": "acme/web",
+        "watch_id": "web.main",
+        "live_secs": 30
+      },
+      "fields": []
+    },
+    { "name": "a live interval of a second", "step": "preferences", "answers": { "live_secs": 1 }, "fields": [] },
+    { "name": "a live interval of a minute", "step": "preferences", "answers": { "live_secs": 60 }, "fields": [] },
+    { "name": "a live interval of zero", "step": "preferences", "answers": { "live_secs": 0 }, "fields": ["live_secs"] },
+    { "name": "a live interval over a minute", "step": "preferences", "answers": { "live_secs": 61 }, "fields": ["live_secs"] }
+  ]
+}

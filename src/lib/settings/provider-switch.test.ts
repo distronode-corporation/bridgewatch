@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import schema from "../config.schema.json";
-import { PROVIDER_DEFAULTS, providerSwitch } from "./provider-switch";
+import { providerSwitch } from "./provider-switch";
 
 describe("providerSwitch", () => {
   it("gitlab to github removes GitLab's defaults so GitHub's apply", () => {
@@ -64,16 +63,6 @@ describe("providerSwitch", () => {
     expect(providerSwitch("work", { base_url: "https://gitlab.com" }, "gitlab", "gitlab")).toEqual({
       edits: [],
       note: null,
-    });
-  });
-
-  it("GitLab's defaults are the schema's, so the table cannot drift from the core", () => {
-    const account = (schema as { $defs: { Account: { properties: Record<string, { default?: unknown }> } } }).$defs
-      .Account.properties;
-    expect(PROVIDER_DEFAULTS.gitlab).toEqual({
-      base_url: account.base_url.default,
-      api_path: account.api_path.default,
-      header: account.header.default,
     });
   });
 });

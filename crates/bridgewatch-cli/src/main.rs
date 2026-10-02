@@ -51,8 +51,9 @@ mod exit {
     /// `check`/`watch`: no verdict. Nothing matched, or a request failed with
     /// nothing cached to fall back on; the errors are printed.
     pub const UNKNOWN: i32 = 4;
-    /// The command line is wrong: clap's own errors, or a `--watch` naming no
-    /// configured watch. `EX_USAGE`.
+    /// The command line is wrong: clap's own errors, a `--watch` or
+    /// `--account` naming nothing configured, or a `fixture scrub` directory
+    /// with no recordings in it. `EX_USAGE`.
     pub const USAGE: i32 = 64;
     /// Something else failed before there was a verdict: a token that would
     /// not resolve, an unreadable fixture, a failed recording, I/O.
@@ -71,7 +72,7 @@ Exit codes:
   2   check/watch: deployed_with_failure
   3   check/watch: running, parked_gate or canceled
   4   check/watch: unknown (nothing matched, or a request failed; errors on stderr)
-  64  usage error: bad arguments, a --watch or job URL that names nothing configured, or retry/play with no terminal and no --yes
+  64  usage error: bad arguments, a --watch, --account or job URL that names nothing configured, a fixture scrub directory with no recordings, or retry/play with no terminal and no --yes
   70  any other error (token, fixture, recording, I/O, or a log or job request that failed)
   78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true";
 }
@@ -258,8 +259,19 @@ struct InitArgs {
     /// Read the token from this keyring service (user "").
     #[arg(long, group = "token", value_name = "SERVICE")]
     token_keyring: Option<String>,
-    /// Run this program for the token; repeat for each argument.
-    #[arg(long, group = "token", value_name = "ARG", num_args = 1..)]
+    /// Run this program for the token: the program and its arguments, which
+    /// may start with '-'. Must come LAST: it takes everything after it.
+    //
+    // ⛔ `allow_hyphen_values`: without it clap refused `gh auth token
+    // --hostname <host>`, the README's own GHES recipe, as an unexpected
+    // argument. The price is that it swallows any flag written after it.
+    #[arg(
+        long,
+        group = "token",
+        value_name = "ARG",
+        num_args = 1..,
+        allow_hyphen_values = true
+    )]
     token_command: Vec<String>,
 }
 
@@ -306,7 +318,8 @@ struct WatchArgs {
     /// Only this watch. May be repeated.
     #[arg(long = "watch", value_name = "ID")]
     watches: Vec<String>,
-    /// Print one JSON object per change instead of a line.
+    /// Print one JSON object per line instead of text: the Snapshot on each
+    /// change, and {"notify": {..}} for each notification.
     #[arg(long)]
     json: bool,
     /// Stop after this many ticks and exit with the last tick's verdict code.
@@ -435,10 +448,10 @@ fn job_client(
             anyhow::anyhow!("no account {:?}", target.account),
         )
     })?;
-    bridgewatch_core::poll::build_client(
+    bridgewatch_core::poll::client_for_account(
         &target.account,
         account,
-        &SystemTokenProvider,
+        None,
         Arc::new(SystemTokenProvider),
         RequestRing::new(config.log.keep_requests),
     )
@@ -749,8 +762,11 @@ fn load(args: &ConfigArgs) -> std::result::Result<config::Loaded, Failure> {
             }
             Ok(loaded)
         }
-        Err(config::ConfigError::Invalid { path, diagnostics }) => {
-            let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        Err(config::ConfigError::Invalid {
+            path,
+            diagnostics,
+            raw,
+        }) => {
             for d in &diagnostics {
                 let severity = match d.severity {
                     config::Severity::Error => "error",
@@ -771,8 +787,8 @@ fn load(args: &ConfigArgs) -> std::result::Result<config::Loaded, Failure> {
             path,
             message,
             span,
+            raw,
         }) => {
-            let raw = std::fs::read_to_string(&path).unwrap_or_default();
             let where_ = location(&path, &raw, span.map(|s| s.start));
             Err(Failure::new(
                 exit::CONFIG,
@@ -795,11 +811,12 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
     let now = bridgewatch_core::oauth::now();
     match action {
         auth::AuthAction::Login { account } => {
-            let timeout = config
-                .accounts
-                .get(&account)
-                .map(|a| a.timeout_secs)
-                .unwrap_or(15);
+            // An unknown account is refused by `auth::login`; until then the
+            // schema's own default stands in, not a copy of its number.
+            let timeout = config.accounts.get(&account).map_or_else(
+                || config::Account::default().timeout_secs,
+                |a| a.timeout_secs,
+            );
             let transport = Arc::new(ReqwestTransport::new(std::time::Duration::from_secs(
                 timeout,
             ))?);
@@ -1012,8 +1029,16 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
             println!("{line}");
             previous = Some(fingerprint);
         }
+        // ⛔ In JSON mode a notification is a JSON object too, wrapped as
+        // `{"notify": {..}}` so a reader can tell it from a snapshot. It was
+        // printed as text between the snapshots, and `watch --json | jq -c .`
+        // died on the first notification.
         for n in &tick.notifications {
-            println!("notify [{}] {} — {}", n.kind.as_str(), n.title, n.body);
+            if args.json {
+                println!("{}", serde_json::json!({ "notify": n }));
+            } else {
+                println!("notify [{}] {} — {}", n.kind.as_str(), n.title, n.body);
+            }
         }
 
         if limit.is_some_and(|l| ticks >= l) {
@@ -1044,19 +1069,34 @@ async fn fixture(config_args: &ConfigArgs, action: FixtureAction) -> Outcome {
     start_logging(&loaded);
     let config = loaded.config;
 
+    // ⛔ A name the file does not contain is the command line's fault (64), as
+    // it is for log, retry, play and auth. It came back through `anyhow` as
+    // 70, so a script could not tell a typo from a failed recording.
     let account_name = match account {
         Some(a) => a,
+        // `load` already refuses a file with no accounts (78); this keeps the
+        // same code should that ever stop being true.
         None => config
             .watches
             .first()
             .map(|w| w.account.clone())
             .or_else(|| config.accounts.keys().next().cloned())
-            .context("no accounts configured")?,
+            .ok_or_else(|| Failure::new(exit::CONFIG, anyhow::anyhow!("no accounts configured")))?,
     };
-    let account_def = config
-        .accounts
-        .get(&account_name)
-        .with_context(|| format!("no account named {account_name:?}"))?;
+    let account_def = config.accounts.get(&account_name).ok_or_else(|| {
+        Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!(
+                "no account named {account_name:?}; configured accounts are [{}]",
+                config
+                    .accounts
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+    })?;
 
     // ⛔ Refused rather than recorded. The recorder below builds a GitLab
     // client unconditionally, so a github account would send `/api/v4/...`
@@ -1088,7 +1128,15 @@ async fn fixture(config_args: &ConfigArgs, action: FixtureAction) -> Outcome {
             .iter()
             .find(|w| w.account == account_name)
             .map(|w| w.project.clone())
-            .context("no watch on that account to take a project from; pass --project")?,
+            .ok_or_else(|| {
+                Failure::new(
+                    exit::USAGE,
+                    anyhow::anyhow!(
+                        "no watch on account {account_name:?} to take a project from; \
+                         pass --project"
+                    ),
+                )
+            })?,
     };
 
     let token = token::resolve(&account_def.token, &account_name, &SystemTokenProvider)
@@ -1128,7 +1176,11 @@ fn scrub_fixtures(dirs: &[PathBuf], check: bool) -> Outcome {
     } else {
         ScrubMode::Write
     };
-    let mut total = 0usize;
+    // Every argument is vetted before anything is written, so a typo in the
+    // third directory does not leave the first two scrubbed and the run red.
+    // The vetting pass IS a check-mode scrub, so it reads exactly the files the
+    // scrub would and its answer is the check's.
+    let mut checked = Vec::with_capacity(dirs.len());
     for dir in dirs {
         if !dir.is_dir() {
             return Err(Failure::new(
@@ -1136,8 +1188,34 @@ fn scrub_fixtures(dirs: &[PathBuf], check: bool) -> Outcome {
                 anyhow::anyhow!("{} is not a directory", dir.display()),
             ));
         }
-        let changed = bridgewatch_core::client::fixture::scrub_dir_with(dir, mode)
+        // ⛔ A directory holding no recording is refused, not passed. The
+        // scrub reads only the directory's own files, so `--check` on the
+        // fixtures ROOT (a fixture one level down holding names and emails)
+        // examined nothing and exited 0: a gate that cannot fail.
+        let scrubbed = bridgewatch_core::client::fixture::scrub_dir_with(dir, ScrubMode::Check)
             .with_context(|| format!("cannot scrub {}", dir.display()))?;
+        if scrubbed.examined == 0 {
+            return Err(Failure::new(
+                exit::USAGE,
+                anyhow::anyhow!(
+                    "{} holds no recorded files (list.json, pipeline-*, jobs*, bridges*, \
+                     child-*); name each fixture directory itself, e.g. tests/fixtures/*",
+                    dir.display()
+                ),
+            ));
+        }
+        checked.push(scrubbed.changed);
+    }
+    let mut total = 0usize;
+    for (dir, would_change) in dirs.iter().zip(checked) {
+        let changed = match mode {
+            ScrubMode::Check => would_change,
+            ScrubMode::Write => {
+                bridgewatch_core::client::fixture::scrub_dir_with(dir, mode)
+                    .with_context(|| format!("cannot scrub {}", dir.display()))?
+                    .changed
+            }
+        };
         for path in &changed {
             println!(
                 "{} {}",

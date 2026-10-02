@@ -91,8 +91,10 @@ pub fn show_popover(app: &AppHandle) {
 
     let _ = window.show();
     let _ = window.set_focus();
-    // Opening the popover is one of the two out-of-band poll reasons. The core
-    // gates it: a second open within five seconds is dropped.
+    // Opening the popover is one of the out-of-band poll reasons. The core
+    // gates it: a second request within `POLL_NOW_MIN_GAP` (two seconds) of
+    // the last one passed on is dropped, which is what makes this and the
+    // webview's own focus handler one tick between them.
     state.request_poll(bridgewatch_core::poll::PollNow::PopoverOpened);
 }
 

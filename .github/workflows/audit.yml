@@ -44,36 +44,22 @@ jobs:
   # week where nobody pushed. RustSec often carries an advisory days before GitHub's
   # database, so this is not a duplicate of Dependabot.
   #
-  # ⛔ The install step below is a DELIBERATE, byte-for-byte copy of ci.yml's
-  # `cargo-deny` job. Two copies of six lines is less machinery than a composite
-  # action plus the indirection of reading it, so the duplication is the choice. The
-  # cost is that a cargo-deny version bump must change BOTH files: the version and the
-  # digest live in `.github/workflows/ci.yml` as well as here, and a bump that touches
-  # only one leaves the two jobs testing with different binaries.
+  # The install is the same local composite action ci.yml's `cargo-deny` job uses
+  # (.github/actions/install-cargo-deny), which holds the version and its SHA-256, so
+  # the two jobs cannot drift onto different binaries and a bump is one edit.
   #
   # No toolchain action, matching ci.yml: the runner image ships cargo, and
   # rust-toolchain.toml names the channel for it.
   cargo-deny:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    env:
-      CARGO_DENY_VERSION: 0.20.2
-      CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install cargo-deny
-        run: |
-          set -euo pipefail
-          name="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
-          curl -fsSL -o "$RUNNER_TEMP/deny.tgz" \
-            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${name}.tar.gz"
-          echo "${CARGO_DENY_SHA256}  $RUNNER_TEMP/deny.tgz" | sha256sum -c -
-          tar xzf "$RUNNER_TEMP/deny.tgz" -C "$RUNNER_TEMP"
-          install -m 0755 "$RUNNER_TEMP/${name}/cargo-deny" "$HOME/.cargo/bin/cargo-deny"
-          cargo deny --version
+        uses: $/.github/actions/install-cargo-deny
 
       # `--locked`: the advisory answer is about the tree that is committed, so a run
       # that quietly resolved a different Cargo.lock would be answering another
@@ -102,16 +88,18 @@ jobs:
       # downloads no packages and runs no install scripts. Verified 2026-09-18 by
       # copying only package.json and package-lock.json into an empty directory:
       # `npm audit --audit-level=high` reported "found 0 vulnerabilities" over 198
-      # dependencies with no node_modules present, and errored with ENOLOCK when the
+      # dependencies (197 since @tauri-apps/plugin-opener was dropped) with no
+      # node_modules present, and errored with ENOLOCK when the
       # lockfile was taken away, which is the control proving it read the lockfile
       # rather than reading nothing.
       #
       # ⛔ And deliberately NOT `--omit=dev`, which reads like the tidier flag and is
       # the wrong answer for a bundled frontend. Measured on the committed lockfile:
-      # 198 packages, of which exactly TWO (@tauri-apps/api, @tauri-apps/plugin-opener)
-      # are runtime `dependencies`. Svelte, Vite, Tailwind, bits-ui and the rest of
-      # what Vite COMPILES INTO THE SHIPPED APP are devDependencies, so `--omit=dev`
-      # would audit two packages and skip the code users actually run.
+      # 197 packages, of which exactly ONE (@tauri-apps/api) is a runtime
+      # `dependency` (the opener is driven from Rust, so its npm half is not a
+      # dependency at all). Svelte, Vite, Tailwind, bits-ui and the rest of what Vite
+      # COMPILES INTO THE SHIPPED APP are devDependencies, so `--omit=dev` would audit
+      # one package and skip the code users actually run.
       #
       # `--audit-level=high` sets the failure bar, not the reporting bar: moderate and
       # low advisories are still printed in the job log, they just do not turn the
