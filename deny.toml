@@ -22,9 +22,10 @@ all-features = true
 # "workspace" scope never encounters a transitive advisory, so each of the seven entries
 # below printed `warning[advisory-not-detected]` on every run, i.e. they were dead lines.
 # Under "all" the same entries are what makes the check pass (exit 0, no warnings).
-# OpenSSF Scorecard reads OSV directly rather than this file, so it keeps counting all
-# eight as vulnerabilities whatever is written here; the entries are the written answer
-# to that count, not a way to lower it.
+# OpenSSF Scorecard reads OSV through OSV-Scanner, not this file, so osv-scanner.toml
+# MIRRORS the eight entries below (same ids, same reasons) for its Vulnerabilities check.
+# ⛔ Keep the two lists in step: an entry added or removed here is added or removed there
+# in the same change.
 unmaintained = "all"
 # Unsound notices for the WHOLE tree, so a new one anywhere is a decision, not noise.
 unsound = "all"

@@ -1,0 +1,42 @@
+# OSV-Scanner's ignore list, read by OpenSSF Scorecard's Vulnerabilities check
+# and by `osv-scanner scan source -r .`. It MIRRORS deny.toml's [advisories]
+# `ignore`: the same eight advisories, the same reasons, and the reasoning for
+# each (the path it arrives by and what would retire it) is written there, not
+# here. cargo-deny is the gate (CI fails on any advisory not in its list); this
+# file only stops Scorecard counting the eight that list already answers.
+#
+# ⛔ KEEP THE TWO LISTS IN STEP. Add an advisory here only once deny.toml
+# ignores it, and remove it here the day it leaves deny.toml. Neither file
+# carries an expiry date, so no `ignoreUntil` is set.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0429"
+reason = "glib 0.18 pinned by Tauri 2 GTK 3; VariantStrIter unused"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370"
+reason = "proc-macro-error 1.0.4 build-time only, pinned by Tauri 2 GTK 3"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0249"
+reason = "smartstring 1.0.1 via rhai 1.26.1, the verdict-script engine"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0081"
+reason = "unic-char-property 0.9.0 via urlpattern 0.3.0 and tauri-utils"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0075"
+reason = "unic-char-range 0.9.0 via urlpattern 0.3.0 and tauri-utils"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0080"
+reason = "unic-common 0.9.0 via urlpattern 0.3.0 and tauri-utils"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0100"
+reason = "unic-ucd-ident 0.9.0 via urlpattern 0.3.0 and tauri-utils"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0098"
+reason = "unic-ucd-version 0.9.0 via urlpattern 0.3.0 and tauri-utils"

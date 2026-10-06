@@ -1054,7 +1054,8 @@ On every push to `main` unless the item says otherwise:
   workflows, both reporting to code scanning.
 - `cargo deny` against [deny.toml](deny.toml): RustSec advisories, a permissive-only
   licence allow-list, crates.io as the only source. Tolerated advisories are listed
-  there with their reason.
+  there with their reason, and mirrored in [osv-scanner.toml](osv-scanner.toml) for
+  Scorecard's Vulnerabilities check.
 - A weekly re-run of `cargo deny` and of `npm audit --audit-level=high`, because an
   advisory lands against code that did not change and so no push is coming to catch it.
   The npm side audits the whole tree, dev dependencies included: this is a Vite app, so

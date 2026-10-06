@@ -26,6 +26,9 @@ body line with a bracket.
   `bridgewatch_<version>.intoto.jsonl`, so `gh attestation verify --bundle` works
   offline.
 - `.github/SUPPORT.md`, and a "Licence of contributions" section in `CONTRIBUTING.md`.
+- `osv-scanner.toml`, mirroring the eight advisories `deny.toml` tolerates (same ids,
+  same reasons), so OpenSSF Scorecard's Vulnerabilities check, which reads OSV and not
+  `deny.toml`, honours them too.
 
 ### Changed
 
