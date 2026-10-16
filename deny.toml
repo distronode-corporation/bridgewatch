@@ -12,18 +12,19 @@ targets = [
 all-features = true
 
 [advisories]
-# Unmaintained notices for the WHOLE tree, same as unsound below. The Tauri tree carries
-# seven abandoned transitive crates (proc-macro-error, smartstring, five unic-*) that we
-# cannot replace; each is listed by id in `ignore` with the path it arrives by and what
-# would retire it, so an EIGHTH abandoned crate anywhere in the tree fails the job and
-# becomes a decision.
+# Unmaintained notices for the WHOLE tree, same as unsound below. The tree carries two
+# abandoned transitive crates (proc-macro-error, smartstring) that we cannot replace;
+# each is listed by id in `ignore` with the path it arrives by and what would retire
+# it, so a THIRD abandoned crate anywhere in the tree fails the job and becomes a
+# decision. (Five unic-* crates were here too, through urlpattern 0.3.0 and tauri-utils
+# 2.9; tauri-utils 2.10 moved to urlpattern 0.6, which has none, and they left.)
 # ⚠️ This was "workspace" until 2026-09-18, which tolerated those seven by scope and
 # recorded nothing. The two cannot be combined: measured with cargo-deny 0.20.2, the
 # "workspace" scope never encounters a transitive advisory, so each of the seven entries
 # below printed `warning[advisory-not-detected]` on every run, i.e. they were dead lines.
 # Under "all" the same entries are what makes the check pass (exit 0, no warnings).
 # OpenSSF Scorecard reads OSV through OSV-Scanner, not this file, so osv-scanner.toml
-# MIRRORS the eight entries below (same ids, same reasons) for its Vulnerabilities check.
+# MIRRORS the three entries below (same ids, same reasons) for its Vulnerabilities check.
 # ⛔ Keep the two lists in step: an entry added or removed here is added or removed there
 # in the same change.
 unmaintained = "all"
@@ -50,17 +51,6 @@ ignore = [
   # bridgewatch-core for the optional `[verdict].script` hook. bridgewatch never names
   # smartstring; it goes when rhai drops or replaces it.
   { id = "RUSTSEC-2026-0249", reason = "smartstring 1.0.1 via rhai 1.26.1, the verdict-script engine" },
-
-  # Five unic 0.9.0 crates, all unmaintained, none with a fixed version, and all one
-  # dependency: urlpattern 0.3.0 pulls unic-ucd-ident, which pulls the other four.
-  # urlpattern reaches us through tauri-utils 2.9.3, which is a dependency of both tauri
-  # and tauri-build. They are Unicode character tables and hold no logic of ours. All five
-  # go together, when tauri-utils moves to a urlpattern release that no longer uses unic.
-  { id = "RUSTSEC-2025-0081", reason = "unic-char-property 0.9.0 via urlpattern 0.3.0 and tauri-utils" },
-  { id = "RUSTSEC-2025-0075", reason = "unic-char-range 0.9.0 via urlpattern 0.3.0 and tauri-utils" },
-  { id = "RUSTSEC-2025-0080", reason = "unic-common 0.9.0 via urlpattern 0.3.0 and tauri-utils" },
-  { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident 0.9.0 via urlpattern 0.3.0 and tauri-utils" },
-  { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version 0.9.0 via urlpattern 0.3.0 and tauri-utils" },
 ]
 
 [licenses]
