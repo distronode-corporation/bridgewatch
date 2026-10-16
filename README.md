@@ -854,7 +854,7 @@ stops a hostile or compromised instance from making the app open an arbitrary pa
 
 The CLI runs the same core as the GUI, so anything the icon knows it can print: in a
 shell prompt, a status bar or a script. It is not in the release assets; build it
-with Rust 1.88 or newer, from a clone of this repository:
+with Rust 1.90 or newer, from a clone of this repository:
 
 ```
 cargo install --locked --path crates/bridgewatch-cli
@@ -950,7 +950,7 @@ because a secondary watch must not be able to outvote a primary one.
 
 ## Build from source
 
-Requirements: Rust 1.88 or newer (via [rustup](https://rustup.rs); the repository pins
+Requirements: Rust 1.90 or newer (via [rustup](https://rustup.rs); the repository pins
 the stable channel), Node.js 24 (CI's version; `package.json` also accepts 20.19+ and
 22.12+), and the platform toolchain.
 
