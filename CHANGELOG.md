@@ -36,6 +36,10 @@ body line with a bracket.
   2.12: tauri 2.12.2 and tauri-build 2.7.1, with the plugins autostart 2.7.0,
   notification 2.5.1, opener 2.7.0 and positioner 2.4.0. Tauri 2.12 needs Rust 1.90, so
   building from source now needs Rust 1.90 or newer (was 1.88).
+- **MiniJinja 3 renders the notification templates** (was 2.24). The shipped title and
+  body render exactly as before. One thing a custom template can see differently: a list
+  printed whole, such as `{{failures}}`, now uses Python-style quotes (`['a', 'b']`, was
+  `["a", "b"]`); `{{failures | join(', ')}}` is unchanged and is the better spelling.
 - The frontend build's source-map-js is 1.2.2 (GHSA-68fv-2mgg-jv7q, a denial of service
   through indexed source-map section offsets; build time only).
 - The `.deb`'s Maintainer is `Distronode <opensource@distronode.com>`, and the `.deb` and

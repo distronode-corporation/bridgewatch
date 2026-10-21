@@ -466,22 +466,28 @@ fn render(
     key: String,
 ) -> Result<Notification, minijinja::Error> {
     let env = minijinja::Environment::new();
+    // ⚠️ MiniJinja 3 converts context values through `Into<Value>` only, where 2
+    // ran every one of them through Serde. Strings, lists of strings and options
+    // convert natively to the same values; the row itself has no native
+    // conversion and goes through Serde explicitly (the `serde` feature), which
+    // is what keeps `pipeline.ref` and the other renamed keys as they were.
+    // `every_template_variable_renders_through_the_real_path` pins all of it.
     let context = minijinja::context! {
         watch => minijinja::context! { id => watch.id.clone(), role => format!("{:?}", watch.role).to_lowercase() },
         kind => kind.as_str(),
-        jobs => jobs,
+        jobs => jobs.to_vec(),
         state => row.state.as_str(),
-        deploy => row.deploy,
-        sha7 => row.sha7,
-        sha => row.sha,
-        pipeline => row,
-        failures => row.failures,
-        warnings => row.warnings,
-        gates => row.gates,
-        r#ref => row.ref_name,
-        source => row.source,
+        deploy => &row.deploy,
+        sha7 => &row.sha7,
+        sha => &row.sha,
+        pipeline => minijinja::value::Serde(row),
+        failures => &row.failures,
+        warnings => &row.warnings,
+        gates => &row.gates,
+        r#ref => &row.ref_name,
+        source => &row.source,
         id => row.id,
-        url => row.web_url,
+        url => &row.web_url,
     };
 
     let title = env.render_str(&watch.notify.title, &context)?;

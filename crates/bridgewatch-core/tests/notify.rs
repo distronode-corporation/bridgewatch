@@ -904,3 +904,100 @@ async fn an_idle_tick_does_not_rewrite_the_ledger() {
         "nothing was recorded, so nothing was written"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Every value a template can reach
+// ---------------------------------------------------------------------------
+
+/// Every name the notification context hands a template, rendered through the
+/// real `notifications_for` path, pinned byte for byte.
+///
+/// ⚠️ MiniJinja 3 made Serde opt-in: the context is built through `Into<Value>`,
+/// and only `pipeline` (the whole row) still goes through Serde, via
+/// `value::Serde`. The other tests here reach `watch.id`, `sha7`, `state`,
+/// `deploy`, `kind` and the default body; this one reaches the rest, the
+/// `pipeline.*` tree, `None` fields and the bare-list repr, so a conversion
+/// that silently changes a value (a list turned into a map, an `Option` into
+/// undefined, a renamed serde key) fails here. A job name carrying `<` and `&`
+/// pins that notification text is not HTML-escaped.
+#[test]
+fn every_template_variable_renders_through_the_real_path() {
+    let title = "{{watch.id}}|{{watch.role}}|{{kind}}|{{state}}|{{deploy}}|{{sha7}}|{{sha}}|\
+                 {{ref}}|{{source}}|{{id}}|{{url}}|{{jobs | join(',')}}|{{jobs | length}}";
+    let body = "{{failures}}|{{failures | join(', ')}}|{{warnings | join(',')}}|\
+                {{gates | length}}|{{gates | first}}|{{pipeline.ref}}|{{pipeline.state}}|\
+                {{pipeline.iid}}|{{pipeline.live}}|{{pipeline.web_url}}|\
+                {{pipeline.deploy_marker.name}}|{{pipeline.deploy_marker.web_url}}|\
+                {{pipeline.eta is defined}}|{{pipeline.eta}}|{{pipeline.updated_at}}|\
+                {{pipeline.failures | join(',')}}|{{pipeline.bridges | length}}|\
+                {{pipeline.created_at | default('no date', true)}}";
+    let mut watch = support::config_with(&[
+        Edit::Set {
+            path: "watches.0.notify.title".into(),
+            value: EditValue::String(title.into()),
+        },
+        Edit::Set {
+            path: "watches.0.notify.body".into(),
+            value: EditValue::String(body.into()),
+        },
+    ])
+    .watches
+    .remove(0);
+    watch.notify.finished = false;
+
+    let row: bridgewatch_core::verdict::PipelineView = serde_json::from_str(
+        r#"{"id":2856963900,"iid":13054,"sha":"4cfaced9d33af808","sha7":"4cfaced",
+            "ref":"main","source":"push","status":"failed",
+            "web_url":"https://gitlab.example/p/-/pipelines/2856963900",
+            "state":"deployed_with_failure","deploy":"live",
+            "deploy_marker":{"name":"deploy:origins","id":1,"pipeline_id":2,"web_url":null,
+                             "started_at":null},
+            "deploy_failures":[],"failures":["verify:android","e2e<web>&co"],
+            "warnings":["lint"],"gates":["cov:1","cov:2"],
+            "post_deploy_failures":[],"sibling_failures":[],"bridges":[],"parent_jobs":[],
+            "updated_at":null,"created_at":null,"live":false}"#,
+    )
+    .expect("view decodes");
+
+    let mut ledger = NotifyLedger::default();
+    ledger.baseline(&watch.id);
+    let out = notifications_for(&watch, &view_of(&watch, row), &mut ledger);
+    let rendered: Vec<(NotifyKind, &str, &str)> = out
+        .iter()
+        .map(|n| (n.kind, n.title.as_str(), n.body.as_str()))
+        .collect();
+    // One body for both kinds: nothing in it depends on the kind.
+    //
+    // ⚠️ The bare `{{failures}}` is the one value MiniJinja 3 renders differently
+    // from 2: sequences print with Python-style quotes, `['a', 'b']` where 2
+    // printed `["a", "b"]`. Every other field here rendered identically under
+    // 2.24.0. `join` is the spelling a template should use for a list.
+    //
+    // ⚠️ `{{ref}}` renders EMPTY, under 2 and 3 alike: `r#ref` in `context!` names
+    // the key `r#ref` (`stringify!` keeps the prefix), so the documented `ref` is
+    // undefined. `pipeline.ref` works. Pinned here so a fix shows up as a change.
+    let body = "['verify:android', 'e2e<web>&co']|verify:android, e2e<web>&co|lint|2|cov:1|\
+                main|deployed_with_failure|13054|False|\
+                https://gitlab.example/p/-/pipelines/2856963900|deploy:origins|None|False||None|\
+                verify:android,e2e<web>&co|0|no date";
+    assert_eq!(
+        rendered,
+        [
+            (
+                NotifyKind::Deployed,
+                "main-push|primary|deployed|deployed_with_failure|live|4cfaced|\
+                 4cfaced9d33af808||push|2856963900|\
+                 https://gitlab.example/p/-/pipelines/2856963900|deploy:origins|1",
+                body,
+            ),
+            (
+                NotifyKind::BlockingFailure,
+                "main-push|primary|blocking_failure|deployed_with_failure|live|4cfaced|\
+                 4cfaced9d33af808||push|2856963900|\
+                 https://gitlab.example/p/-/pipelines/2856963900|verify:android,e2e<web>&co|2",
+                body,
+            ),
+        ],
+        "{rendered:#?}"
+    );
+}
