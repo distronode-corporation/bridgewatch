@@ -5,21 +5,24 @@ members = ["crates/bridgewatch-core", "crates/bridgewatch-cli", "src-tauri"]
 [workspace.package]
 version = "1.1.0"
 edition = "2024"
-# ⛔ NOT 1.85, WHICH IS WHAT EDITION 2024 ALONE WOULD IMPLY. Two independent
-# things put the floor at 1.88, and neither is visible in this file:
-#   1. `if let … && let …` chains, stable in edition 2024 only since 1.88. They
+# ⛔ NOT 1.85, WHICH IS WHAT EDITION 2024 ALONE WOULD IMPLY. The floor is the
+# highest of these, and none of them is visible in this file:
+#   1. Resolved dependencies declare 1.90: Tauri 2.12 (tauri, tauri-runtime,
+#      tauri-runtime-wry, tauri-utils, tray-icon) and the 2.x plugins it pairs
+#      with (autostart 2.7, notification 2.5, opener 2.7, positioner 2.4). This is
+#      the number that sets the floor today. Re-derive rather than trust this:
+#      `cargo metadata --format-version 1 --offline | python3 -c "…max rust_version…"`.
+#   2. `if let … && let …` chains, stable in edition 2024 only since 1.88. They
 #      live in bridgewatch-core (`config/mod.rs`, `config/edit.rs`, `poll/mod.rs`);
 #      enumerate them with `grep -rn --include='*.rs' -- '&& let' crates src-tauri/src`,
 #      which finds the rustfmt-wrapped ones a single-line pattern misses.
-#   2. Resolved dependencies declare it outright, so the floor holds even if every
-#      let-chain above were rewritten: keyring 4.2.0 says 1.88.0 and globset 0.4.20
-#      says 1.88 (with two keyring backends). Re-derive rather than trust this:
-#      `cargo metadata --format-version 1 --offline | python3 -c "…max rust_version…"`.
+#   3. keyring 4.2.0 says 1.88.0 and globset 0.4.20 says 1.88 (with two keyring
+#      backends), so 1.88 would hold even without Tauri.
 # ⚠️ Deliberately no line numbers: the files above are edited far more often than
 # this one, and a citation that has rotted reads exactly like a citation that has not.
 # The `msrv` job in .github/workflows/ci.yml is what keeps this honest; until it
 # existed CI pinned `stable` and nothing ever compiled at the declared floor.
-rust-version = "1.88"
+rust-version = "1.90"
 license = "Apache-2.0"
 repository = "https://github.com/distronode-corporation/bridgewatch"
 # Also the Maintainer field of the .deb: tauri-bundler takes it from `authors` before it

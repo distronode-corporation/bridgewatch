@@ -32,6 +32,12 @@ body line with a bracket.
 
 ### Changed
 
+- **Tauri 2.12 on the Rust side too**, matching `@tauri-apps/api` and `@tauri-apps/cli`
+  2.12: tauri 2.12.2 and tauri-build 2.7.1, with the plugins autostart 2.7.0,
+  notification 2.5.1, opener 2.7.0 and positioner 2.4.0. Tauri 2.12 needs Rust 1.90, so
+  building from source now needs Rust 1.90 or newer (was 1.88).
+- The frontend build's source-map-js is 1.2.2 (GHSA-68fv-2mgg-jv7q, a denial of service
+  through indexed source-map section offsets; build time only).
 - The `.deb`'s Maintainer is `Distronode <opensource@distronode.com>`, and the `.deb` and
   `.rpm` name <https://www.distronode.com/open-source/bridgewatch> as their homepage.
 - The example config and the test fixtures use a placeholder GitLab project id,
@@ -93,6 +99,12 @@ body line with a bracket.
   OAuth device flow, and since 1.1 it sends the opt-in retry and play `POST`s and follows
   one redirect, without credentials, to fetch a job's log. It now says so, and documents
   where sign-in tokens are kept, the `actions = true` gate and the log file.
+
+### Security
+
+- rustls-webpki 0.103.16 in Cargo.lock, for RUSTSEC-2026-0382 (CVE-2026-111943):
+  0.103.15 could accept a certificate chain through one of the distrusted emSign
+  intermediates, whose private keys are now public.
 
 ## [1.1.0] - 2026-09-27
 
