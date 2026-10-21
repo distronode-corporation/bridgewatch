@@ -24,7 +24,7 @@ licenses/, about.toml      The cargo-about template and config for the Rust half
 
 ## Setup
 
-You need Rust 1.88 or newer (via [rustup](https://rustup.rs); `rust-toolchain.toml` pins
+You need Rust 1.90 or newer (via [rustup](https://rustup.rs); `rust-toolchain.toml` pins
 the stable channel), Node.js 24, and the platform packages listed under "Build from
 source" in [README.md](README.md): the Xcode Command Line Tools on macOS, the WebKitGTK
 4.1 and libayatana-appindicator3 development packages (and the rest of that list) on
