@@ -12,19 +12,20 @@ targets = [
 all-features = true
 
 [advisories]
-# Unmaintained notices for the WHOLE tree, same as unsound below. The tree carries two
-# abandoned transitive crates (proc-macro-error, smartstring) that we cannot replace;
-# each is listed by id in `ignore` with the path it arrives by and what would retire
-# it, so a THIRD abandoned crate anywhere in the tree fails the job and becomes a
-# decision. (Five unic-* crates were here too, through urlpattern 0.3.0 and tauri-utils
-# 2.9; tauri-utils 2.10 moved to urlpattern 0.6, which has none, and they left.)
+# Unmaintained notices for the WHOLE tree, same as unsound below. The tree carries five
+# abandoned transitive crates (proc-macro-error, smartstring, zvariant, zbus_names,
+# zvariant_derive) that we cannot replace yet; each is listed by id in `ignore` with the
+# path it arrives by and what would retire it, so a SIXTH abandoned crate anywhere in the
+# tree fails the job and becomes a decision. (Five unic-* crates were here too, through
+# urlpattern 0.3.0 and tauri-utils 2.9; tauri-utils 2.10 moved to urlpattern 0.6, which
+# has none, and they left.)
 # ⚠️ This was "workspace" until 2026-09-18, which tolerated those seven by scope and
 # recorded nothing. The two cannot be combined: measured with cargo-deny 0.20.2, the
 # "workspace" scope never encounters a transitive advisory, so each of the seven entries
 # below printed `warning[advisory-not-detected]` on every run, i.e. they were dead lines.
 # Under "all" the same entries are what makes the check pass (exit 0, no warnings).
 # OpenSSF Scorecard reads OSV through OSV-Scanner, not this file, so osv-scanner.toml
-# MIRRORS the three entries below (same ids, same reasons) for its Vulnerabilities check.
+# MIRRORS the six entries below (same ids, same reasons) for its Vulnerabilities check.
 # ⛔ Keep the two lists in step: an entry added or removed here is added or removed there
 # in the same change.
 unmaintained = "all"
@@ -51,6 +52,18 @@ ignore = [
   # bridgewatch-core for the optional `[verdict].script` hook. bridgewatch never names
   # smartstring; it goes when rhai drops or replaces it.
   { id = "RUSTSEC-2026-0249", reason = "smartstring 1.0.1 via rhai 1.26.1, the verdict-script engine" },
+
+  # zvariant 5.9.2, zbus_names 4.3.1, zvariant_derive 5.9.2: unmaintained notices
+  # (2026-10-16), not vulnerabilities, no fixed version. Upstream merged all three into
+  # zbus 6.0.0 as `zbus::wire`, `zbus::names` and its derive macros, but every zbus 5
+  # release still pulls them. Linux only: zbus 5.13 arrives through keyring 4.2's default
+  # Secret Service store (bridgewatch-core), tauri-plugin-notification's notify-rust and
+  # tauri-plugin-opener; bridgewatch never names zbus, and none of those takes zbus 6
+  # yet. They go when all three move and the tree carries only zbus 6 (issue #25).
+  # Review by 2027-01-21. Decided by Sean on 2026-10-21 (decisions log, GitLab #2).
+  { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained (merged into zbus 6), via zbus 5.13 from keyring, notify-rust, tauri-plugin-opener; not a vulnerability; replacement tracked in #25; review by 2027-01-21" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained (merged into zbus 6), via zbus 5.13 from keyring, notify-rust, tauri-plugin-opener; not a vulnerability; replacement tracked in #25; review by 2027-01-21" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained (merged into zbus 6), via zbus 5.13 from keyring, notify-rust, tauri-plugin-opener; not a vulnerability; replacement tracked in #25; review by 2027-01-21" },
 ]
 
 [licenses]

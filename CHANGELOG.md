@@ -100,6 +100,12 @@ body line with a bracket.
   one redirect, without credentials, to fetch a job's log. It now says so, and documents
   where sign-in tokens are kept, the `actions = true` gate and the log file.
 
+### Security
+
+- rustls-webpki 0.103.16 in Cargo.lock, for RUSTSEC-2026-0382 (CVE-2026-111943):
+  0.103.15 could accept a certificate chain through one of the distrusted emSign
+  intermediates, whose private keys are now public.
+
 ## [1.1.0] - 2026-09-27
 
 ### Added
