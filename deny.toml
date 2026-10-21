@@ -16,8 +16,9 @@ all-features = true
 # abandoned transitive crates (proc-macro-error, smartstring, zvariant, zbus_names,
 # zvariant_derive) that we cannot replace yet; each is listed by id in `ignore` with the
 # path it arrives by and what would retire it, so a SIXTH abandoned crate anywhere in the
-# tree fails the job and becomes a decision. (Five unic-* crates were here too, through urlpattern 0.3.0 and tauri-utils
-# 2.9; tauri-utils 2.10 moved to urlpattern 0.6, which has none, and they left.)
+# tree fails the job and becomes a decision. (Five unic-* crates were here too, through
+# urlpattern 0.3.0 and tauri-utils 2.9; tauri-utils 2.10 moved to urlpattern 0.6, which
+# has none, and they left.)
 # ⚠️ This was "workspace" until 2026-09-18, which tolerated those seven by scope and
 # recorded nothing. The two cannot be combined: measured with cargo-deny 0.20.2, the
 # "workspace" scope never encounters a transitive advisory, so each of the seven entries
