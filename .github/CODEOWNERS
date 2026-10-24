@@ -3,13 +3,15 @@
 # ⚠️ CODEOWNERS only has teeth behind a branch protection rule with "Require review
 # from Code Owners" turned on; on its own it is a request, not a gate.
 #
-# @distronode-com is the org's engineering account and the only principal with write
-# access. A handle here that has no write access is silently ignored by GitHub — no
-# error, no review request — so check membership before adding one.
-* @distronode-com
+# A handle here that has no write access is silently ignored by GitHub (no error, no
+# review request), so check membership before adding one.
+#
+# @seandean approves every change: the account that writes a pull request (usually
+# @distronode-com) can never approve it, so the owner must be a different person.
+* @seandean
 
 # Called out separately because a change to either one lands on users rather than on
 # the tree: the release workflow is what creates a public GitHub Release, and the
 # capability manifest is what the webview is allowed to ask the Rust side to do.
-/.github/workflows/ @distronode-com
-/src-tauri/capabilities/ @distronode-com
+/.github/workflows/ @seandean
+/src-tauri/capabilities/ @seandean
