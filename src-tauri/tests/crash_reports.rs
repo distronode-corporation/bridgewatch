@@ -85,6 +85,90 @@ fn serve(stream: TcpStream, seen: Seen) {
 const PLANTED: &str = "config at /home/alice/.config/bridgewatch/config.toml, \
                        /Users/bob/Library/Logs/bridgewatch and C:\\Users\\carol\\AppData\\bw";
 
+/// The user names `PLANTED` and `capture_an_error` use.
+const PLANTED_NAMES: [&str; 3] = ["alice", "bob", "carol"];
+
+/// The planted paths as they were before the scrub, each up to and including
+/// the separator after the user name, in the forms an envelope can carry them:
+/// raw, and with JSON's doubled backslash.
+const PLANTED_PATHS: [&str; 4] = [
+    "/home/alice/",
+    "/Users/bob/",
+    r"C:\Users\carol\",
+    r"C:\\Users\\carol\\",
+];
+
+/// Every place a planted name sits in a home directory's user segment: after
+/// `/home/`, `/Users/` or `\Users\`, with any run of separators on either side
+/// of `home`/`Users` and any escaping (JSON doubles a backslash, and may write
+/// `/` as `\/`). Each hit comes back with the text around it.
+///
+/// ⚠ Not a bare substring search: a macOS envelope's module list names
+/// `/usr/lib/libobjc.A.dylib`, and `libobjc` contains `bob` (macos-latest,
+/// run 40182278647). A name is a leak only where a user name goes.
+fn planted_names_in_home_paths(body: &str) -> Vec<String> {
+    let names = PLANTED_NAMES.join("|");
+    let pattern = regex::Regex::new(&format!(
+        r#"(?i)[/\\]+(?:home|users)[/\\]+[^/\\\s"'<>]*(?:{names})"#
+    ))
+    .expect("a valid pattern");
+    pattern
+        .find_iter(body)
+        .map(|m| context(body, m.start(), m.end()))
+        .collect()
+}
+
+/// Every bare occurrence of a planted name, harmless or not, with the text
+/// around it: printed when a check fails, so the log says where each one is.
+fn bare_planted_names(body: &str) -> Vec<String> {
+    PLANTED_NAMES
+        .iter()
+        .flat_map(|name| {
+            body.match_indices(name)
+                .map(|(at, _)| context(body, at, at + name.len()))
+        })
+        .collect()
+}
+
+/// `body[start..end]` with about 80 characters either side, on one line.
+fn context(body: &str, start: usize, end: usize) -> String {
+    let mut from = start.saturating_sub(80);
+    while !body.is_char_boundary(from) {
+        from -= 1;
+    }
+    let mut to = (end + 80).min(body.len());
+    while !body.is_char_boundary(to) {
+        to += 1;
+    }
+    format!(
+        "at byte {start}: ...{}[{}]{}...",
+        &body[from..start],
+        &body[start..end],
+        &body[end..to]
+    )
+    .replace(['\n', '\r'], " ")
+}
+
+/// No planted user name left in a home path, and none of the planted paths
+/// left whole. A failure lists each hit and every bare occurrence of a planted
+/// name, with context, never the whole ~100 KB envelope.
+fn assert_no_planted_user(body: &str, what: &str) {
+    let hits = planted_names_in_home_paths(body);
+    let whole: Vec<&str> = PLANTED_PATHS
+        .into_iter()
+        .filter(|path| body.contains(path))
+        .collect();
+    assert!(
+        hits.is_empty() && whole.is_empty(),
+        "{what}: a planted user name survived the scrub\n\
+         in a home path:\n  {}\n\
+         planted paths left whole: {whole:?}\n\
+         every bare occurrence of a planted name:\n  {}",
+        hits.join("\n  "),
+        bare_planted_names(body).join("\n  ")
+    );
+}
+
 fn panic_in_a_thread(message: &'static str) {
     let joined = std::thread::spawn(move || panic!("{message}")).join();
     assert!(joined.is_err(), "the thread did not panic");
@@ -162,9 +246,7 @@ fn consent_decides_whether_anything_reaches_the_crash_report_server() {
         "{body}"
     );
     assert!(body.contains(r"C:\\Users\\<user>\\AppData\\bw"), "{body}");
-    for name in ["alice", "bob", "carol"] {
-        assert!(!body.contains(name), "{name} survived the scrub: {body}");
-    }
+    assert_no_planted_user(&body, "the panic envelope");
     // ...and so has this machine's own, which a debug build's stack frames and
     // module list carry for real.
     let home = std::env::var("HOME").unwrap_or_default();
@@ -206,9 +288,44 @@ fn consent_decides_whether_anything_reaches_the_crash_report_server() {
     assert_eq!(settle(&seen, 2, Duration::from_secs(2)), 2);
     let (_, body) = seen.lock().unwrap()[1].clone();
     assert!(body.contains("/home/<user>/secret.toml"), "{body}");
-    assert!(!body.contains("alice"), "{body}");
+    assert_no_planted_user(&body, "the captured-error envelope");
 
     reporter.shutdown();
+}
+
+#[test]
+fn the_leak_check_finds_a_user_name_where_one_goes_and_only_there() {
+    // From the macos-latest envelope that failed the old bare-substring check.
+    let module = r#"{"type":"symbolic","name":"/usr/lib/libobjc.A.dylib","arch":null}"#;
+    assert!(planted_names_in_home_paths(module).is_empty());
+    assert_eq!(bare_planted_names(module).len(), 1, "libobjc holds bob");
+    for clean in [
+        "/home/<user>/.config",
+        r"C:\\Users\\<user>\\AppData",
+        "/Users/runner/work/bob.rs",
+    ] {
+        assert!(planted_names_in_home_paths(clean).is_empty(), "{clean}");
+    }
+    for leak in [
+        "/home/alice/.config",
+        "/Users/bob",
+        "//Users//Bob/x",
+        r"\/Users\/bob\/Library",
+        r"C:\Users\carol\AppData",
+        r"C:\\Users\\carol\\AppData",
+        r"c:\\\\users\\\\carol",
+        "/var/home/bobby/x",
+    ] {
+        let hits = planted_names_in_home_paths(leak);
+        assert_eq!(hits.len(), 1, "{leak}: {hits:?}");
+        let hit = hits[0].to_lowercase();
+        assert!(
+            PLANTED_NAMES
+                .iter()
+                .any(|name| hit.contains(&format!("{name}]"))),
+            "the context does not show the name: {hit}"
+        );
+    }
 }
 
 #[test]
