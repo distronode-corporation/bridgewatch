@@ -17,7 +17,7 @@ body:
       options:
         - label: I've searched existing issues and this isn't a duplicate.
           required: true
-        - label: I'm on the latest release (1.1.0) or a build of `main`.
+        - label: I'm on the latest release (1.2.0) or a build of `main`.
           required: true
         - label: This is not a security vulnerability, and I've removed any token, private hostname or other secret from everything I'm pasting.
           required: true
@@ -42,7 +42,7 @@ body:
     attributes:
       label: bridgewatch version
       description: "`bridgewatch --version`, or the version in the asset filename you installed."
-      placeholder: "1.1.0"
+      placeholder: "1.2.0"
     validations:
       required: true
   - type: dropdown

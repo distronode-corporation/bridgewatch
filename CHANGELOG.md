@@ -13,6 +13,13 @@ body line with a bracket.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-25
+
+Crash reports that stay off until you say yes, the licence texts in every bundle, the
+provenance attestation attached to the release, Tauri 2.12 (building from source now
+needs Rust 1.90) and MiniJinja 3, and fixes for a pipeline that failed before its first
+job reading green and for a quiet watch repeating a notification on every tick.
+
 ### Added
 
 - **Opt-in crash reports.** The release builds can send a crash report to Distronode's
@@ -109,7 +116,6 @@ body line with a bracket.
 - The wizard refused watch ids with a dot or a space that Settings and the core accept,
   and kept a pasted URL's `?tab=…` or `#…` in the project path.
 - A notification template that fails to render warns once, not on every tick.
-
 - `SECURITY.md` described bridgewatch as sending authenticated `GET` requests and
   nothing else, and as following no redirect. Since 1.0 it also signs in through the
   OAuth device flow, and since 1.1 it sends the opt-in retry and play `POST`s and follows
@@ -121,6 +127,12 @@ body line with a bracket.
 - rustls-webpki 0.103.16 in Cargo.lock, for RUSTSEC-2026-0382 (CVE-2026-111943):
   0.103.15 could accept a certificate chain through one of the distrusted emSign
   intermediates, whose private keys are now public.
+- webpki-root-certs 1.0.10 in Cargo.lock, for RUSTSEC-2026-0383 (the same emSign
+  distrust): 1.0.9 still bundled the emSign ECC Root CA - G3. No target bridgewatch ships
+  compiles it (it arrives through rustls-platform-verifier on wasm32 only), so this clears
+  lock-based scanners and keeps a future target from picking up the old root.
+- The frontend tests' undici is 8.12.2 (GHSA-xjj6-f33q-929c, a denial of service through
+  excessive content-encodings; test time only, not in the app).
 
 ## [1.1.0] - 2026-09-27
 
@@ -449,7 +461,8 @@ per-workflow status dot other monitors already show.
   `glab:<host>:token` naming, which has not been checked against a live install.
 - Windows is not targeted.
 
-[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/distronode-corporation/bridgewatch/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/distronode-corporation/bridgewatch/releases/tag/v0.1.0
