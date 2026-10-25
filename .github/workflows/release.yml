@@ -62,6 +62,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
+      build: ${{ steps.version.outputs.build }}
       body: ${{ steps.notes.outputs.body }}
       have_notes: ${{ steps.notes.outputs.have_notes }}
     steps:
@@ -96,9 +97,15 @@ jobs:
       - name: Versions agree with the tag
         run: python3 scripts/check-version.py "$GITHUB_REF_NAME"
 
-      - name: Expose the bare version
+      # `build` is the `+<build>` half of the crash-report release name,
+      # `com.distronode.bridgewatch@<version>+<build>`: the tagged commit's first
+      # 12 hex digits. The build legs bake it into the binary (BRIDGEWATCH_BUILD)
+      # and the `sentry` job names the Sentry release with it, so both read it here.
+      - name: Expose the bare version and the build label
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "build=${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
 
       # Pulls the matching version's section out of CHANGELOG.md so the GitHub Release
       # and the CHANGELOG cannot drift. Index-based rather than a `\[` regex so it is
@@ -293,6 +300,29 @@ jobs:
       - name: Cargo.lock is up to date
         run: cargo fetch --locked
 
+      # ⛔ CRASH REPORTS NEED DEBUG INFORMATION THAT THE SHIPPED BINARY DOES NOT
+      # CARRY. Cargo.toml's release profile strips everything (`strip = true`), so
+      # for this workflow only:
+      #   macOS  line tables, split into a .dSYM per architecture by dsymutil
+      #          (which rustc runs BEFORE it strips), uploaded to Sentry by the
+      #          `sentry` job. The shipped binary stays fully stripped.
+      #   Linux  the symbol table is kept (`strip = "debuginfo"`), so a report
+      #          names its functions even without uploaded files, and the binary
+      #          itself is uploaded for unwinding. A split .dwp is not used: with
+      #          the skeleton units stripped from the binary it maps to nothing
+      #          (measured on 2026-10-25 with rustc 1.98.1).
+      # Nothing else about the build changes.
+      - name: Keep debug information for crash reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = macOS ]; then
+            echo "CARGO_PROFILE_RELEASE_DEBUG=line-tables-only" >> "$GITHUB_ENV"
+            echo "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed" >> "$GITHUB_ENV"
+          else
+            echo "CARGO_PROFILE_RELEASE_STRIP=debuginfo" >> "$GITHUB_ENV"
+          fi
+
       # The notary key is a file for the Tauri CLI (APPLE_API_KEY_PATH), so it is
       # written to the runner's temp dir, which is wiped with the job.
       - name: Write the notarization key
@@ -323,6 +353,12 @@ jobs:
           # hours-long hang in this workflow. "false" restores the `CI: true` check
           # and skips it; the only loss is the styled disk-image window.
           TAURI_BUNDLER_DMG_IGNORE_CI: 'false'
+          # Crash reports (src-tauri/src/crash.rs), read with `option_env!` at
+          # compile time: the address reports go to, and the build label the
+          # release name ends with. A build without the address never sends a
+          # report, and asks nobody; the step after this one refuses that build.
+          BRIDGEWATCH_SENTRY_DSN: ${{ secrets.BRIDGEWATCH_SENTRY_DSN }}
+          BRIDGEWATCH_BUILD: ${{ needs.guard.outputs.build }}
         with:
           # ⛔ NO `tagName` AND NO `releaseId`, ON PURPOSE. With neither, the action
           # logs "No releaseId or tagName provided, skipping all uploads..." and does
@@ -335,6 +371,44 @@ jobs:
           # missing file fails the build rather than shipping without it.
           args: ${{ matrix.args }} --config src-tauri/tauri.licenses.conf.json
           retryAttempts: 2
+
+      # ⛔ AN EMPTY SECRET BUILDS A RELEASE WITH CRASH REPORTS SILENTLY ABSENT, so
+      # the binary is checked for the address it was meant to carry, and the
+      # debug files the `sentry` job uploads are collected here. They are this
+      # run's artifact only; this job still writes nowhere else.
+      - name: The binary carries the crash-report address; keep its debug files
+        shell: bash
+        env:
+          BRIDGEWATCH_SENTRY_DSN: ${{ secrets.BRIDGEWATCH_SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BRIDGEWATCH_SENTRY_DSN" ]; then
+            echo "::error::BRIDGEWATCH_SENTRY_DSN is not set; this release would carry no crash-report address"
+            exit 1
+          fi
+          mkdir -p debug-files
+          if [ "$RUNNER_OS" = macOS ]; then
+            bin=target/universal-apple-darwin/release/bridgewatch-app
+            for arch in aarch64-apple-darwin x86_64-apple-darwin; do
+              dsym="target/$arch/release/bridgewatch-app.dSYM"
+              [ -d "$dsym" ] || { echo "::error::no $dsym"; exit 1; }
+              mkdir -p "debug-files/$arch"
+              cp -R "$dsym" "debug-files/$arch/"
+            done
+          else
+            bin=target/release/bridgewatch-app
+            cp "$bin" debug-files/
+          fi
+          [ -f "$bin" ] || { echo "::error::no $bin"; exit 1; }
+          grep -qF "$BRIDGEWATCH_SENTRY_DSN" "$bin" \
+            || { echo "::error::$bin does not carry the crash-report address"; exit 1; }
+          find debug-files -maxdepth 3 | sort
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debug-files-${{ matrix.id }}
+          path: debug-files/
+          if-no-files-found: error
 
       # ⛔ tauri-action EXITS 0 WHEN IT FINDS NO ARTIFACTS AND HAS NOT BEEN ASKED TO
       # UPLOAD ANY, so the step above cannot be trusted to have produced anything. The
@@ -424,6 +498,80 @@ jobs:
           # The bundles are already compressed; re-deflating them costs minutes and
           # saves nothing.
           compression-level: 0
+
+  # The Sentry release for crash reports: created under the same name the binaries
+  # carry, given the debug files the build legs kept, and pointed at its commits.
+  # A job of its own because it is the only one holding SENTRY_AUTH_TOKEN, which
+  # must never be in `build` (every build script in the tree runs there). It runs
+  # no dependency code: a pinned sentry-cli binary, checked against its SHA-256,
+  # and git. `publish` does not wait for it: symbols arriving late, or a Sentry
+  # outage, must not hold a release back, and a failure here is re-runnable.
+  #
+  # Both secrets are `release` environment secrets, like the APPLE_* ones:
+  #   SENTRY_AUTH_TOKEN       here, with project:releases and project:write on
+  #                           distronode-corporation-eu/bridgewatch
+  #   BRIDGEWATCH_SENTRY_DSN  in `build`, baked into the binary (a DSN is not a
+  #                           credential, it ships in every copy, but it is kept
+  #                           out of the repository all the same)
+  # `set-commits --auto` needs this GitHub repository connected to the Sentry
+  # organisation; `--ignore-missing` lets the first release, which has no
+  # previous one to diff against, through.
+  sentry:
+    needs: [guard, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      # The checkout, for the history `set-commits --auto` reads. Nothing here
+      # writes to GitHub.
+      contents: read
+    env:
+      SENTRY_CLI_VERSION: 3.8.0
+      SENTRY_CLI_SHA256: 13f8cb34ae01a6a272d7d7c22e277a105286615b4020de900ea95a8de47cdbb6
+      SENTRY_URL: https://de.sentry.io
+      SENTRY_ORG: distronode-corporation-eu
+      SENTRY_PROJECT: bridgewatch
+      # No update check against Sentry's release registry from a pinned binary.
+      SENTRY_DISABLE_UPDATE_CHECK: 'true'
+      # Must equal crash::release_name() in the binaries.
+      SENTRY_RELEASE: com.distronode.bridgewatch@${{ needs.guard.outputs.version }}+${{ needs.guard.outputs.build }}
+    steps:
+      # Full history, for `set-commits --auto`, which reads it from git.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: debug-files-*
+          path: debug-files
+
+      - name: Install sentry-cli
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/sentry-cli" \
+            "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64"
+          echo "${SENTRY_CLI_SHA256}  $RUNNER_TEMP/sentry-cli" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$RUNNER_TEMP/sentry-cli" "$HOME/.local/bin/sentry-cli"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/sentry-cli" --version
+
+      - name: Create the Sentry release, upload the debug files, set its commits
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SENTRY_AUTH_TOKEN" ]; then echo "::error::SENTRY_AUTH_TOKEN is not set"; exit 1; fi
+          echo "release $SENTRY_RELEASE"
+          sentry-cli releases new "$SENTRY_RELEASE"
+          # The two .dSYMs (one per macOS architecture) and the two Linux
+          # binaries. `--wait` reports a file Sentry could not process as a
+          # failure instead of leaving it to be found at the first crash.
+          sentry-cli debug-files upload --wait debug-files
+          sentry-cli releases set-commits "$SENTRY_RELEASE" --auto --ignore-missing
+          sentry-cli releases finalize "$SENTRY_RELEASE"
 
   # The only job that can write to the repository, and the only one that can make a
   # release public. It sees bundles, never source, and never runs a build script.
