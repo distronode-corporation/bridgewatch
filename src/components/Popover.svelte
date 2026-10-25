@@ -4,6 +4,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { TONE_DOT, TONE_TEXT, errorLines, isFirstRun, stateTone, stateWord } from "../lib/format";
   import type { Snapshot, Status } from "../lib/types";
+  import CrashReportsAsk from "./CrashReportsAsk.svelte";
   import DebugPane from "./DebugPane.svelte";
   import ErrorStrip from "./ErrorStrip.svelte";
   import { UpdatedAgo, createExpansionStore, type ExpansionStore } from "./jobs";
@@ -30,6 +31,13 @@
     onfix?: () => void;
     /** Open the setup wizard (the error strip's button on a first launch). */
     onsetup?: () => void;
+    /**
+     * Put the crash-report question. The caller decides (from `Status`), and
+     * answers it with `oncrashreports`.
+     */
+    askCrashReports?: boolean;
+    /** The crash-report answer: `true` is Send. */
+    oncrashreports?: (send: boolean) => void;
   }
 
   let {
@@ -44,6 +52,8 @@
     onquit,
     onfix,
     onsetup,
+    askCrashReports = false,
+    oncrashreports,
   }: Props = $props();
 
   // Configuration order, primary first. The core already returns watches in
@@ -92,6 +102,10 @@
   {/if}
 
   <ErrorStrip errors={snapshot.errors} {status} {onfix} {onsetup} />
+
+  {#if askCrashReports && oncrashreports}
+    <CrashReportsAsk onanswer={oncrashreports} />
+  {/if}
 
   <!-- ⛔ `min-h-0` is load-bearing. A flex item's default `min-height: auto`
        refuses to shrink below its content, so without it the list pushes the

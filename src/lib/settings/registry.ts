@@ -422,6 +422,13 @@ export const REGISTRY: RegistryEntry[] = [
     hint: "Every job of a pipeline, or only the ones that decide the verdict.",
   },
   { path: "ui.launch_at_login", tab: "ui", control: "boolean", label: "Launch at login" },
+  {
+    path: "ui.send_crash_reports",
+    tab: "ui",
+    control: "boolean",
+    label: "Send crash reports",
+    hint: "Off until you turn it on. A report holds the error, where it happened and the versions, with your home folder's name taken out of paths.",
+  },
 
   // --- Log ---------------------------------------------------------------
   {

@@ -61,5 +61,15 @@ url = "2"
 # in the core's ConfigEditor and this is the one place the shell touches TOML.
 toml_edit = "0.25.15"
 
+# Opt-in crash reports (`crash.rs`). Off unless the build has an address
+# (BRIDGEWATCH_SENTRY_DSN at compile time) AND the user said yes.
+# `default-features = false` because the defaults bring native-tls (OpenSSL on
+# Linux) and the release-health, logs and metrics pings; what is left is the
+# panic hook, backtraces, the OS and module lists a report needs to be read,
+# and the reqwest transport on rustls, the same reqwest the core already uses.
+# `regex` is the workspace's, for the home-directory scrub.
+sentry = { version = "0.49.3", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "reqwest", "rustls"] }
+regex = { workspace = true }
+
 [dev-dependencies]
 schemars = "1.2.2"

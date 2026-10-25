@@ -33,7 +33,7 @@ const snapshot: Snapshot = {
   request_log: [],
 };
 
-const calls = { status: 0, opened: 0 };
+const calls = { status: 0, opened: 0, edits: [] as unknown[] };
 
 /** What the shell answers for the two "open" requests; reset per test. */
 const shell = {
@@ -41,10 +41,16 @@ const shell = {
   pipelinesUrl: (): Promise<string | null> => Promise.resolve(null),
   openExternal: (_url: string): Promise<void> => Promise.resolve(),
   openWizard: (): Promise<void> => Promise.resolve(),
+  applyConfigEdits: (_edits: unknown): Promise<{ ok: boolean; diagnostics: { message: string }[] }> =>
+    Promise.resolve({ ok: true, diagnostics: [] }),
 };
 
 vi.mock("./lib/ipc", () => ({
   inTauri: () => true,
+  applyConfigEdits: (edits: unknown) => {
+    calls.edits.push(edits);
+    return shell.applyConfigEdits(edits);
+  },
   getSnapshot: () => Promise.resolve(snapshot),
   getStatus: () => {
     calls.status++;
@@ -80,7 +86,9 @@ beforeAll(async () => {
 beforeEach(() => {
   calls.status = 0;
   calls.opened = 0;
+  calls.edits = [];
   shell.status = status;
+  shell.applyConfigEdits = () => Promise.resolve({ ok: true, diagnostics: [] });
   shell.pipelinesUrl = () => Promise.resolve(null);
   shell.openExternal = () => Promise.resolve();
   shell.openWizard = () => Promise.resolve();
@@ -216,5 +224,84 @@ describe("PopoverApp, a request the shell could not carry out", () => {
     window.dispatchEvent(new Event("blur"));
     flushSync();
     expect(notice()).toBe("");
+  });
+});
+
+describe("PopoverApp, the crash-report question", () => {
+  async function settle() {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    flushSync();
+  }
+  const question = () => host.querySelector("[data-slot=crash-reports-ask]");
+  const answer = (which: "send" | "dont-send") =>
+    host.querySelector<HTMLButtonElement>(`[data-slot=crash-reports-ask] [data-answer=${which}]`)!;
+  const notice = () => host.querySelector("[data-slot=popover-notice]")?.textContent?.trim() ?? "";
+  const asking: Status = { ...status, crashReports: "ask" };
+
+  it("is put only while the shell says ask", async () => {
+    for (const crashReports of ["unavailable", "off", "on", undefined] as const) {
+      shell.status = { ...status, crashReports };
+      await render();
+      await settle();
+      expect(question(), String(crashReports)).toBeNull();
+      void unmount(component!);
+      component = null;
+      host.remove();
+    }
+    shell.status = asking;
+    await render();
+    await settle();
+    expect(question()?.textContent).toContain("Send crash reports?");
+  });
+
+  it("offers Don't send first, as the default", async () => {
+    shell.status = asking;
+    await render();
+    await settle();
+    const labels = [...question()!.querySelectorAll("button")].map((b) => b.textContent?.trim());
+    expect(labels).toEqual(["Don't send", "Send"]);
+  });
+
+  it.each([
+    ["dont-send", false],
+    ["send", true],
+  ] as const)("records %s as ui.send_crash_reports = %s, once, and goes", async (which, value) => {
+    shell.status = asking;
+    // The shell answers the next status as answered, as a reload would.
+    shell.applyConfigEdits = () => {
+      shell.status = { ...status, crashReports: value ? "on" : "off" };
+      return Promise.resolve({ ok: true, diagnostics: [] });
+    };
+    await render();
+    await settle();
+    // Two clicks before any re-render: one write.
+    answer(which).click();
+    answer(which).click();
+    await settle();
+    expect(calls.edits).toEqual([[{ op: "set", path: "ui.send_crash_reports", value: { boolean: value } }]]);
+    expect(question()).toBeNull();
+  });
+
+  it("says why, and asks again, when the answer could not be saved", async () => {
+    shell.status = asking;
+    shell.applyConfigEdits = () =>
+      Promise.resolve({ ok: false, diagnostics: [{ message: "permission denied" }] });
+    await render();
+    await settle();
+    answer("send").click();
+    await settle();
+    expect(notice()).toBe("Could not save the crash-report choice: permission denied");
+    expect(question()).not.toBeNull();
+  });
+
+  it("says why when the shell rejects the write outright", async () => {
+    shell.status = asking;
+    shell.applyConfigEdits = () => Promise.reject("the shell is gone");
+    await render();
+    await settle();
+    answer("dont-send").click();
+    await settle();
+    expect(notice()).toBe("Could not save the crash-report choice: the shell is gone");
+    expect(question()).not.toBeNull();
   });
 });

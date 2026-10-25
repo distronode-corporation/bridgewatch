@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import Popover from "./components/Popover.svelte";
   import {
+    applyConfigEdits,
     getSnapshot,
     getStatus,
     hidePopover,
@@ -16,6 +17,7 @@
     refreshNow,
     resizePopover,
   } from "./lib/ipc";
+  import { crashReportsAnswer, shouldAskAboutCrashReports } from "./lib/crash-reports";
   import { messageOf } from "./lib/format";
   import type { Snapshot, Status } from "./lib/types";
 
@@ -33,6 +35,42 @@
   let now = $state(Date.now());
   /** Why the last thing asked of the shell did not happen; cleared when the popover hides. */
   let notice = $state("");
+  /**
+   * Set the moment an answer to the crash-report question is clicked, so the
+   * question goes at once rather than at the next status, and cleared again if
+   * the answer could not be saved.
+   *
+   * ⛔ Checked and set before the first `await`: two clicks landing before the
+   * re-render would otherwise write twice, and the second could contradict
+   * the first.
+   */
+  let crashAnswering = $state(false);
+  const askCrashReports = $derived(shouldAskAboutCrashReports(status) && !crashAnswering);
+
+  async function answerCrashReports(send: boolean) {
+    if (crashAnswering) return;
+    crashAnswering = true;
+    notice = "";
+    let saved = false;
+    try {
+      const result = await applyConfigEdits(crashReportsAnswer(send));
+      saved = result.ok;
+      if (!saved) {
+        const why = result.diagnostics.map((d) => d.message).join("; ") || "the file was not written";
+        notice = `Could not save the crash-report choice: ${why}`;
+      }
+    } catch (error) {
+      notice = `Could not save the crash-report choice: ${messageOf(error)}`;
+    }
+    try {
+      status = await getStatus();
+    } catch {
+      // The next second's status will say.
+    }
+    // Kept set on success: the status above already says it is answered, and
+    // a stale one in flight must not put the question back for a second.
+    if (!saved) crashAnswering = false;
+  }
 
   onMount(() => {
     if (!inTauri()) return;
@@ -188,4 +226,6 @@
   onquit={() => void quit()}
   onfix={() => void openSettings("text")}
   onsetup={() => openOrSay("the setup wizard", openWizard)}
+  {askCrashReports}
+  oncrashreports={(send) => void answerCrashReports(send)}
 />
