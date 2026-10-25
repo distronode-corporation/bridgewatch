@@ -1,6 +1,7 @@
 # bridgewatch
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/distronode-corporation/bridgewatch/badge)](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15887/badge)](https://www.bestpractices.dev/projects/15887)
 
 GitHub and GitLab pipelines in one tray app.
 
