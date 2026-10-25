@@ -105,8 +105,8 @@ pub struct Status {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CrashReports {
-    /// This build has no crash-report address (any build from source), so
-    /// there is nothing to ask about and nothing is ever sent.
+    /// This build has no crash-report address (one compiled locally, or a
+    /// fork's), so there is nothing to ask about and nothing is ever sent.
     Unavailable,
     /// The loaded file has no `[ui].send_crash_reports` yet: never answered.
     Ask,

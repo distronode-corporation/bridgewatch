@@ -231,7 +231,12 @@ Out of scope:
 - For a sign-in, and only for an account with `token = { oauth = ... }`: form `POST`
   requests to the provider's device-code and token endpoints, on github.com, the GitHub
   Enterprise Server host, or the GitLab instance.
-- There is no telemetry, no crash reporting service and no update check.
+- Crash reports, only if you allow them (`[ui].send_crash_reports = true`; the app asks
+  once, with Don't send as the default): after a crash, one report to Distronode's Sentry
+  organisation in the European Union (de.sentry.io), with no user name, IP address or host
+  name in it and home-folder names removed from paths. Only the release builds made by this
+  repository's workflows carry the reporting address; a build you compile yourself never
+  sends one. There is no other telemetry and no update check.
 - Your default browser, for links that pass the rule above, including a sign-in's
   verification page and the page that installs the bridgewatch-ci App on an
   organisation.

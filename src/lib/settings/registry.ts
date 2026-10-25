@@ -427,7 +427,7 @@ export const REGISTRY: RegistryEntry[] = [
     tab: "ui",
     control: "boolean",
     label: "Send crash reports",
-    hint: "Off until you turn it on. A report holds the error, where it happened and the versions, with your user name taken out of paths.",
+    hint: "Off until you turn it on. A report holds the error, where it happened and the versions, with your home folder's name taken out of paths.",
   },
 
   // --- Log ---------------------------------------------------------------

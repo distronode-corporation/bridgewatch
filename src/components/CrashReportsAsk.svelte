@@ -23,7 +23,7 @@
   <h2 id="crash-reports-ask-title" class="text-foreground m-0 text-xs font-semibold">Send crash reports?</h2>
   <p class="text-muted-foreground m-0" data-slot="crash-reports-ask-body">
     If bridgewatch crashes, it can send Distronode a report: the error, where in the code it happened, and the
-    app and system versions. Your user name is taken out of file paths. Nothing is sent unless you choose Send,
+    app and system versions. Your home folder's name is taken out of file paths. Nothing is sent unless you choose Send,
     and you can change this in Settings.
   </p>
   <div class="flex gap-1.5">

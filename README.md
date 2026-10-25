@@ -428,8 +428,8 @@ as a first run: bridgewatch reports it and creates nothing.
 
 ## Crash reports (opt in)
 
-The release builds can send a crash report to Distronode (through Sentry) when the tray
-app fails. They are off until you turn them on. The popover asks once, with **Don't
+The release builds can send a crash report to Distronode's Sentry organisation in the
+European Union (de.sentry.io) when the tray app fails. They are off until you turn them on. The popover asks once, with **Don't
 send** as the default, and **Settings → UI → Send crash reports** changes the answer
 later; both write `[ui].send_crash_reports`. Turning it off takes effect at once.
 
@@ -443,10 +443,12 @@ later; both write `[ui].send_crash_reports`. Turning it off takes effect at once
 - **What it does not:** every home-directory path in it (`/home/<name>`, `/Users/<name>`,
   `C:\Users\<name>`) has the name replaced with `<user>` before it leaves the machine,
   and the user, IP address and host name fields are removed. The config file, tokens,
-  pipelines and logs are not attached.
-- **A build from source never sends anything,** and never asks: the address reports go
-  to is compiled in only by the release workflow (`BRIDGEWATCH_SENTRY_DSN`), so a local
-  or forked build has none. The CLI has no crash reporting.
+  pipelines and logs are not attached. Sentry still sees the connection's IP address, as
+  any server does, and is set not to store it.
+- **Only the release builds made by this repository's workflows can send,** and only
+  they ask: the release workflow compiles the reporting address in
+  (`BRIDGEWATCH_SENTRY_DSN`), and the code does not contain it, so a build you compile
+  yourself, or a fork's, never asks and never sends. The CLI has no crash reporting.
 
 ## Running it
 

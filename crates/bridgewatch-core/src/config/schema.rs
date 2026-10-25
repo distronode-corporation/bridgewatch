@@ -1239,8 +1239,8 @@ pub struct UiConfig {
     pub jobs: JobsMode,
     /// Send a crash report when the app fails. Off until it is turned on, and
     /// left unset until it is answered: the app asks once while it is unset.
-    /// A build with no crash-report address (any build from source) sends
-    /// nothing either way.
+    /// A build with no crash-report address (one you compile yourself, or a
+    /// fork's) sends nothing either way.
     pub send_crash_reports: Option<bool>,
 }
 
