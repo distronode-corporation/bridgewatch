@@ -31,7 +31,11 @@ pub fn get_snapshot(state: Shared<'_>) -> Snapshot {
 /// Shell-level status: the config path, its diagnostics, poll timings.
 #[tauri::command]
 pub fn get_status(app: AppHandle, state: Shared<'_>) -> Status {
-    state.status(app.autolaunch().is_enabled().unwrap_or(false))
+    let crash = crate::crash::global();
+    state.status(
+        app.autolaunch().is_enabled().unwrap_or(false),
+        (crash.has_address(), crash.is_sending()),
+    )
 }
 
 /// Poll now. Returns false when the request was dropped by the rate gate.
@@ -318,6 +322,13 @@ pub fn reload_from_disk(app: &AppHandle, force: bool) {
     if let Some(config) = &running {
         crate::logging::apply_config_level(&config.log.level);
     }
+    // Every route to `[ui].send_crash_reports` ends here (the popover's
+    // question, the Settings checkbox, the text tab, an edit in another
+    // editor), so this is the one place the answer reaches the reporter. A
+    // no takes effect before the next event.
+    crate::crash::global().set_consent(crate::crash::consent_of(
+        running.as_ref().and_then(|c| c.ui.send_crash_reports),
+    ));
     // ⛔ The line the startup one cannot be: on a FIRST run there is no file, so
     // no level is applied, so `[log].level = "info"` in the file the wizard is
     // about to write cannot show the startup line: it was filtered before the

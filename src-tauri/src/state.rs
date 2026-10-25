@@ -96,6 +96,38 @@ pub struct Status {
     pub platform: String,
     /// True when the popover has a native vibrancy material behind it (macOS).
     pub vibrancy: bool,
+    /// Where crash reporting stands; `ask` is the popover's cue to put the
+    /// question. See `crash`.
+    pub crash_reports: CrashReports,
+}
+
+/// Where crash reporting stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrashReports {
+    /// This build has no crash-report address (any build from source), so
+    /// there is nothing to ask about and nothing is ever sent.
+    Unavailable,
+    /// The loaded file has no `[ui].send_crash_reports` yet: never answered.
+    Ask,
+    /// Answered no, or no configuration has loaded yet.
+    Off,
+    /// Answered yes, and a client is running.
+    On,
+}
+
+impl CrashReports {
+    /// `answer` is the loaded file's `[ui].send_crash_reports`, or `None`
+    /// when no file has loaded. A first launch is not asked here: the file the
+    /// question would be written to does not exist until the wizard writes it.
+    pub fn of(has_address: bool, answer: Option<Option<bool>>, sending: bool) -> Self {
+        match (has_address, answer) {
+            (false, _) => Self::Unavailable,
+            (true, Some(None)) => Self::Ask,
+            (true, _) if sending => Self::On,
+            (true, _) => Self::Off,
+        }
+    }
 }
 
 impl AppState {
@@ -178,9 +210,11 @@ impl AppState {
         self.reload.notify_one();
     }
 
-    /// The current shell status.
-    pub fn status(&self, launch_at_login: bool) -> Status {
+    /// The current shell status. `crash` is the reporter's two facts: whether
+    /// the build has an address, and whether it is sending.
+    pub fn status(&self, launch_at_login: bool, crash: (bool, bool)) -> Status {
         let inner = self.lock();
+        let answer = inner.config.as_ref().map(|c| c.ui.send_crash_reports);
         Status {
             config_path: self.config_path.display().to_string(),
             seeded: inner.seeded,
@@ -195,6 +229,7 @@ impl AppState {
             launch_at_login,
             platform: std::env::consts::OS.to_string(),
             vibrancy: crate::windows::vibrancy(),
+            crash_reports: CrashReports::of(crash.0, answer, crash.1),
         }
     }
 
@@ -291,9 +326,28 @@ mod tests {
     }
 
     #[test]
+    fn crash_reports_are_asked_about_once_a_file_has_loaded_without_an_answer() {
+        use CrashReports::*;
+        // No address: nothing to ask, whatever the file says.
+        assert_eq!(CrashReports::of(false, Some(None), false), Unavailable);
+        assert_eq!(
+            CrashReports::of(false, Some(Some(true)), false),
+            Unavailable
+        );
+        // Unanswered in a loaded file is the question; no file is not.
+        assert_eq!(CrashReports::of(true, Some(None), false), Ask);
+        assert_eq!(CrashReports::of(true, None, false), Off);
+        // Answered.
+        assert_eq!(CrashReports::of(true, Some(Some(false)), false), Off);
+        assert_eq!(CrashReports::of(true, Some(Some(true)), true), On);
+        // `On` is what the reporter does, not what the file asks for.
+        assert_eq!(CrashReports::of(true, Some(Some(true)), false), Off);
+    }
+
+    #[test]
     fn a_huge_retry_after_cannot_panic_the_tick_bookkeeping() {
         let state = state_with("");
         state.record_tick(Duration::MAX);
-        assert!(state.status(false).next_poll_secs.is_none());
+        assert!(state.status(false, (false, false)).next_poll_secs.is_none());
     }
 }

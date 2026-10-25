@@ -40,6 +40,7 @@
           "max_height": 720,
           "width": 440
         },
+        "send_crash_reports": null,
         "theme_css": ""
       }
     },
@@ -630,6 +631,14 @@
             "max_height": 720,
             "width": 440
           }
+        },
+        "send_crash_reports": {
+          "description": "Send a crash report when the app fails. Off until it is turned on, and\nleft unset until it is answered: the app asks once while it is unset.\nA build with no crash-report address (any build from source) sends\nnothing either way.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
         },
         "theme_css": {
           "description": "Path to a CSS file layered over the built-in theme.",

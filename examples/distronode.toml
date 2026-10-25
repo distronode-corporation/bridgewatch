@@ -76,6 +76,7 @@ popover = { width = 440, max_height = 720, hide_on_blur = true }
 theme_css = ""
 launch_at_login = false
 jobs = "all"                           # all: every job, grouped by stage | failures: only failures, warnings and gates
+# send_crash_reports = false           # unset until answered: the app asks once; true sends a report when it fails
 
 [log]
 level = "info"

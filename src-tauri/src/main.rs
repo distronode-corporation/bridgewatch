@@ -12,6 +12,7 @@
 
 mod commands;
 mod config;
+mod crash;
 mod guard;
 mod icons;
 mod jobs;
@@ -78,6 +79,15 @@ fn main() {
     // After the level is applied, so `[log].level = "info"` shows it. One
     // line, so a bug report's log says which file was in force.
     tracing::info!("{}", logging::startup_line(&resolved));
+    // Before anything that can panic: a yes recorded in the file covers the
+    // rest of startup too. No address in this build, or no yes, and no client
+    // is created at all (see `crash`).
+    crash::global().set_consent(crash::consent_of(
+        resolved
+            .loaded
+            .as_ref()
+            .and_then(|l| l.config.ui.send_crash_reports),
+    ));
     let state = Arc::new(AppState::new(resolved));
 
     tauri::Builder::default()
@@ -201,10 +211,12 @@ fn main() {
             }
             // Linux: the tray's image files live in a per-run directory that
             // only this removes (a killed run's is swept at the next start).
-            // Everywhere: the log file's queued lines are written out.
+            // Everywhere: the log file's queued lines are written out, and a
+            // queued crash report (if they are on) is sent.
             tauri::RunEvent::Exit => {
                 tray::remove_icon_dir(app);
                 logging::flush();
+                crash::global().shutdown();
             }
             _ => {}
         });

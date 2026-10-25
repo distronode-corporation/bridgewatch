@@ -237,7 +237,17 @@ export interface Status {
    * recognises the shell's first-run diagnostic instead.
    */
   firstRun?: boolean;
+  /**
+   * Where crash reporting stands (`crash.rs` in the shell). `ask` is the
+   * popover's cue to put the question once; `unavailable` is a build with no
+   * crash-report address, which never sends. Optional so that a status
+   * written without it reads as "do not ask".
+   */
+  crashReports?: CrashReports;
 }
+
+/** `state::CrashReports` in the shell. */
+export type CrashReports = "unavailable" | "ask" | "off" | "on";
 
 /** `bridgewatch_core::config::edit::Edit`, tagged by `op`. */
 export type EditValue =

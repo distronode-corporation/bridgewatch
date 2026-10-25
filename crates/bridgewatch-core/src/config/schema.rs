@@ -1237,6 +1237,11 @@ pub struct UiConfig {
     /// stage) or `failures` (only what the verdict names). A watch may override
     /// it with `show.jobs`.
     pub jobs: JobsMode,
+    /// Send a crash report when the app fails. Off until it is turned on, and
+    /// left unset until it is answered: the app asks once while it is unset.
+    /// A build with no crash-report address (any build from source) sends
+    /// nothing either way.
+    pub send_crash_reports: Option<bool>,
 }
 
 /// Popover geometry.

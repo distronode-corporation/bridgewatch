@@ -426,6 +426,28 @@ tray menu (**Setup wizard…**) or from Settings.
 A `--config` or `BRIDGEWATCH_CONFIG` path that does not exist is treated as a typo, not
 as a first run: bridgewatch reports it and creates nothing.
 
+## Crash reports (opt in)
+
+The release builds can send a crash report to Distronode (through Sentry) when the tray
+app fails. They are off until you turn them on. The popover asks once, with **Don't
+send** as the default, and **Settings → UI → Send crash reports** changes the answer
+later; both write `[ui].send_crash_reports`. Turning it off takes effect at once.
+
+- **Nothing is sent before a yes.** With the key unset or `false`, no crash-report client
+  is created at all. A test (`src-tauri/tests/crash_reports.rs`) points the client at a
+  local server and checks that a panic sends zero requests with consent off, one with
+  consent on, and none again once consent is taken back.
+- **What a report holds:** the error message, the stack (function names, and source
+  file names and line numbers where the build has them), the app's release, the OS name
+  and version, the CPU architecture and the list of loaded libraries.
+- **What it does not:** every home-directory path in it (`/home/<name>`, `/Users/<name>`,
+  `C:\Users\<name>`) has the name replaced with `<user>` before it leaves the machine,
+  and the user, IP address and host name fields are removed. The config file, tokens,
+  pipelines and logs are not attached.
+- **A build from source never sends anything,** and never asks: the address reports go
+  to is compiled in only by the release workflow (`BRIDGEWATCH_SENTRY_DSN`), so a local
+  or forked build has none. The CLI has no crash reporting.
+
 ## Running it
 
 - **No Dock icon on macOS.** bridgewatch is a menu bar item. Left-click the icon for the
@@ -743,6 +765,7 @@ and call depth are capped. A script that errors or returns an unknown name yield
 | `popover.hide_on_blur` | Hide the popover when it loses focus [true]. |
 | `theme_css` | Path to a `.css` file (at most 256 KiB) layered over the built-in theme [`""`]. |
 | `launch_at_login` | Register a login item. The checkbox in Settings and the tray menu set the OS login item and mirror its state here [false]. |
+| `send_crash_reports` | Send a crash report when the app fails, see [Crash reports (opt in)](#crash-reports-opt-in). Unset means not answered yet, and the popover asks once; only `true` sends [unset]. |
 | `jobs` | `all` or `failures`, see [the job view](#the-job-view-and-what-live-means) [`all`]. |
 
 **`[log]`**:
