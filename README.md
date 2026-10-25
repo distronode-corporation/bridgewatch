@@ -316,7 +316,7 @@ provenance attestation:
 gh attestation verify bridgewatch_1.1.0_amd64.deb --repo distronode-corporation/bridgewatch
 ```
 
-From the next release on, the attestation is also attached to the release as
+Every release also carries the attestation as
 `bridgewatch_<version>.intoto.jsonl`, so the same check works offline with
 `--bundle bridgewatch_<version>.intoto.jsonl` added. Every bundle carries `LICENSE`,
 `NOTICE` and the licence texts of the Rust crates and npm packages built into it

@@ -152,6 +152,9 @@ Conventional Commits are not required. What is required is that the message says
 not just what. The diff already says what. A good message names the thing that was
 wrong, the evidence, and what would have caught it.
 
+A change in behaviour comes with a test that fails without it: `cargo test` for Rust, vitest
+for the frontend.
+
 Pull requests run `.github/workflows/ci.yml` and all of it must be green.
 
 ## Licence of contributions
