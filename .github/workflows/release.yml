@@ -393,7 +393,10 @@ jobs:
               dsym="target/$arch/release/bridgewatch-app.dSYM"
               [ -d "$dsym" ] || { echo "::error::no $dsym"; exit 1; }
               mkdir -p "debug-files/$arch"
-              cp -R "$dsym" "debug-files/$arch/"
+              # cargo uplifts the .dSYM as a relative symlink into deps/; -L copies the bundle
+              cp -RL "$dsym" "debug-files/$arch/"
+              ls "debug-files/$arch/bridgewatch-app.dSYM/Contents/Resources/DWARF/"* >/dev/null \
+                || { echo "::error::no DWARF in the copied $dsym"; exit 1; }
             done
           else
             bin=target/release/bridgewatch-app
