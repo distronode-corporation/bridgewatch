@@ -1,7 +1,14 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/distronode-logo-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset=".github/assets/distronode-logo-light.png">
+  <img alt="Distronode" src=".github/assets/distronode-logo-light.png" width="220">
+</picture>
+
 # bridgewatch
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/distronode-corporation/bridgewatch/badge)](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15887/badge)](https://www.bestpractices.dev/projects/15887)
+[![Latest release](https://img.shields.io/github/v/release/distronode-corporation/bridgewatch?label=release)](https://github.com/distronode-corporation/bridgewatch/releases/latest)
 
 GitHub and GitLab pipelines in one tray app.
 
@@ -12,6 +19,10 @@ pipeline status.
 
 A Rust core crate, a `bridgewatch` CLI and a Tauri 2 GUI (Svelte 5). macOS and Linux.
 Apache-2.0.
+
+<img alt="The bridgewatch popover: one watch deployed, two more green with no deploy, each row with its commit, branch and age" src="docs/images/popover.png" width="440">
+
+*The 1.2.0 popover on Linux, watching three of our public repositories.*
 
 **Status:** 1.2.0, released 2026-10-25. Download it from the
 [Releases page](https://github.com/distronode-corporation/bridgewatch/releases/latest): a
@@ -65,14 +76,14 @@ So bridgewatch is:
 
 | State | Glyph (builtin) | Means |
 | --- | --- | --- |
-| `failed` | red octagon | The pipeline carrying the deploy marker failed before any marker succeeded, a bridge is dead (it never produced its downstream) and no marker exists, a blocking job in the parent failed, (with no marker) a bridge failed, or the pipeline failed before it had any job. |
-| `deployed_with_failure` | amber triangle | A marker succeeded, and a sibling bridge failed or a blocking job failed around it, under the default `downgrade` policies. |
-| `deployed` | green filled check | A marker succeeded, no other marker can still move, and nothing is holding it back. |
-| `running` | blue arrows | A marker is in flight (even after another one succeeded), or (with no marker) something is still running. |
-| `canceled` | grey slash | The parent was canceled, or every marker was. A skipped pipeline ran nothing and is not listed. |
-| `parked_gate` | amber hourglass | No marker, nothing running, nothing broken, and a manual job or bridge is waiting for a person. |
-| `succeeded_no_deploy` | green outline check | Everything settled green and no marker ran. Normal for a lane that does not deploy. |
-| `unknown` | grey question mark | No data yet, the pipeline's job lists could not be read, a marker is in a status this build does not know, or a verdict script failed. |
+| `failed` | <img src="src-tauri/icons/tray/color/failed@1x.png" width="22" height="22" alt=""> red octagon | The pipeline carrying the deploy marker failed before any marker succeeded, a bridge is dead (it never produced its downstream) and no marker exists, a blocking job in the parent failed, (with no marker) a bridge failed, or the pipeline failed before it had any job. |
+| `deployed_with_failure` | <img src="src-tauri/icons/tray/color/deployed_with_failure@1x.png" width="22" height="22" alt=""> amber triangle | A marker succeeded, and a sibling bridge failed or a blocking job failed around it, under the default `downgrade` policies. |
+| `deployed` | <img src="src-tauri/icons/tray/color/deployed@1x.png" width="22" height="22" alt=""> green filled check | A marker succeeded, no other marker can still move, and nothing is holding it back. |
+| `running` | <img src="src-tauri/icons/tray/color/running@1x.png" width="22" height="22" alt=""> blue arrows | A marker is in flight (even after another one succeeded), or (with no marker) something is still running. |
+| `canceled` | <img src="src-tauri/icons/tray/color/canceled@1x.png" width="22" height="22" alt=""> grey slash | The parent was canceled, or every marker was. A skipped pipeline ran nothing and is not listed. |
+| `parked_gate` | <img src="src-tauri/icons/tray/color/parked_gate@1x.png" width="22" height="22" alt=""> amber hourglass | No marker, nothing running, nothing broken, and a manual job or bridge is waiting for a person. |
+| `succeeded_no_deploy` | <img src="src-tauri/icons/tray/color/succeeded_no_deploy@1x.png" width="22" height="22" alt=""> green outline check | Everything settled green and no marker ran. Normal for a lane that does not deploy. |
+| `unknown` | <img src="src-tauri/icons/tray/color/unknown@1x.png" width="22" height="22" alt=""> grey question mark | No data yet, the pipeline's job lists could not be read, a marker is in a status this build does not know, or a verdict script failed. |
 
 The icon reflects the newest pipeline of each primary watch. With more than one primary
 watch the worst state wins (in the order `failed`, `deployed_with_failure`, `running`,
