@@ -445,3 +445,34 @@ describe("a fresh start where gh's token is found too", () => {
     expect(checkedMode()).toBe("gh");
   });
 });
+
+describe("changing the instance while gitlab.com's glab token was found", () => {
+  it("never preselects or tests the old host's token while the new detection is out", async () => {
+    const LAB = { keyring: { service: "glab:gitlab.com:token", user: "" } };
+    let answerAcme: (d: unknown) => void = () => {};
+    const api = fakeApi();
+    api.detectCliToken.mockImplementation((base: string) =>
+      base === "https://gitlab.com"
+        ? Promise.resolve({ status: "found", source: LAB })
+        : new Promise((r) => (answerAcme = r)),
+    );
+    // No built-in sign-in anywhere, and availability always answers at once.
+    const oauth = fakeOAuth(() => ({ ...OFF, host: "gitlab.com" }));
+    await start(api, oauth);
+    expect(checkedMode()).toBe("glab");
+
+    await click('input[name="instance"][value="self-managed"]');
+    await type("#wizard-base-url", "https://gitlab.acme.com");
+    q<HTMLInputElement>("#wizard-base-url")!.dispatchEvent(new Event("blur"));
+    await settle();
+    // Availability answered for the new host; detection has not.
+    expect(checkedMode()).not.toBe("glab");
+    await click('[data-action="test-connection"]');
+    for (const call of api.testConnection.mock.calls) expect(JSON.stringify(call)).not.toContain("glab:gitlab.com");
+
+    answerAcme({ status: "not_found", service: "glab:gitlab.acme.com:token" });
+    await settle();
+    expect(checkedMode()).toBe("paste");
+    expect(q('input[name="token-mode"][value="glab"]')).toBeNull();
+  });
+});

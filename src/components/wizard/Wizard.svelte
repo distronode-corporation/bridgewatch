@@ -160,7 +160,7 @@
     if (!mayPreselect()) return;
     if (availability?.builtin) {
       draft.tokenMode = "oauth";
-    } else if (cli?.status === "found") {
+    } else if (cli?.status === "found" && cliBase === baseUrlOf(draft)) {
       draft.cliSource = cli.source;
       draft.tokenMode = "cli";
     } else {
@@ -230,6 +230,8 @@
 
   // --- step 1: CLI token detection (glab or gh) and test connection -------
   let cli = $state<CliTokenDetection | null>(null);
+  /** The instance `cli` answers for: a token is only ever used on the instance it was found for. */
+  let cliBase: string | null = null;
   let detectedSource: Draft["cliSource"] = null;
   let detectSeq = 0;
   // `draft` is a deep $state proxy, so compare sources by value, never by identity.
@@ -248,6 +250,7 @@
     }
     if (seq !== detectSeq) return;
     cli = result;
+    cliBase = base;
     if (result.status === "found") {
       const adopt = draft.tokenMode === "cli" || mayPreselect();
       if (adopt || sameSource(draft.cliSource, detectedSource)) draft.cliSource = result.source;
@@ -262,6 +265,15 @@
 
   function instanceChanged() {
     if (!draft.accountEdited) draft.account = suggestAccountName(baseUrlOf(draft), draft.provider);
+    // ⛔ The last instance's CLI token answers nothing about this one. Kept until
+    // the new detection answered, it was preselected (and sent by Test
+    // connection) against the new host whenever availability answered first.
+    if (cliBase !== null && cliBase !== baseUrlOf(draft)) {
+      if (sameSource(draft.cliSource, detectedSource)) draft.cliSource = null;
+      cli = null;
+      cliBase = null;
+      detectedSource = null;
+    }
     // A sign-in belongs to the instance it was made on.
     if (signedInBase !== null && signedInBase !== baseUrlOf(draft)) {
       draft.oauthLogin = null;
@@ -279,6 +291,7 @@
     if (draft.tokenMode !== before) modeChosen = false;
     // The last provider's detection answers nothing about this one.
     cli = null;
+    cliBase = null;
     detectedSource = null;
     listing = null;
     listingKey = null;

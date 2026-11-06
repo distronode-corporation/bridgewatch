@@ -81,6 +81,10 @@ and the app gets a Homebrew cask.
   the README said to redirect the output, and a `>` onto the config empties it before
   `init` reads it. They now say to write a new file, check it and move it into place.
   The printed `auth login` step carries `--config` when it was given.
+- **The wizard never uses the previous instance's CLI token.** After the instance changed,
+  the old host's glab or gh token stayed preselected until the new detection answered, so
+  **Test connection** in that gap could send it to the new host. A detected token is now
+  tied to the instance it was found for.
 - **Settings: signing in through a newly typed client id writes it.** A successful
   sign-in already switched an account to `oauth`. When the account signed in already but
   through another application, the new client id stayed unwritten until **Use this
