@@ -29,6 +29,18 @@ body line with a bracket.
     gitlab.com account, instead of bridgewatch's own entry.
   - `bridgewatch init` with no token flag writes `token = { oauth = true }` there. It
     keeps `own = true` on any other host.
+  - In the wizard, the **Sign in** button sits directly under its option, before the
+    alternatives. The section is called **Access**, and what a token must be allowed to do
+    is said only while a token option is chosen.
+
+### Fixed
+
+- **Settings: signing in through a newly typed client id writes it.** A successful
+  sign-in already switched an account to `oauth`. When the account signed in already but
+  through another application, the new client id stayed unwritten until **Use this
+  source** was pressed. That button is now hidden for the sign-in the file already uses.
+- **Settings: every tab label stays on one line.** At the narrowest window, **Edit as
+  text** wrapped onto three lines.
 
 ### Added
 

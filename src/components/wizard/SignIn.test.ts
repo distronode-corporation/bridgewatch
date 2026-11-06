@@ -160,6 +160,30 @@ describe("sign-in with a built-in application", () => {
     expect(text('[data-action="oauth-sign-in"]')).toBe("Sign in with GitHub");
   });
 
+  it("puts the sign-in button right under its option, before the alternatives, under the Access legend", async () => {
+    await github(fakeApi(), fakeOAuth(() => BUILT_IN));
+    const legend = [...document.body.querySelectorAll("legend")].map((l) => l.textContent?.trim());
+    expect(legend).toContain("Access");
+    expect(legend).not.toContain("Token");
+    const order = [
+      ...document.body.querySelectorAll<HTMLElement>('input[name="token-mode"], [data-action="oauth-sign-in"]'),
+    ].map((el) => (el instanceof HTMLInputElement ? el.value : "BUTTON"));
+    expect(order).toEqual(["oauth", "BUTTON", "paste", "env", "command"]);
+  });
+
+  it("says what a token needs only while a token is chosen, never for sign-in", async () => {
+    await github(fakeApi(), fakeOAuth(() => BUILT_IN));
+    expect(q('[data-slot="token-needs"]')).toBeNull();
+    const fieldset = q('fieldset[aria-describedby="wizard-token-msg"]');
+    expect(fieldset).not.toBeNull();
+    for (const mode of ["paste", "env", "command"]) {
+      await click(`input[name="token-mode"][value="${mode}"]`);
+      expect(text('[data-slot="token-needs"]')).toContain("Actions: read");
+    }
+    await click('input[name="token-mode"][value="oauth"]');
+    expect(q('[data-slot="token-needs"]')).toBeNull();
+  });
+
   it("shows the code large with copy and open, waits, then names who signed in", async () => {
     const oauth = fakeOAuth(() => BUILT_IN);
     let approve: (s: SignedIn) => void = () => {};

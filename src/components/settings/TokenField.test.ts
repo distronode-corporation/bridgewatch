@@ -515,6 +515,31 @@ describe("TokenField, sign in", () => {
     expect(edits).toEqual([]);
   });
 
+  it("offers no Use this source for the sign-in the file already uses, and does again for a new client id", async () => {
+    await renderWith(fake(true), { oauth: true });
+    expect(host.querySelector("button.apply")).toBeNull();
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="OAuth client id"]')!;
+    input.value = "Iv23liMINE";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    expect(host.querySelector("button.apply")).not.toBeNull();
+  });
+
+  it("writes a newly typed client id when the sign-in through it succeeds", async () => {
+    const oauth = fake(true);
+    const edits = await renderWith(oauth, { oauth: true });
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="OAuth client id"]')!;
+    input.value = "Iv23liMINE";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    oauth.status.mockResolvedValue(SIGNED_IN);
+    await press('[data-action="oauth-sign-in"]');
+    expect(oauth.start.mock.calls[0][0]).toMatchObject({ client_id: "Iv23liMINE" });
+    expect(edits).toHaveLength(1);
+    expect(edits[0].at(-1)).toEqual({ op: "set", path: "accounts.gh.token.oauth.client_id", value: { string: "Iv23liMINE" } });
+    expect(host.textContent).toContain("This account now uses the sign-in.");
+  });
+
   it("shows the stored sign-in, signs out, and links the app's install page", async () => {
     const oauth = fake(true, SIGNED_IN);
     await renderWith(oauth, { oauth: true });

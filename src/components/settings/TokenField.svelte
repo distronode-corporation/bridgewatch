@@ -150,6 +150,9 @@
     offerSignIn ? [["oauth", `Sign in with ${providerName(provider)}`], ...kinds] : kinds,
   );
 
+  /** The file already signs in through exactly the application the form names. */
+  const fileHasThisSignIn = $derived(current.kind === "oauth" && current.clientId === clientId.trim());
+
   /** Who this account is signed in as, when it signs in. */
   async function loadStatus() {
     if (!oauth) return;
@@ -394,7 +397,10 @@
             // step. It used to wait for "Use this source", and a real sign-in
             // on 2026-09-19 left both accounts reading their old source with a
             // stored sign-in nobody used.
-            const switching = current.kind !== "oauth";
+            // ⛔ A different client id counts as switching too: signing in with a
+            // typed id while the file still says the built-in one stored tokens
+            // the file's application could never refresh.
+            const switching = !fileHasThisSignIn;
             if (switching) chooseOauth();
             message = switching
               ? `Signed in as @${signed.login ?? "unknown"}. This account now uses the sign-in.`
@@ -468,7 +474,11 @@
       </div>
     {/if}
 
-    <Button variant="secondary" size="sm" class="apply self-start" onclick={apply}>Use this source</Button>
+    <!-- Not for a sign-in the file already uses: a successful sign-in writes its
+         source itself, so the button would only rewrite what is there. -->
+    {#if !(kind === "oauth" && fileHasThisSignIn)}
+      <Button variant="secondary" size="sm" class="apply self-start" onclick={apply}>Use this source</Button>
+    {/if}
     {#if message}
       <p class={["message m-0", HINT]}>{message}</p>
     {/if}
