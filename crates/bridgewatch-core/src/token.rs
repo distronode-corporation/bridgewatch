@@ -151,6 +151,27 @@ pub enum TokenError {
          bridgewatch auth login --account {0}"
     )]
     NotSignedIn(String),
+    /// The account's stored sign-in was issued by another instance, or for
+    /// another application, than the account now names. It is never sent.
+    #[error(
+        "the sign-in of account {account:?} is not used: it is {why}. Sign in again from \
+         Settings, or run bridgewatch auth login --account {account}"
+    )]
+    SignedInElsewhere {
+        /// The `[accounts.*]` key.
+        account: String,
+        /// Which way it does not fit, from `oauth::Fit::mismatch`.
+        why: String,
+    },
+    /// The account signs in, and which application it signs in with cannot
+    /// be said, so a stored sign-in cannot be checked against it.
+    #[error("account {account:?} cannot use its sign-in: {message}")]
+    NoClientId {
+        /// The `[accounts.*]` key.
+        account: String,
+        /// Why there is no client id, and what to write.
+        message: String,
+    },
     /// The credential carries a `go-keyring-*` envelope that would not decode.
     #[error(
         "the credential is wrapped in a {envelope:?} envelope that will not decode: {message}. \
@@ -672,16 +693,17 @@ fn secret_tool_lookup_args(service: &str) -> Vec<&str> {
     }
 }
 
-/// Resolve a token for one account.
+/// Resolve the token of one account, from its `token` source.
 ///
-/// `account` names the `[accounts.*]` entry and is used only by
-/// [`TokenSource::Own`], which addresses `bridgewatch:<account>`.
+/// `account_name` names the `[accounts.*]` entry: [`TokenSource::Own`]
+/// addresses `bridgewatch:<account_name>`, and a sign-in is stored under it.
+/// `account` is the entry itself, which a sign-in is checked against.
 pub fn resolve(
-    source: &TokenSource,
-    account: &str,
+    account_name: &str,
+    account: &crate::config::Account,
     provider: &dyn TokenProvider,
 ) -> Result<Secret, TokenError> {
-    let raw = match source {
+    let raw = match &account.token {
         TokenSource::Keyring { service, user } => provider.keyring_get(service, user)?,
         TokenSource::Env(name) => provider
             .env(name)
@@ -694,20 +716,42 @@ pub fn resolve(
         // user to pipe through `head -1` — made the documented recipe fail.
         TokenSource::Command(argv) => first_line(&provider.run(argv)?),
         TokenSource::Own(true) => provider.keyring_get(
-            &SystemTokenProvider::own_service(account),
+            &SystemTokenProvider::own_service(account_name),
             SystemTokenProvider::OWN_USER,
         )?,
-        TokenSource::Own(false) => return Err(TokenError::NotConfigured(account.to_string())),
+        TokenSource::Own(false) => return Err(TokenError::NotConfigured(account_name.to_string())),
         // The access token as it was last stored, possibly expired. What
         // POLLS goes through `oauth::OAuthTransport`, which refreshes it; this
         // path serves a caller that wants one value now and can say "sign in
         // again" when it is refused.
-        TokenSource::Oauth(_) => match crate::oauth::store::load(account, provider) {
-            Ok(Some(set)) => set.access_token.expose().to_string(),
-            Ok(None) => return Err(TokenError::NotSignedIn(account.to_string())),
+        //
+        // ⛔ Through the same check as the poller's session: a set issued by
+        // another instance, or for another application, is refused here
+        // rather than handed to a caller that sends it to the account's
+        // `base_url` as it reads now.
+        TokenSource::Oauth(oauth) => match crate::oauth::store::load(account_name, provider) {
+            Ok(Some(set)) => {
+                let client_id = crate::oauth::client_id_for(
+                    account,
+                    oauth,
+                    &crate::oauth::BuiltinClients::shipped(),
+                )
+                .map_err(|e| TokenError::NoClientId {
+                    account: account_name.to_string(),
+                    message: e.to_string(),
+                })?;
+                if let Some(why) = set.fit(account, &client_id).mismatch() {
+                    return Err(TokenError::SignedInElsewhere {
+                        account: account_name.to_string(),
+                        why,
+                    });
+                }
+                set.access_token.expose().to_string()
+            }
+            Ok(None) => return Err(TokenError::NotSignedIn(account_name.to_string())),
             Err(e) => {
                 return Err(TokenError::Store {
-                    service: crate::oauth::store::service(account),
+                    service: crate::oauth::store::service(account_name),
                     message: e.to_string(),
                 });
             }

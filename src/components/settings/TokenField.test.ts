@@ -528,6 +528,39 @@ describe("TokenField, sign in", () => {
     expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("Not signed in");
   });
 
+  it("says a sign-in issued by another server is not used, rather than signed in", async () => {
+    // ⛔ The poller never sends a sign-in issued by another instance, and this
+    // line said "Signed in as @octocat" for it all the same.
+    const oauth = fake(true, {
+      ...SIGNED_IN,
+      mismatch: { kind: "other_instance", issued: "github.com", expected: "ghe.acme.com" },
+    });
+    await renderWith(oauth, { oauth: true }, "https://ghe.acme.com");
+    const line = host.querySelector('[data-slot="oauth-status"]');
+    expect(line?.getAttribute("role")).toBe("alert");
+    expect(line?.textContent?.trim()).toBe(
+      "Signed in for github.com, not ghe.acme.com, so the sign-in is not used. Sign in again.",
+    );
+    expect(host.textContent).not.toContain("Signed in as");
+    expect(host.querySelector('[data-action="oauth-sign-in"]')?.textContent?.trim()).toBe("Sign in again");
+    // It can still be removed.
+    expect(host.querySelector("button.sign-out")).not.toBeNull();
+  });
+
+  it("says a sign-in for another application is not used", async () => {
+    const oauth = fake(true, { ...SIGNED_IN, mismatch: { kind: "other_application" } });
+    await renderWith(oauth, { oauth: { client_id: "Iv23liMINE" } });
+    expect(host.querySelector('[data-slot="oauth-status"]')?.textContent?.trim()).toBe(
+      "Signed in with another application than this account's client id, so the sign-in is not used. Sign in again.",
+    );
+  });
+
+  it("shows a sign-in whose mismatch is null as signed in", async () => {
+    const oauth = fake(true, { ...SIGNED_IN, mismatch: null });
+    await renderWith(oauth, { oauth: true });
+    expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("Signed in as @octocat");
+  });
+
   it("says the sign-in could not be read, rather than that there is none", async () => {
     // ⛔ A locked keychain or a denied prompt made `oauth_status` reject, and
     // the form said "Not signed in." for an account that is: the user signed

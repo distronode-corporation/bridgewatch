@@ -18,14 +18,13 @@ use anyhow::{Context, Result};
 use bridgewatch_core::actions::{self, JobAction, JobTarget};
 use bridgewatch_core::client::fixture::ScrubMode;
 use bridgewatch_core::client::{
-    CiClient, ClientError, FixtureTransport, GitLabClient, RequestRing, ReqwestTransport,
-    client_for,
+    CiClient, ClientError, FixtureTransport, RequestRing, ReqwestTransport, Transport, client_for,
 };
 use bridgewatch_core::config::{self, Config, ProjectRef};
 use bridgewatch_core::eta::EtaHistory;
 use bridgewatch_core::notify::NotifyLedger;
 use bridgewatch_core::poll::Poller;
-use bridgewatch_core::token::{self, Secret, SystemTokenProvider};
+use bridgewatch_core::token::{Secret, SystemTokenProvider, TokenProvider};
 use bridgewatch_core::verdict::{IconState, Snapshot};
 use clap::{Args, Parser, Subcommand};
 
@@ -849,6 +848,7 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
             &config,
             account.as_deref(),
             &store,
+            &bridgewatch_core::oauth::BuiltinClients::shipped(),
             now,
             &mut std::io::stdout(),
         ),
@@ -1177,17 +1177,25 @@ async fn fixture(config_args: &ConfigArgs, action: FixtureAction) -> Outcome {
             })?,
     };
 
-    let token = token::resolve(&account_def.token, &account_name, &SystemTokenProvider)
-        .with_context(|| format!("cannot resolve the token for account {account_name:?}"))?;
     let transport =
         ReqwestTransport::new(std::time::Duration::from_secs(account_def.timeout_secs))?;
-    let ring = RequestRing::new(config.log.keep_requests);
-    let client = GitLabClient::new(account_def, &token, Arc::new(transport), ring);
+    let client = recording_client(
+        &account_name,
+        account_def,
+        Arc::new(SystemTokenProvider),
+        Arc::new(transport),
+        RequestRing::new(config.log.keep_requests),
+    )?;
 
-    let recorded =
-        bridgewatch_core::client::fixture::record(&client, &project_ref, pipeline_id, &out, list)
-            .await
-            .context("recording failed")?;
+    let recorded = bridgewatch_core::client::fixture::record(
+        client.as_ref(),
+        &project_ref,
+        pipeline_id,
+        &out,
+        list,
+    )
+    .await
+    .context("recording failed")?;
 
     println!("wrote {}:", recorded.dir.display());
     for f in &recorded.files {
@@ -1201,6 +1209,30 @@ async fn fixture(config_args: &ConfigArgs, action: FixtureAction) -> Outcome {
     }
     println!("\nNow write {}/expected.json.", recorded.dir.display());
     Ok(exit::OK)
+}
+
+/// The client `fixture record` records through: the poller's, so a sign-in
+/// goes through its guarded session.
+///
+/// ⛔ It used to resolve the token and build a GitLab client by hand. For an
+/// `oauth` account that sent the stored access token to whatever `base_url`
+/// the file named now, even one the sign-in was never issued by, and sent it
+/// as `PRIVATE-TOKEN`, which GitLab refuses for an OAuth token.
+fn recording_client(
+    name: &str,
+    account: &config::Account,
+    store: Arc<dyn TokenProvider>,
+    transport: Arc<dyn Transport>,
+    ring: RequestRing,
+) -> std::result::Result<Arc<dyn CiClient>, Failure> {
+    bridgewatch_core::poll::client_for_account_on(name, account, None, store, transport, ring)
+        .map_err(|e| {
+            Failure::new(
+                exit::ERROR,
+                anyhow::Error::new(e)
+                    .context(format!("cannot resolve the token for account {name:?}")),
+            )
+        })
 }
 
 /// Re-apply the recording allow-list to fixture directories.
@@ -1276,6 +1308,108 @@ fn scrub_fixtures(dirs: &[PathBuf], check: bool) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::{OWN_CRATES, exit, tracing_filter};
+
+    mod fixture_record {
+        use std::sync::Arc;
+
+        use bridgewatch_core::client::{
+            ClientError, HttpRequest, RequestRing, ScriptTransport, Transport,
+        };
+        use bridgewatch_core::config::{Account, OAuthSource, ProjectRef, Provider, TokenSource};
+        use bridgewatch_core::oauth::{TokenSet, store};
+        use bridgewatch_core::token::{Secret, TokenProvider};
+
+        use super::super::recording_client;
+        use crate::auth::tests::Memory;
+
+        fn account(base_url: &str) -> Account {
+            let mut account = Account::for_provider(Provider::Gitlab);
+            account.base_url = base_url.into();
+            account.token = TokenSource::Oauth(OAuthSource {
+                client_id: Some("self-app".into()),
+            });
+            account
+        }
+
+        /// What `gl` stored when it signed in to gitlab.com.
+        fn store_issued_by_gitlab_com() -> Arc<Memory> {
+            let memory = Arc::new(Memory::default());
+            let set = TokenSet {
+                access_token: Secret::new("gl-OAUTH-A"),
+                refresh_token: None,
+                expires_at: None,
+                refresh_expires_at: None,
+                scopes: vec!["read_api".into()],
+                login: Some("alice".into()),
+                client_id: "self-app".into(),
+                base_url: "https://gitlab.com".into(),
+                obtained_at: 1,
+            };
+            store::save("gl", &set, memory.as_ref()).unwrap();
+            memory
+        }
+
+        fn header(request: &HttpRequest, name: &str) -> Option<String> {
+            request
+                .headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.clone())
+        }
+
+        const PIPELINE_7: &str = r#"{"id":7,"iid":1,"project_id":1,"ref":"main","sha":"abc","status":"success","source":"push","web_url":"https://gitlab.com/a/b/-/pipelines/7","created_at":"2026-09-17T18:07:10Z","updated_at":"2026-09-17T18:15:12Z"}"#;
+
+        /// ⛔ A sign-in is recorded with as `Authorization: Bearer`. It went
+        /// as `PRIVATE-TOKEN`, which GitLab refuses for an OAuth token.
+        #[tokio::test]
+        async fn a_sign_in_is_sent_as_a_bearer_token() {
+            let t = Arc::new(ScriptTransport::new());
+            t.reply("/pipelines/7", 200, PIPELINE_7);
+            let memory: Arc<dyn TokenProvider> = store_issued_by_gitlab_com();
+            let client = recording_client(
+                "gl",
+                &account("https://gitlab.com"),
+                memory,
+                t.clone() as Arc<dyn Transport>,
+                RequestRing::new(4),
+            )
+            .unwrap_or_else(|f| panic!("{}", f.error));
+            client
+                .get_pipeline(&ProjectRef::Id(1), 7)
+                .await
+                .expect("fetches");
+            let sent = t.requests();
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            assert_eq!(
+                header(&sent[0], "authorization").as_deref(),
+                Some("Bearer gl-OAUTH-A")
+            );
+            assert_eq!(header(&sent[0], "private-token"), None);
+        }
+
+        /// ⛔ The repro: signed in to gitlab.com, then `base_url` changed.
+        /// The token went to the new host; now nothing is sent at all.
+        #[tokio::test]
+        async fn a_sign_in_issued_by_another_instance_is_not_sent() {
+            let t = Arc::new(ScriptTransport::new());
+            t.reply("/pipelines/7", 200, PIPELINE_7);
+            let memory: Arc<dyn TokenProvider> = store_issued_by_gitlab_com();
+            let client = recording_client(
+                "gl",
+                &account("https://gitlab.example.com"),
+                memory,
+                t.clone() as Arc<dyn Transport>,
+                RequestRing::new(4),
+            )
+            .unwrap_or_else(|f| panic!("{}", f.error));
+            let err = client
+                .get_pipeline(&ProjectRef::Id(1), 7)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ClientError::SignInAgain { .. }), "{err}");
+            assert!(t.requests().is_empty(), "{:?}", t.requests());
+        }
+    }
 
     /// The `--help` table is prose, so nothing ties it to the constants but
     /// this: every constant has exactly one row, and every row is a constant.

@@ -14,13 +14,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use bridgewatch_core::Config;
 use bridgewatch_core::client::{ReqwestTransport, Transport};
-use bridgewatch_core::config::{Account, OAuthSource, Provider};
+use bridgewatch_core::config::{Account, OAuthSource, Provider, TokenSource};
 use bridgewatch_core::oauth::{
-    self, Availability, BuiltinClients, OAuthError, Progress, SignInStatus, SignedIn,
+    self, Availability, BuiltinClients, Fit, OAuthError, Progress, SignInStatus, SignedIn,
 };
 use bridgewatch_core::poll::PollNow;
-use bridgewatch_core::token::SystemTokenProvider;
+use bridgewatch_core::token::{SystemTokenProvider, TokenProvider};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
@@ -345,16 +346,66 @@ pub fn oauth_open_install(
     crate::links::open_trusting(&app, &url, config.as_ref(), &[account])
 }
 
-/// Who an account is signed in as, and until when. Never a token; `None` when
-/// it is not signed in.
+/// A stored sign-in as the Settings window shows it: who, until when, and
+/// whether the poller would use it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SignInView {
+    /// Who, until when, with what. Never a token.
+    #[serde(flatten)]
+    pub status: SignInStatus,
+    /// Why the running configuration's account would not use it
+    /// (`other_instance` or `other_application`); `None` when it would, or
+    /// when there is no running account of that name that signs in to check
+    /// it against.
+    pub mismatch: Option<Fit>,
+}
+
+/// [`oauth_status`]'s answer, from `store`, checked against `running`.
+///
+/// ⛔ The same rule as the poller's session and `auth status`
+/// ([`oauth::TokenSet::fits`]): a sign-in issued by another instance, or for
+/// another application, is never sent, so it is not shown as plainly signed
+/// in either. A missing client id is left to the poller, whose error names
+/// what to write.
+pub fn status_of(
+    account: &str,
+    running: Option<&Config>,
+    store: &dyn TokenProvider,
+    builtin: &BuiltinClients,
+) -> Result<Option<SignInView>, String> {
+    let Some(set) = oauth::store::load(account, store).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let mismatch = running
+        .and_then(|c| c.accounts.get(account))
+        .and_then(|a| match &a.token {
+            TokenSource::Oauth(source) => oauth::client_id_for(a, source, builtin)
+                .ok()
+                .map(|id| set.fit(a, &id)),
+            _ => None,
+        })
+        .filter(|fit| *fit != Fit::Fits);
+    Ok(Some(SignInView {
+        status: set.status(),
+        mismatch,
+    }))
+}
+
+/// Who an account is signed in as, and until when, and whether the running
+/// configuration would use it. Never a token; `None` when it is not signed in.
 #[tauri::command]
-pub async fn oauth_status(account: String) -> Result<Option<SignInStatus>, String> {
+pub async fn oauth_status(account: String, app: AppHandle) -> Result<Option<SignInView>, String> {
+    let running = app.state::<Arc<AppState>>().config();
     tauri::async_runtime::spawn_blocking(move || {
-        oauth::store::load(&account, &SystemTokenProvider).map(|s| s.map(|set| set.status()))
+        status_of(
+            &account,
+            running.as_ref(),
+            &SystemTokenProvider,
+            &BuiltinClients::shipped(),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())
 }
 
 /// Forget an account's sign-in. The provider still lists bridgewatch as an
@@ -426,6 +477,156 @@ mod tests {
         assert_eq!(source_of(&r), OAuthSource { client_id: None });
         r.client_id = Some(" abc ".into());
         assert_eq!(source_of(&r).client_id.as_deref(), Some("abc"));
+    }
+
+    /// A credential store in memory. Nothing here reaches the real keychain.
+    #[derive(Default)]
+    struct Memory(Mutex<HashMap<(String, String), String>>);
+
+    impl TokenProvider for Memory {
+        fn keyring_get(
+            &self,
+            service: &str,
+            user: &str,
+        ) -> Result<String, bridgewatch_core::token::TokenError> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(&(service.into(), user.into()))
+                .cloned()
+                .ok_or_else(|| bridgewatch_core::token::TokenError::NoEntry {
+                    service: service.into(),
+                    user: user.into(),
+                })
+        }
+        fn keyring_set(
+            &self,
+            service: &str,
+            user: &str,
+            secret: &str,
+        ) -> Result<(), bridgewatch_core::token::TokenError> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert((service.into(), user.into()), secret.into());
+            Ok(())
+        }
+        fn keyring_delete(
+            &self,
+            service: &str,
+            user: &str,
+        ) -> Result<(), bridgewatch_core::token::TokenError> {
+            self.0
+                .lock()
+                .unwrap()
+                .remove(&(service.into(), user.into()));
+            Ok(())
+        }
+        fn env(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn run(&self, _: &[String]) -> Result<String, bridgewatch_core::token::TokenError> {
+            Err(bridgewatch_core::token::TokenError::Empty)
+        }
+    }
+
+    fn running(base_url: &str) -> Config {
+        let raw = format!(
+            "[accounts.gl]\nbase_url = \"{base_url}\"\n\
+             token = {{ oauth = {{ client_id = \"self-app\" }} }}\n"
+        );
+        bridgewatch_core::config::parse_str(&raw, std::path::Path::new("x.toml"))
+            .unwrap()
+            .config
+    }
+
+    fn signed_in_to(base_url: &str, client_id: &str) -> Memory {
+        let memory = Memory::default();
+        let set = oauth::TokenSet {
+            access_token: bridgewatch_core::token::Secret::new("gl-OAUTH-A"),
+            refresh_token: None,
+            expires_at: None,
+            refresh_expires_at: None,
+            scopes: vec!["read_api".into()],
+            login: Some("alice".into()),
+            client_id: client_id.into(),
+            base_url: base_url.into(),
+            obtained_at: 1,
+        };
+        oauth::store::save("gl", &set, &memory).unwrap();
+        memory
+    }
+
+    const BUILTIN: BuiltinClients = BuiltinClients {
+        github_com: None,
+        github_app_slug: None,
+        gitlab_com: None,
+    };
+
+    /// ⛔ A sign-in issued by gitlab.com, for an account that now points at
+    /// another server, is not "signed in": the poller never sends it.
+    #[test]
+    fn a_sign_in_from_another_instance_is_reported_as_a_mismatch() {
+        let memory = signed_in_to("https://gitlab.com", "self-app");
+        let view = status_of(
+            "gl",
+            Some(&running("https://gitlab.example.com")),
+            &memory,
+            &BUILTIN,
+        )
+        .unwrap()
+        .expect("stored");
+        assert_eq!(
+            view.mismatch,
+            Some(Fit::OtherInstance {
+                issued: "gitlab.com".into(),
+                expected: "gitlab.example.com".into(),
+            })
+        );
+        assert_eq!(view.status.login.as_deref(), Some("alice"));
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(
+            json["mismatch"],
+            serde_json::json!({
+                "kind": "other_instance",
+                "issued": "gitlab.com",
+                "expected": "gitlab.example.com",
+            })
+        );
+        assert_eq!(json["login"], "alice", "the status is flattened: {json}");
+        assert!(!json.to_string().contains("gl-OAUTH-A"), "{json}");
+    }
+
+    #[test]
+    fn a_sign_in_for_another_application_is_reported_as_a_mismatch() {
+        let memory = signed_in_to("https://gitlab.example.com", "other-app");
+        let view = status_of(
+            "gl",
+            Some(&running("https://gitlab.example.com")),
+            &memory,
+            &BUILTIN,
+        )
+        .unwrap()
+        .expect("stored");
+        assert_eq!(view.mismatch, Some(Fit::OtherApplication));
+    }
+
+    #[test]
+    fn a_sign_in_that_fits_has_no_mismatch_and_none_is_none() {
+        let memory = signed_in_to("https://gitlab.example.com/", "self-app");
+        let config = running("https://gitlab.example.com");
+        let view = status_of("gl", Some(&config), &memory, &BUILTIN)
+            .unwrap()
+            .expect("stored");
+        assert_eq!(view.mismatch, None);
+        assert_eq!(
+            serde_json::to_value(&view).unwrap()["mismatch"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            status_of("gl", Some(&config), &Memory::default(), &BUILTIN).unwrap(),
+            None
+        );
     }
 
     #[test]

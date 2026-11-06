@@ -33,7 +33,7 @@
 use std::sync::Arc;
 
 use super::store::{self, TokenSet};
-use super::{BuiltinClients, Endpoints, OAuthError, client_id_for, origin_of};
+use super::{BuiltinClients, Endpoints, OAuthError, client_id_for};
 use crate::client::{ClientError, HttpRequest, HttpResponse, Transport};
 use crate::config::{Account, OAuthSource, Provider};
 use crate::token::{Secret, TokenProvider};
@@ -68,7 +68,7 @@ pub fn system_clock() -> Clock {
 pub struct OAuthSession {
     account: String,
     provider: Provider,
-    base_origin: Option<String>,
+    base_url: String,
     endpoints: Endpoints,
     client_id: String,
     transport: Arc<dyn Transport>,
@@ -115,7 +115,7 @@ impl OAuthSession {
         Ok(Self {
             account: account_name.to_string(),
             provider: account.provider,
-            base_origin: origin_of(&account.base_url),
+            base_url: account.base_url.clone(),
             endpoints: Endpoints::for_account(account),
             client_id: client_id_for(account, source, builtin)?,
             transport,
@@ -139,14 +139,10 @@ impl OAuthSession {
         }
     }
 
-    /// Whether a stored set may be used for this account: issued by the same
-    /// instance, for the same application.
-    ///
-    /// ⛔ A set from another host is never sent: the configuration's
-    /// `base_url` can change under a stored sign-in (by hand, or by a hostile
-    /// edit), and the token would otherwise go wherever it now points.
+    /// Whether a stored set may be used for this account: [`TokenSet::fits`],
+    /// the one rule every reader of a sign-in shares.
     fn fits(&self, set: &TokenSet) -> bool {
-        origin_of(&set.base_url) == self.base_origin && set.client_id == self.client_id
+        set.fit_for(&self.base_url, &self.client_id) == super::Fit::Fits
     }
 
     /// Read the store; adopt what is there if it differs from what is held.

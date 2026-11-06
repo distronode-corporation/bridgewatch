@@ -13,6 +13,21 @@ body line with a bracket.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A sign-in is sent only to the server that issued it.** `bridgewatch fixture record`
+  read an account's stored sign-in and sent its access token to whatever `base_url` the
+  file named at the time, even a server the sign-in was never issued by, and sent it as
+  `PRIVATE-TOKEN`, which GitLab refuses for an OAuth token. It now records through the
+  same client the poller uses: the token goes as `Authorization: Bearer`, and a sign-in
+  issued by another server, or for another application, sends nothing and says to sign
+  in again.
+- **`auth status` and Settings no longer call an unusable sign-in "signed in".** A stored
+  sign-in issued by another server than the account's `base_url`, or for another
+  application than its client id, is never used to poll. `auth status` now prints
+  `signed in for <server>, not <server>; run bridgewatch auth login --account <name>` for
+  it and exits 70, and Settings says the sign-in is not used and offers to sign in again.
+
 ## [1.3.0] - 2026-11-06
 
 The CLI ships with every release: on npm as `bridgewatch`, and as three tarballs on the

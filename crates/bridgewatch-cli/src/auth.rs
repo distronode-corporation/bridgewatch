@@ -41,7 +41,8 @@ pub enum AuthAction {
         account: String,
     },
     /// Show who each signing-in account is signed in as, until when and with
-    /// what scopes. Never a token. Exits 70 when one is not signed in.
+    /// what scopes. Never a token. Exits 70 when one is not signed in, or is
+    /// signed in for another server or application than it names now.
     Status {
         /// Only this account.
         #[arg(long)]
@@ -190,10 +191,16 @@ pub fn logout(
 }
 
 /// `auth status`.
+///
+/// ⛔ A stored sign-in is "signed in" only when the poller would use it:
+/// [`oauth::TokenSet::fits`], the session's own rule. One issued by another
+/// instance, or for another application, is never sent, and saying "signed in"
+/// for it sent people looking everywhere but the sign-in.
 pub fn status(
     config: &Config,
     only: Option<&str>,
     store_provider: &dyn TokenProvider,
+    builtin: &BuiltinClients,
     now: u64,
     out: &mut dyn Write,
 ) -> Outcome {
@@ -218,9 +225,30 @@ pub fn status(
     }
     let mut all_signed_in = true;
     for name in &names {
-        let host = oauth::Endpoints::for_account(&config.accounts[name]).host;
+        let account = &config.accounts[name];
+        let host = oauth::Endpoints::for_account(account).host;
+        // Only signing-in accounts are listed (above).
+        let TokenSource::Oauth(source) = &account.token else {
+            continue;
+        };
         match store::load(name, store_provider) {
             Ok(Some(set)) => {
+                let client_id = match oauth::client_id_for(account, source, builtin) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        all_signed_in = false;
+                        writeln!(out, "{name} ({host}): {e}")?;
+                        continue;
+                    }
+                };
+                if let Some(why) = set.fit(account, &client_id).mismatch() {
+                    all_signed_in = false;
+                    writeln!(
+                        out,
+                        "{name} ({host}): {why}; run bridgewatch auth login --account {name}"
+                    )?;
+                    continue;
+                }
                 let s = set.status();
                 let who = s
                     .login
@@ -308,7 +336,7 @@ fn chrono_like(secs: i64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
@@ -318,8 +346,9 @@ mod tests {
     use super::*;
 
     /// A credential store in memory. Nothing here reaches the real keychain.
+    /// `fixture record`'s tests in `main.rs` use it too.
     #[derive(Default)]
-    struct Memory(Mutex<BTreeMap<(String, String), String>>);
+    pub(crate) struct Memory(Mutex<BTreeMap<(String, String), String>>);
 
     impl TokenProvider for Memory {
         fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
@@ -552,7 +581,7 @@ mod tests {
         .unwrap();
 
         let mut out = Vec::new();
-        let code = status(&github(), None, &store, 1_000 + 3600, &mut out).unwrap();
+        let code = status(&github(), None, &store, &BUILTIN, 1_000 + 3600, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert_eq!(code, exit::OK, "{text}");
         assert!(
@@ -572,11 +601,110 @@ mod tests {
         let mut out = Vec::new();
         logout(&github(), "gh", &store, &mut out).unwrap();
         let mut out = Vec::new();
-        let code = status(&github(), Some("gh"), &store, 0, &mut out).unwrap();
+        let code = status(&github(), Some("gh"), &store, &BUILTIN, 0, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert_eq!(code, exit::ERROR, "{text}");
         assert!(
             text.contains("not signed in; run bridgewatch auth login --account gh"),
+            "{text}"
+        );
+    }
+
+    /// A sign-in stored by `gl` while it pointed elsewhere.
+    fn issued_by(base_url: &str, client_id: &str) -> oauth::TokenSet {
+        oauth::TokenSet {
+            access_token: bridgewatch_core::token::Secret::new("glpat-OAUTH-A"),
+            refresh_token: Some(bridgewatch_core::token::Secret::new("glrt-REFRESH-A")),
+            expires_at: Some(10_000),
+            refresh_expires_at: None,
+            scopes: vec!["read_api".into()],
+            login: Some("alice".into()),
+            client_id: client_id.into(),
+            base_url: base_url.into(),
+            obtained_at: 1,
+        }
+    }
+
+    fn self_managed() -> Config {
+        config(
+            "[accounts.gl]\nbase_url = \"https://gitlab.example.com\"\n\
+             token = { oauth = { client_id = \"self-app\" } }\n",
+        )
+    }
+
+    /// ⛔ The poller never sends a sign-in issued by another instance, so
+    /// `auth status` must not call it signed in: it used to print "signed in
+    /// as @alice" for a set that every poll then ignored.
+    #[test]
+    fn status_of_a_sign_in_from_another_instance_says_so_and_exits_70() {
+        let store = Memory::default();
+        store::save("gl", &issued_by("https://gitlab.com", "self-app"), &store).unwrap();
+        let mut out = Vec::new();
+        let code = status(&self_managed(), None, &store, &BUILTIN, 1_000, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::ERROR, "{text}");
+        assert_eq!(
+            text,
+            "gl (gitlab.example.com): signed in for gitlab.com, not gitlab.example.com; \
+             run bridgewatch auth login --account gl\n"
+        );
+        for secret in ["glpat-OAUTH-A", "glrt-REFRESH-A", "@alice"] {
+            assert!(!text.contains(secret), "{text}");
+        }
+    }
+
+    /// The same for one issued by the right instance to another application.
+    #[test]
+    fn status_of_a_sign_in_for_another_application_says_so_and_exits_70() {
+        let store = Memory::default();
+        store::save(
+            "gl",
+            &issued_by("https://gitlab.example.com/", "other-app"),
+            &store,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let code = status(
+            &self_managed(),
+            Some("gl"),
+            &store,
+            &BUILTIN,
+            1_000,
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::ERROR, "{text}");
+        assert!(
+            text.contains(
+                "gl (gitlab.example.com): signed in with another application than this \
+                 account's client id; run bridgewatch auth login --account gl"
+            ),
+            "{text}"
+        );
+
+        // And the set that does fit is signed in, which is what proves the
+        // check is the origin and the application and nothing else.
+        store::save(
+            "gl",
+            &issued_by("https://GitLab.example.com:443/", "self-app"),
+            &store,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let code = status(
+            &self_managed(),
+            Some("gl"),
+            &store,
+            &BUILTIN,
+            1_000,
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::OK, "{text}");
+        assert!(
+            text.contains("gl (gitlab.example.com): signed in as @alice"),
             "{text}"
         );
     }
@@ -587,6 +715,7 @@ mod tests {
             &github(),
             Some("pat"),
             &Memory::default(),
+            &BUILTIN,
             0,
             &mut Vec::new(),
         )
