@@ -402,6 +402,15 @@ jobs:
         with:
           node-version: 24
 
+      # The launcher's own tests (platform mapping, the musl and old-glibc refusals,
+      # exit codes, signals, the packed file list). node:test, because vitest only
+      # collects src/**. Plain JavaScript with no dependencies, so one leg is enough,
+      # and it runs before vendor/ is filled below. The glob is quoted for node, not
+      # the shell: Node 24 reads a bare directory argument as a module, not a test dir.
+      - name: The npm launcher's tests
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: node --test 'packaging/npm/test/*.test.js'
+
       # Only this leg's binary goes into vendor/; the shim picks it by platform and
       # architecture, so the other two targets' absence is not exercised here.
       - name: Pack the npm package around the CLI
