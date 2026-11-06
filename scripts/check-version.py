@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Assert that bridgewatch's two version literals agree, and optionally that
+"""Assert that bridgewatch's three version literals agree, and optionally that
 they agree with a release tag.
 
-    python3 scripts/check-version.py            # the two agree with each other
+    python3 scripts/check-version.py            # the three agree with each other
     python3 scripts/check-version.py v0.1.2     # ...and with this tag
     python3 scripts/check-version.py 0.1.2      # a bare version works too
 
-The version is written down twice and neither is derived from the other:
+The version is written down three times and none is derived from another:
 
-    Cargo.toml    [workspace.package] version   -> both binaries AND the BUNDLE NAMES
-    package.json  version                       -> the npm package
+    Cargo.toml                 [workspace.package] version  -> both binaries AND the BUNDLE NAMES
+    package.json               version                      -> the frontend (private, never published)
+    packaging/npm/package.json version                      -> the `bridgewatch` package on npm
+
+The npm package carries the CLI binaries of the same release, so a version there that
+differs from Cargo.toml would publish one release's binaries under another's number,
+and npm never lets a published version be replaced.
 
 src-tauri/tauri.conf.json deliberately has NO `version`, so Tauri falls back to
 the crate's, which src-tauri/Cargo.toml inherits from the workspace. Confirmed in
@@ -51,8 +56,8 @@ def cargo_version() -> str:
         return tomllib.load(fh)["workspace"]["package"]["version"]
 
 
-def package_json_version() -> str:
-    return json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
+def package_json_version(name: str) -> str:
+    return json.loads((ROOT / name).read_text(encoding="utf-8"))["version"]
 
 
 def tauri_configs_with_a_version() -> list[str]:
@@ -66,7 +71,8 @@ def tauri_configs_with_a_version() -> list[str]:
 def main(argv: list[str]) -> int:
     found = {
         "Cargo.toml": cargo_version(),
-        "package.json": package_json_version(),
+        "package.json": package_json_version("package.json"),
+        "packaging/npm/package.json": package_json_version("packaging/npm/package.json"),
     }
 
     width = max(len(name) for name in found)
@@ -86,7 +92,7 @@ def main(argv: list[str]) -> int:
     distinct = set(found.values())
     if len(distinct) != 1:
         print(
-            f"\nERROR: the two version literals disagree: {sorted(distinct)}",
+            f"\nERROR: the version literals disagree: {sorted(distinct)}",
             file=sys.stderr,
         )
         return 1
@@ -102,14 +108,14 @@ def main(argv: list[str]) -> int:
         if expected != version:
             print(
                 f"\nERROR: the tree says {version} but the tag says {argv[1]}.\n"
-                f"       Bump Cargo.toml and package.json, then move the tag.",
+                f"       Bump Cargo.toml and both package.json files, then move the tag.",
                 file=sys.stderr,
             )
             return 1
         print(f"\nversion {version} agrees with tag {argv[1]}")
         return 0
 
-    print(f"\nversion {version} is consistent across both files")
+    print(f"\nversion {version} is consistent across all three files")
     return 0
 
 
