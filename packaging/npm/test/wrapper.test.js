@@ -106,6 +106,42 @@ describe("helpers", () => {
     assert.equal(machine.vendorDir, path.join(path.dirname(WRAPPER), "..", "vendor"));
   });
 
+  test("readReport builds the report with excludeNetwork set, then restores it", () => {
+    const reporter = {
+      excludeNetwork: false,
+      getReport() {
+        assert.equal(this.excludeNetwork, true);
+        return { header: { glibcVersionRuntime: "2.39" } };
+      },
+    };
+    assert.deepEqual(wrapper.readReport(reporter), { header: { glibcVersionRuntime: "2.39" } });
+    assert.equal(reporter.excludeNetwork, false);
+  });
+
+  test("readReport restores excludeNetwork when getReport throws", () => {
+    const reporter = {
+      excludeNetwork: "as it was",
+      getReport() {
+        throw new Error("no report");
+      },
+    };
+    assert.throws(() => wrapper.readReport(reporter), /no report/);
+    assert.equal(reporter.excludeNetwork, "as it was");
+  });
+
+  test("readReport on this Node: no network section, the setting put back", () => {
+    const before = process.report.excludeNetwork;
+    const report = wrapper.readReport(process.report);
+    assert.equal(typeof report.header, "object");
+    assert.equal(report.header.networkInterfaces, undefined);
+    assert.equal(process.report.excludeNetwork, before);
+  });
+
+  test("environment's default report goes through readReport", () => {
+    const report = wrapper.environment({}).report();
+    assert.equal(report.header.networkInterfaces, undefined);
+  });
+
   test("environment takes the test overrides", () => {
     const machine = wrapper.environment({
       BRIDGEWATCH_NPM_TEST_PLATFORM: "linux",

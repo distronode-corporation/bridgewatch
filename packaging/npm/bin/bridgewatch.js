@@ -94,6 +94,22 @@ function missingBinaryMessage(file) {
   );
 }
 
+// Node's diagnostic report, built without its network section, as detect-libc does.
+// `excludeNetwork` (Node 20.13 and 22 or newer) drops header.networkInterfaces and the
+// reverse DNS lookups the report would otherwise make, which only slow the launcher
+// down: it reads header.glibcVersionRuntime and nothing else. The setting is global,
+// so it is put back as it was, even when getReport throws. On an older Node the
+// property is ignored and the report is built as before.
+function readReport(reporter) {
+  const saved = reporter.excludeNetwork;
+  reporter.excludeNetwork = true;
+  try {
+    return reporter.getReport();
+  } finally {
+    reporter.excludeNetwork = saved;
+  }
+}
+
 // The machine as this process sees it, unless a test overrides a part of it.
 function environment(env) {
   const glibc = env.BRIDGEWATCH_NPM_TEST_GLIBC;
@@ -103,7 +119,7 @@ function environment(env) {
     // "musl" stands for a report without glibcVersionRuntime.
     report:
       glibc === undefined
-        ? () => process.report.getReport()
+        ? () => readReport(process.report)
         : { header: glibc === "musl" ? {} : { glibcVersionRuntime: glibc } },
     vendorDir: env.BRIDGEWATCH_NPM_TEST_VENDOR_DIR || path.join(__dirname, "..", "vendor"),
   };
@@ -167,6 +183,7 @@ module.exports = {
   resolveTarget,
   binaryPath,
   missingBinaryMessage,
+  readReport,
   environment,
   main,
 };

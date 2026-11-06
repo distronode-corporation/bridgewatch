@@ -954,6 +954,10 @@ jobs:
   # release.yml, with no environment. npm requires the first publish under a new
   # trusted publisher within 2 days of creating it. Renaming this file or adding an
   # environment breaks publishing until that entry is changed to match.
+  # ⛔ The trusted publisher must also ALLOW `npm publish` (`npm trust ...
+  # --allow-publish`), which is off by default: without it the first publish from
+  # here fails with 403 even though the trust entry exists. This job publishes
+  # directly, as worldinmotion's does.
   # It runs only after `publish`, so nothing reaches npm without its GitHub Release;
   # a failure here leaves the release public and can be re-run on its own. It refuses
   # a version npm already holds.
@@ -1032,8 +1036,13 @@ jobs:
             gh release download "$TAG" --pattern "$name" --dir "$RUNNER_TEMP/dl"
           done
           (cd "$RUNNER_TEMP/dl" && sha256sum -c "$RUNNER_TEMP/SHA256SUMS")
+          # Pinned to this workflow, at this tag, on a GitHub-hosted runner: an
+          # attestation from any other workflow or ref in the repository does not count.
           for f in "$RUNNER_TEMP"/dl/*.tar.gz; do
-            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY"
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$TAG" \
+              --deny-self-hosted-runners
           done
 
       # Into packaging/npm/vendor/<target>/bridgewatch at 0755, after asserting each
