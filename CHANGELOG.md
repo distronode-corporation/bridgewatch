@@ -58,8 +58,10 @@ and the app gets a Homebrew cask.
     gitlab.com account, instead of bridgewatch's own entry.
   - `bridgewatch init` with no token flag writes `token = { oauth = true }` there for a
     new account, and `own = true` on any other host. An account the file already has
-    keeps its token source, as a re-run of the wizard does. Until now, a flagless `init`
-    into an existing file rewrote that account's source to `own = true`.
+    keeps its token source on the same instance, as a re-run of the wizard does; until
+    now a flagless `init` rewrote it to `own = true`. A kept source is not re-checked as
+    though it had just been typed, an unknown key elsewhere in the file does not hide the
+    account, and `--oauth` alone keeps an existing sign-in's client id.
   - In the wizard, the **Sign in** button sits directly under its option, before the
     alternatives. The section is called **Access**, and what a token must be allowed to do
     is said only while a token option is chosen.
@@ -70,6 +72,15 @@ and the app gets a Homebrew cask.
   during the first poll used to kill the process before it had a verdict, and one
   during a later poll was dropped, so `watch` ran on. It now exits with the last
   verdict's code, or 4 (unknown) when there is none yet.
+- **`bridgewatch init` never moves a token source to another host.** The derived account
+  name is the host's first label, so gitlab.com and gitlab.acme.com are both `gitlab`,
+  and `init` for the second host rewrote the first account's `base_url` while keeping its
+  token source. `init` now refuses to repoint an existing account to another host unless
+  `--account` names it, and a source is kept only on the same instance.
+- **`init` no longer suggests redirecting onto the config.** Its help, its last line and
+  the README said to redirect the output, and a `>` onto the config empties it before
+  `init` reads it. They now say to write a new file, check it and move it into place.
+  The printed `auth login` step carries `--config` when it was given.
 - **Settings: signing in through a newly typed client id writes it.** A successful
   sign-in already switched an account to `oauth`. When the account signed in already but
   through another application, the new client id stayed unwritten until **Use this

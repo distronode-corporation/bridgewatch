@@ -876,7 +876,8 @@ fn init_signs_in_by_default_on_the_hosted_instances_and_says_what_is_next() {
         let err = stderr(&out);
         assert!(
             err.contains(&format!(
-                "then sign in: bridgewatch auth login --account {account}"
+                "then sign in: bridgewatch --config {} auth login --account {account}",
+                path.display()
             )),
             "{err}"
         );
@@ -965,7 +966,7 @@ fn init_keeps_an_existing_accounts_token_source_unless_a_flag_says_otherwise() {
     let github = text.split("[accounts.github]").nth(1).unwrap();
     assert!(github.contains("token = { oauth = true }"), "{text}");
     assert!(
-        stderr(&out).contains("bridgewatch auth login --account github"),
+        stderr(&out).contains("auth login --account github"),
         "{}",
         stderr(&out)
     );
@@ -981,7 +982,7 @@ fn init_keeps_an_existing_accounts_token_source_unless_a_flag_says_otherwise() {
     assert!(text.contains("token = { oauth = true }"), "{text}");
     assert!(!text.contains("MY_GITLAB_TOKEN"), "{text}");
     assert!(
-        stderr(&out).contains("bridgewatch auth login --account gitlab"),
+        stderr(&out).contains("auth login --account gitlab"),
         "{}",
         stderr(&out)
     );
@@ -991,6 +992,177 @@ fn init_keeps_an_existing_accounts_token_source_unless_a_flag_says_otherwise() {
         original,
         "disk untouched"
     );
+}
+
+/// The printed next step never suggests redirecting onto the config itself,
+/// and names `--config` only when it was given.
+#[test]
+fn init_next_step_says_never_to_redirect_onto_the_config_and_carries_config() {
+    let dir = TempDir::new("init-next-step");
+    let path = dir.0.join("config.toml");
+    let out = run(bin()
+        .arg("--config")
+        .arg(&path)
+        .args(["init", "--project", "group/app"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("write this output to a new file"), "{err}");
+    assert!(err.contains("never redirect it onto that file"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "bridgewatch --config {} auth login --account gitlab",
+            path.display()
+        )),
+        "{err}"
+    );
+
+    // Without --config (the default path, here pointed at by the variable),
+    // the command is the plain one.
+    let out = run(bin()
+        .env("BRIDGEWATCH_CONFIG", &path)
+        .args(["init", "--project", "group/app"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("then sign in: bridgewatch auth login --account gitlab"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// ⛔ A token source never crosses hosts. Moving an account to another
+/// instance with an explicit --account takes the new host's default, in both
+/// directions; without --account, init refuses to repoint it at all and says
+/// how to proceed.
+#[test]
+fn init_never_carries_a_token_source_to_another_host() {
+    let dir = TempDir::new("init-cross-host");
+    let lab = dir.write(
+        "lab.toml",
+        "[accounts.gitlab]\ntoken = { keyring = { service = \"glab:gitlab.com:token\", user = \"\" } }\n",
+    );
+    let ghe = dir.write(
+        "ghe.toml",
+        "[accounts.ghe]\nprovider = \"github\"\nbase_url = \"https://ghe.acme.com\"\n\
+         api_path = \"/api/v3\"\ntoken = { oauth = { client_id = \"Iv1.ghe0000000000\" } }\n",
+    );
+
+    // gitlab.com -> self-managed, named explicitly: the new host's default.
+    let out = run(bin().arg("--config").arg(&lab).args([
+        "init",
+        "--base-url",
+        "https://gitlab.acme.com",
+        "--account",
+        "gitlab",
+        "--project",
+        "team/app",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains("glab:gitlab.com:token"), "{text}");
+    assert!(text.contains("token = { own = true }"), "{text}");
+
+    // Enterprise -> github.com, named explicitly: the built-in sign-in, not
+    // the Enterprise application.
+    let out = run(bin().arg("--config").arg(&ghe).args([
+        "init",
+        "--provider",
+        "github",
+        "--account",
+        "ghe",
+        "--project",
+        "owner/repo",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains("Iv1.ghe0000000000"), "{text}");
+    assert!(text.contains("token = { oauth = true }"), "{text}");
+
+    // Without --account, the derived name matches and init refuses.
+    let out = run(bin().arg("--config").arg(&lab).args([
+        "init",
+        "--base-url",
+        "https://gitlab.acme.com",
+        "--project",
+        "team/app",
+    ]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    let err = stderr(&out);
+    for wanted in [
+        "account \"gitlab\"",
+        "https://gitlab.com",
+        "https://gitlab.acme.com",
+        "--account <new-name>",
+    ] {
+        assert!(err.contains(wanted), "{wanted} missing: {err}");
+    }
+    assert!(stdout(&out).is_empty());
+}
+
+/// An unknown key elsewhere in the file does not hide the account: its
+/// source is still kept. And a kept source is not re-checked as though it had
+/// just been typed: an env name `config validate` accepts stays.
+#[test]
+fn init_keeps_a_source_despite_an_unknown_key_and_does_not_recheck_it() {
+    let dir = TempDir::new("init-lenient");
+    let path = dir.write(
+        "config.toml",
+        "[ui]\nfuture_key = true\n\n[accounts.gitlab]\ntoken = { env = \"MY-TOKEN\" }\n",
+    );
+    let check = run(bin()
+        .arg("--config")
+        .arg(&path)
+        .args(["config", "validate"]));
+    assert_eq!(code(&check), 0, "the file loads: {}", stderr(&check));
+
+    let out = run(bin()
+        .arg("--config")
+        .arg(&path)
+        .args(["init", "--project", "group/app"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("token = { env = \"MY-TOKEN\" }"), "{text}");
+    assert!(!text.contains("oauth"), "{text}");
+    assert!(!stderr(&out).contains("auth login"), "{}", stderr(&out));
+}
+
+/// `--oauth` alone on an account that already signs in keeps its client id:
+/// on Enterprise dropping it would not load, and on github.com it would strand
+/// the stored sign-in on another application.
+#[test]
+fn init_oauth_on_an_account_that_signs_in_keeps_its_client_id() {
+    let dir = TempDir::new("init-oauth-keep");
+    for (file, extra) in [
+        (
+            "[accounts.ghe]\nprovider = \"github\"\nbase_url = \"https://ghe.acme.com\"\n\
+             api_path = \"/api/v3\"\ntoken = { oauth = { client_id = \"Iv1.mine00000000\" } }\n",
+            &["--base-url", "https://ghe.acme.com", "--account", "ghe"][..],
+        ),
+        (
+            "[accounts.github]\nprovider = \"github\"\n\
+             token = { oauth = { client_id = \"Iv1.mine00000000\" } }\n",
+            &[][..],
+        ),
+    ] {
+        let path = dir.write("config.toml", file);
+        let out = run(bin()
+            .arg("--config")
+            .arg(&path)
+            .args([
+                "init",
+                "--provider",
+                "github",
+                "--project",
+                "owner/repo",
+                "--oauth",
+            ])
+            .args(extra));
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let text = stdout(&out);
+        assert!(
+            text.contains(r#"token = { oauth = { client_id = "Iv1.mine00000000" } }"#),
+            "{text}"
+        );
+    }
 }
 
 /// `--oauth` asks for sign-in outright, and `--oauth-client-id` names an
@@ -1028,7 +1200,7 @@ fn init_oauth_flags_write_the_sign_in_source() {
         "{text}"
     );
     assert!(
-        stderr(&out).contains("bridgewatch auth login --account ghe"),
+        stderr(&out).contains("auth login --account ghe"),
         "{}",
         stderr(&out)
     );

@@ -135,10 +135,14 @@ npx bridgewatch init --provider github --project owner/repo
 npx bridgewatch auth login --account github
 ```
 
-Save what `init` prints as the file `bridgewatch config path` names before signing in;
-`init` writes nothing itself. When it writes a sign-in source, its last line on stderr is
-the `auth login` command for that account. With no token flag, a new account signs in on
-github.com and gitlab.com, and one the file already has keeps its source. `--gh`,
+`init` writes nothing itself. Write what it prints to a new file, check it, then move it
+over the file `bridgewatch config path` names, before signing in. Never redirect `init`
+onto the config itself: the shell empties that file before `init` reads it, and every other
+account, watch and comment is lost. When `init` writes a sign-in source, its last line on
+stderr is the `auth login` command for that account. With no token flag, a new account
+signs in on github.com and gitlab.com, and one the file already has keeps its source; a
+token source never moves to another host, and `init` will not repoint an existing account
+to one unless `--account` names it. `--gh`,
 `--token-env` and the others choose another source, and `--oauth-client-id` names an
 application of your own on GitHub Enterprise.
 
@@ -1039,7 +1043,8 @@ to stdout, and if a config file already exists it prints that file edited, with 
 comments and other watches kept. When that file already has a primary watch, the new
 watch is added as secondary with a note on stderr; `--primary` keeps it primary. A new
 GitHub watch polls at 30 s live and 120 s idle unless `--live-secs` says otherwise.
-Redirect it yourself once it reads right.
+Once it reads right, write it to a new file, check it, and move that over the config.
+Never redirect it onto the config itself, which the shell empties before `init` reads it.
 
 **`log`, `retry` and `play`** take a job's page URL, as the popover links to it:
 `https://<host>/<group>/<project>/-/jobs/<id>` on GitLab (a `base_url` with a path prefix

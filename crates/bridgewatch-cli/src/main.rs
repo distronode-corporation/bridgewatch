@@ -176,8 +176,9 @@ enum Command {
     ///
     /// Non-interactive and offline: nothing is fetched, no token is read, and
     /// nothing is written. When the config file already exists it is EDITED
-    /// (comments and other watches kept) and the result printed; redirect it
-    /// yourself once it reads right.
+    /// (comments and other watches kept) and the result printed. Write it to a
+    /// NEW file, check it, then move it over the config: never redirect onto
+    /// the config itself, which the shell empties before init reads it.
     Init(Box<InitArgs>),
 }
 
@@ -611,11 +612,57 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
             ));
         }
     };
+    let named = args.account.is_some();
     let account = args
         .account
         .unwrap_or_else(|| wizard::suggest_account_name(provider, &base_url));
-    // With no token flag, an account the file already has keeps its source, as
-    // a re-run of the wizard does; only a new account takes the default.
+    // The account the file already has under that name, read leniently and
+    // without validation: one unknown key elsewhere in the file must not make
+    // it look absent. A file that does not parse at all is refused by
+    // `build_config` with its own message.
+    let current = existing
+        .as_deref()
+        .and_then(|raw| config::parse_lenient(raw, &path).ok())
+        .and_then(|(c, _)| c.accounts.get(&account).cloned());
+    let same_instance = current
+        .as_ref()
+        .is_some_and(|a| same_instance(a, provider, &base_url));
+    // ⛔ A derived name is the host's first label, so gitlab.com and
+    // gitlab.acme.com are both "gitlab". Repointing the existing account to
+    // another host silently is how one instance's token reaches the other;
+    // only an explicit --account may do it.
+    if let Some(a) = current.as_ref().filter(|_| !same_instance && !named) {
+        return Err(Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!(
+                "account {account:?} in {} is on {} ({}), and this init is for {} ({}). Pass \
+                 --account <new-name> to add a new account for {}, or edit the file to move \
+                 {account:?}",
+                path.display(),
+                a.base_url,
+                a.provider.as_str(),
+                base_url,
+                provider.as_str(),
+                base_url,
+            ),
+        ));
+    }
+    // The source already in the file, on this same instance only: a token
+    // source never carries across hosts.
+    let kept_source = current
+        .as_ref()
+        .filter(|_| same_instance)
+        .map(|a| a.token.clone());
+    let any_flag = args.glab
+        || args.gh
+        || args.token_env.is_some()
+        || args.token_keyring.is_some()
+        || !args.token_command.is_empty()
+        || args.oauth
+        || args.oauth_client_id.is_some();
+    // Kept, not chosen now: the file accepted it, so it is not re-checked as
+    // though it had just been typed. `--oauth` alone on an account that already
+    // signs in keeps that source too, client id and all.
     let mut kept = false;
     let token = if args.glab || args.gh {
         let service = wizard::cli_service_for(provider, &base_url)
@@ -633,16 +680,25 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         }
     } else if !args.token_command.is_empty() {
         TokenSource::Command(args.token_command)
-    } else if args.oauth || args.oauth_client_id.is_some() {
+    } else if let Some(client_id) = args.oauth_client_id {
         TokenSource::Oauth(OAuthSource {
-            client_id: args.oauth_client_id,
+            client_id: Some(client_id),
         })
-    } else if let Some(token) = existing_token(existing.as_deref(), &account) {
+    } else if let Some(source @ TokenSource::Oauth(_)) = kept_source.clone().filter(|_| args.oauth)
+    {
         kept = true;
-        token
+        source
+    } else if args.oauth {
+        TokenSource::Oauth(OAuthSource::default())
+    } else if let Some(source) = kept_source {
+        kept = true;
+        source
     } else {
         default_token_source(provider, &base_url)
     };
+    // The sign-in step is printed when this run chose a sign-in: a flag, or the
+    // default for a new account. A source kept without any flag is as it was.
+    let announce = !(kept && !any_flag);
     let watch_id = args
         .watch_id
         .unwrap_or_else(|| wizard::suggest_watch_id(&project.to_string(), &args.ref_name));
@@ -665,7 +721,12 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         live_secs: args.live_secs,
     };
 
-    match wizard::build_config(&answers, existing.as_deref()) {
+    let built = if kept {
+        wizard::build_config_keeping_token(&answers, existing.as_deref())
+    } else {
+        wizard::build_config(&answers, existing.as_deref())
+    };
+    match built {
         Ok(built) => {
             for w in &built.warnings {
                 eprintln!("warning: {}: {}", w.path, w.message);
@@ -687,7 +748,9 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
                 path.display()
             );
             print!("{}", built.toml);
-            if let Some(next) = next_step(&answers, &path).filter(|_| !kept) {
+            if let Some(next) =
+                next_step(&answers, &path, config_args.config.is_some()).filter(|_| announce)
+            {
                 eprintln!("{next}");
             }
             Ok(exit::OK)
@@ -723,12 +786,21 @@ fn default_token_source(provider: config::Provider, base_url: &str) -> config::T
     }
 }
 
-/// The token source the config file already gives `account`, if the file
-/// has that account and reads as a configuration at all. A file that does not
-/// is refused by `build_config` with its own message, so `None` is enough here.
-fn existing_token(existing: Option<&str>, account: &str) -> Option<config::TokenSource> {
-    let config: Config = toml::from_str(existing?).ok()?;
-    config.accounts.get(account).map(|a| a.token.clone())
+/// True when an account in the file is on the instance `init` was asked
+/// for: the same provider and the same base URL, compared as the core compares
+/// instances (lowercase scheme and host, no default port, no trailing slash).
+fn same_instance(account: &config::Account, provider: config::Provider, base_url: &str) -> bool {
+    let wanted = config::Account::for_instance(provider, base_url);
+    let key = |url: &str| {
+        let url = url.trim().trim_end_matches('/');
+        let origin = bridgewatch_core::oauth::origin_of(url);
+        let rest = url
+            .split_once("://")
+            .and_then(|(_, r)| r.find('/').map(|i| r[i..].to_string()))
+            .unwrap_or_default();
+        (origin, rest)
+    };
+    account.provider == provider && key(&account.base_url) == key(&wanted.base_url)
 }
 
 /// What `init` tells the user to do after saving the file, when there is
@@ -737,14 +809,39 @@ fn existing_token(existing: Option<&str>, account: &str) -> Option<config::Token
 fn next_step(
     answers: &bridgewatch_core::wizard::WizardAnswers,
     path: &std::path::Path,
+    explicit_config: bool,
 ) -> Option<String> {
     matches!(answers.token, config::TokenSource::Oauth(_)).then(|| {
+        // ⛔ Never `>` onto the config itself: the shell empties the file
+        // before init reads it, and what is printed is then the new account
+        // alone, with every other account, watch and comment gone.
+        let config = if explicit_config {
+            format!("--config {} ", shell_word(&path.display().to_string()))
+        } else {
+            String::new()
+        };
         format!(
-            "next: save this as {}, then sign in: bridgewatch auth login --account {}",
+            "next: write this output to a new file, check it, and move it over {} (never \
+             redirect it onto that file: the shell empties it before init reads it); then \
+             sign in: bridgewatch {config}auth login --account {}",
             path.display(),
             answers.account
         )
     })
+}
+
+/// A word a POSIX shell reads back as itself: bare when it is only safe
+/// characters, single-quoted otherwise.
+fn shell_word(text: &str) -> String {
+    let safe = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,".contains(c));
+    if safe {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
+    }
 }
 
 /// The crates `[log].level` is scoped to: this binary and the engine under it.
