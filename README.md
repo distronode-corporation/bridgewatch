@@ -473,6 +473,44 @@ tray menu (**Setup wizard…**) or from Settings.
 A `--config` or `BRIDGEWATCH_CONFIG` path that does not exist is treated as a typo, not
 as a first run: bridgewatch reports it and creates nothing.
 
+## Sign in with GitHub or GitLab
+
+Instead of a token, an account can sign in. bridgewatch uses the OAuth device flow: it
+shows a short code, you enter it on the provider's own page in your browser, and
+bridgewatch waits until the provider says yes. There is no client secret and no local
+redirect listener.
+
+- **In the app.** On github.com and gitlab.com, the wizard's **Account** step and an
+  account's token field in Settings offer **Sign in with GitHub** or **Sign in with
+  GitLab**. The code is shown large, with **Copy** and a button that opens the
+  provider's page. In Settings a signed-in account also has **Sign in again** and **Sign
+  out**. On GitHub the app sees only repositories on accounts it is installed on, and
+  Settings links to **Install it on an organisation**.
+- **In the CLI.** The account's token source is `token = { oauth = true }`. Then:
+
+  ```
+  bridgewatch auth login --account gh     # prints the page to open and the code to enter
+  bridgewatch auth status                 # who each account is signed in as, until when, which scopes
+  bridgewatch auth logout --account gh    # removes the sign-in from the credential store
+  ```
+
+  The npm package runs the same commands: `npx bridgewatch auth login --account gh`.
+  `auth status` never prints a token and exits 70 when an account is not signed in.
+- **Which hosts.** The built-in applications cover github.com (the GitHub App
+  [bridgewatch-ci](https://github.com/apps/bridgewatch-ci)) and gitlab.com only. GitHub
+  Enterprise Server and self-managed GitLab need an OAuth application registered on that
+  server, named by its client id: `token = { oauth = { client_id = "..." } }`. A client
+  id is not a secret.
+- **Where the tokens are kept.** In the OS credential store (the macOS keychain, or the
+  Secret Service on Linux), under service `bridgewatch:oauth:<account>` and user
+  `oauth`. The config file holds only `token = { oauth = true }`. Signing out deletes
+  that item but does not revoke the grant at the provider; revoke it there if you want
+  the tokens dead rather than forgotten.
+
+Scopes and permissions, refresh, and what is never logged are in
+[SECURITY.md](SECURITY.md#sign-in-tokens-oauth). For retry and play, see the table in
+[Retry and play](#retry-and-play-opt-in).
+
 ## Crash reports (opt in)
 
 The release builds can send a crash report to Distronode's Sentry organisation in the

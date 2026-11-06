@@ -1,10 +1,17 @@
 //! The OAuth applications this build of bridgewatch ships with.
 //!
-//! ⚠️ These are NOT registered yet. While a value is `None`, the wizard and the
-//! Settings window do not offer "Sign in" for that host unless the user types a
-//! client id of their own, `config validate` asks for one, and `auth login`
-//! refuses with the same sentence. Filling one in is the whole of switching
-//! sign-in on for that host: nothing else in the tree names a client id.
+//! All of them are registered: bridgewatch's GitHub App on github.com (with its
+//! URL slug, for the install link) and its OAuth application on gitlab.com. They
+//! are what the wizard, the Settings window and `auth login` sign in with on
+//! those two hosts when the account names no client id of its own. GitHub
+//! Enterprise Server and self-managed GitLab never use them; those need an
+//! application registered on that server.
+//!
+//! Each is an `Option` so that a build can ship without one. With a `None`, the
+//! wizard and the Settings window do not offer "Sign in" for that host unless
+//! the user types a client id of their own, `config validate` asks for one, and
+//! `auth login` refuses with the same sentence. Nothing else in the tree names a
+//! client id.
 //!
 //! A client id is not a secret. Device-flow applications have no client
 //! secret at all (GitHub: "Enable Device Flow" on a GitHub App; GitLab: an
@@ -27,8 +34,9 @@ pub const GITLAB_COM: Option<&str> =
 /// The built-in applications, as one value.
 ///
 /// Everything that decides whether sign-in is available takes one of these
-/// rather than reading the constants, so the tests can prove both the shipped
-/// state (all `None`) and the registered one without a second build.
+/// rather than reading the constants, so the tests can prove both what this
+/// build ships (all registered, [`BuiltinClients::shipped`]) and a build with
+/// none (all `None`, [`BuiltinClients::default`]) without a second build.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BuiltinClients {
     /// [`GITHUB_COM`].

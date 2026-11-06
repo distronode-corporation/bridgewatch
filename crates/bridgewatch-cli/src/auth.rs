@@ -469,9 +469,9 @@ mod tests {
         assert_eq!(unknown.code, exit::USAGE);
     }
 
-    /// While this build has no built-in application, github.com cannot be
-    /// signed in to without a client id of the user's own, and it is the
-    /// configuration's fault, said before any request.
+    /// In a build with no built-in application (`BuiltinClients::default()`),
+    /// github.com cannot be signed in to without a client id of the user's own,
+    /// and it is the configuration's fault, said before any request.
     #[tokio::test]
     async fn login_without_a_client_id_names_what_to_write() {
         let transport = Arc::new(ScriptTransport::new());
