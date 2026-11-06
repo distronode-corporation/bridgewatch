@@ -8,10 +8,17 @@ name: CI
 # floor, the version written down in two files, and the generated tray icons.
 # `cargo-deny`, `dependency-review` (pull requests only) and `zizmor` are the supply
 # chain: advisories and licences for the dependency tree, and the workflows themselves.
+# `cli` builds the command-line binary the way a release ships it, packs the npm
+# package around it and runs it through the shim, and on macOS proves the
+# hardened-runtime binary still reads the keychain. `npm-rehearsal` then runs the
+# release's own packaging scripts on the three binaries: the tarballs, the staged npm
+# package, the pack checks and `npm publish --dry-run`. `launcher` runs the npm
+# launcher's tests on every Node the package admits.
 #
 # `installers` is off unless asked for: a manual run with `build_installers` ticked
-# builds the seven unsigned bundles a release would ship and keeps them for 3 days,
-# which is how a build gets tested from a private staging repo without a tag.
+# builds the seven unsigned app bundles a release would ship (not the CLI tarballs,
+# which `cli` covers) and keeps them for 3 days, which is how a build gets tested
+# from a private staging repo without a tag.
 on:
   push:
     branches: [main]
@@ -301,6 +308,232 @@ jobs:
           version: 1.30.1
           advanced-security: ${{ github.event_name != 'pull_request' }}
           annotations: ${{ github.event_name == 'pull_request' }}
+
+  # The CLI as a release ships it, on every push and pull request: the same build step
+  # release.yml runs (fully stripped; universal on macOS), the npm package packed
+  # around it, and the binary run through the package's shim. `installers` covers the
+  # app bundles but is manual only, so without this job the first build of the CLI
+  # tarballs and the npm package would be at tag time.
+  #
+  # On macOS the binary is also signed ad hoc with the hardened runtime, the flag
+  # release.yml's Developer ID signature carries, and made to read a token from a
+  # throwaway keychain item through `security find-generic-password`. No secret is
+  # used anywhere in this job.
+  #
+  # ⛔ Same runners as `rust`, for the same reason: ubuntu-22.04 and -arm are the
+  # release's glibc floor, which packaging/npm/bin/bridgewatch.js also enforces.
+  cli:
+    name: cli (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: universal-apple-darwin
+            os: macos-latest
+            rust_targets: aarch64-apple-darwin x86_64-apple-darwin
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            rust_targets: ''
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+            rust_targets: ''
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Before anything slow: packaging/npm is what the last three steps pack, and a
+      # missing one should read as that, not as an npm error twenty minutes in.
+      - name: The npm package exists
+        run: |
+          if [ ! -f packaging/npm/package.json ]; then
+            echo "::error::packaging/npm/package.json is missing, so there is no npm package to pack around the CLI"
+            exit 1
+          fi
+
+      # No Tauri apt list: the CLI does not link GTK or WebKitGTK, and its Linux
+      # keyring backend (zbus) is pure Rust.
+      - name: Install the stable toolchain
+        shell: bash
+        env:
+          RUST_TARGETS: ${{ matrix.rust_targets }}
+        run: |
+          # Components match rust-toolchain.toml so rustup has nothing left to fetch.
+          rustup toolchain install stable --profile minimal -c rustfmt -c clippy
+          # Space-separated; empty on the native Linux legs.
+          for t in $RUST_TARGETS; do rustup target add "$t" --toolchain stable; done
+          rustc --version
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: cli-${{ matrix.target }}
+
+      # The version the binary must report, from the crate that defines it
+      # (python 3.10 on the 22.04 legs, so json rather than tomllib).
+      - name: Read the CLI version
+        id: version
+        run: |
+          version="$(cargo metadata --locked --no-deps --format-version 1 \
+            | python3 -c 'import json,sys;print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="bridgewatch-cli"))')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "bridgewatch-cli $version"
+
+      - name: Build the CLI
+        uses: $/.github/actions/build-cli
+        with:
+          target: ${{ matrix.target }}
+          version: ${{ steps.version.outputs.version }}
+
+      # For `npm-rehearsal`. upload-artifact drops the mode; the packaging script sets
+      # 0755 itself, as it does at release.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-${{ matrix.target }}
+          path: cli-out/bridgewatch
+          if-no-files-found: error
+          retention-days: 1
+
+      # The identifier and flags release.yml signs with, minus the Developer ID: an ad
+      # hoc signature carries the hardened runtime just the same, which is the part
+      # the probe is about.
+      - name: Sign ad hoc with the hardened runtime
+        if: runner.os == 'macOS'
+        run: codesign --force --options runtime --identifier com.distronode.bridgewatch.cli --sign - cli-out/bridgewatch
+
+      # keyring-crate: also the in-process Security.framework path that `auth login`,
+      # `auth status` and `auth logout` use. CI only, so a surprise there fails a PR
+      # rather than a tag.
+      - name: The hardened-runtime CLI reads the keychain
+        if: runner.os == 'macOS'
+        uses: $/.github/actions/cli-keychain-probe
+        with:
+          binary: cli-out/bridgewatch
+          keyring-crate: "true"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # Only this leg's binary goes into vendor/; the shim picks it by platform and
+      # architecture, so the other two targets' absence is not exercised here.
+      - name: Pack the npm package around the CLI
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          # mkdir, not `install -D`: on macOS (BSD install) -D names a destdir and creates
+          # nothing.
+          mkdir -p "packaging/npm/vendor/$TARGET"
+          install -m 0755 cli-out/bridgewatch "packaging/npm/vendor/$TARGET/bridgewatch"
+          cd packaging/npm
+          npm pack
+          shopt -s nullglob
+          packed=(bridgewatch-*.tgz)
+          if [ "${#packed[@]}" -ne 1 ]; then
+            echo "::error::expected one bridgewatch-*.tgz, npm pack left ${#packed[@]}"
+            exit 1
+          fi
+          # In the tarball, and executable there: a 0644 binary installs and then
+          # fails with EACCES on first run.
+          entry="$(tar -tvzf "${packed[0]}" "package/vendor/$TARGET/bridgewatch")"
+          echo "$entry"
+          case "$entry" in
+            -rwxr-xr-x*) ;;
+            *) echo "::error::vendor/$TARGET/bridgewatch is not 0755 in the tarball"; exit 1 ;;
+          esac
+
+      - name: The packed CLI runs through the shim
+        working-directory: packaging/npm
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          reported="$(npx --yes ./bridgewatch-*.tgz --version)"
+          if [ "$reported" != "bridgewatch $VERSION" ]; then
+            echo "::error::npx bridgewatch reports \"$reported\", expected \"bridgewatch $VERSION\""
+            exit 1
+          fi
+          echo "$reported"
+
+  # The release's CLI packaging and npm steps, rehearsed on every push and pull
+  # request with the SAME scripts release.yml runs (.github/scripts/package-cli.sh,
+  # npm-stage.sh, npm-pack.sh), so a bug in them is found here rather than at a tag,
+  # where a re-run replays the tag's own YAML and a fix costs a new version. The
+  # inputs differ from a release's only in what they cannot share: the binaries are
+  # the `cli` legs' (the macOS one signed ad hoc, not with the Developer ID), and the
+  # third-party licence file is a stand-in, because cargo-about runs in release.yml's
+  # `licenses` job. Nothing is published: `npm publish --dry-run` needs no login.
+  npm-rehearsal:
+    needs: cli
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: cli-*
+          path: ${{ runner.temp }}/bin
+
+      - name: The three release tarballs
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./packaging/npm/package.json").version')"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          printf 'Stand-in for the cargo-about output release.yml generates.\n' \
+            > "$RUNNER_TEMP/THIRD-PARTY-LICENSES-cli.txt"
+          for t in universal-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            bash .github/scripts/package-cli.sh "$version" "$t" "$RUNNER_TEMP/bin/cli-$t/bridgewatch" \
+              "$RUNNER_TEMP/THIRD-PARTY-LICENSES-cli.txt" "$RUNNER_TEMP/tarballs"
+          done
+
+      - name: Stage the npm package
+        run: bash .github/scripts/npm-stage.sh "$VERSION" "$RUNNER_TEMP/tarballs"
+
+      - name: Pack and check the npm package
+        run: bash .github/scripts/npm-pack.sh "$VERSION" "$RUNNER_TEMP/npm"
+
+      - name: npm publish --dry-run
+        run: npm publish --dry-run "$RUNNER_TEMP/npm/bridgewatch-$VERSION.tgz"
+
+  # The npm launcher's tests (platform mapping, the musl and old-glibc refusals, the
+  # diagnostic report, exit codes, signals, the packed file list), on every Node major
+  # the package's `engines` admits (>=18). node:test, because vitest only collects
+  # src/**. The glob is left to the shell: Node 18 and 20 do not expand one passed to
+  # `--test`, and Node 22 and later read a bare directory as a module.
+  launcher:
+    name: launcher (node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22, 24]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      - name: node --test
+        run: node --test packaging/npm/test/*.test.js
 
   # Manual only. The same bundles release.yml builds, from any ref, UNSIGNED, as
   # workflow artifacts with 3-day retention: for installing a candidate from a private

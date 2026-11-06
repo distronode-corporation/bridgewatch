@@ -7,7 +7,9 @@
 //!
 //! ⛔ Nothing here touches the network or a keyring. Every verdict is answered
 //! from a recorded fixture (`check --fixture`), which resolves no token, and
-//! every config file is written to a per-test temp directory.
+//! every config file is written to a per-test temp directory. The one exception
+//! is the Ctrl-C test, which points an account at a loopback listener of its own
+//! that never answers, so a tick is in flight when the signal arrives.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -1562,5 +1564,80 @@ fn with_yes_a_write_goes_on_to_read_the_token_and_that_failure_is_an_error() {
         stderr(&out).contains("BRIDGEWATCH_TEST_TOKEN_NEVER_SET"),
         "{}",
         stderr(&out)
+    );
+}
+
+/// ⛔ A Ctrl-C while a tick is in flight stops `watch` with a verdict code. The
+/// listener used to be created per sleep, so during the first tick SIGINT's
+/// default action still applied (the process died of the signal, no verdict)
+/// and during a later one the signal reached no listener and was dropped.
+/// The account points at a loopback listener that accepts and never answers, so
+/// the first tick is still waiting on it when the signal is sent; with no
+/// snapshot yet the verdict is unknown (4).
+#[cfg(unix)]
+#[test]
+fn ctrl_c_during_a_tick_exits_watch_with_a_verdict() {
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("address").port();
+    let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let _ = accepted_tx.send(());
+            // Hold the request open, unanswered, until the client goes away.
+            let mut buf = [0u8; 1024];
+            while matches!(stream.read(&mut buf), Ok(n) if n > 0) {}
+        }
+    });
+
+    let dir = TempDir::new("ctrl-c-mid-tick");
+    let config = dir.write(
+        "config.toml",
+        &format!(
+            "[accounts.slow]\nbase_url = \"http://127.0.0.1:{port}\"\n\
+             token = {{ env = \"BW_TEST_CTRL_C_TOKEN\" }}\ntimeout_secs = 60\n\n\
+             [[watches]]\nid = \"w\"\naccount = \"slow\"\nproject = 12345678\nref = \"main\"\n"
+        ),
+    );
+    let mut child = bin()
+        .arg("--config")
+        .arg(&config)
+        .arg("watch")
+        .env("BW_TEST_CTRL_C_TOKEN", "not-a-real-token")
+        // The CLI's notification ledger lives under these: keep it in the temp dir.
+        .env("HOME", &dir.0)
+        .env("XDG_STATE_HOME", &dir.0)
+        .env("XDG_DATA_HOME", &dir.0)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn watch");
+
+    accepted_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the first tick reached the loopback listener");
+    let killed = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("run kill");
+    assert!(killed.success());
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("watch ignored a Ctrl-C that arrived during a tick");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(
+        status.code(),
+        Some(4),
+        "watch must exit with a verdict code, not die of the signal: {status:?}"
     );
 }

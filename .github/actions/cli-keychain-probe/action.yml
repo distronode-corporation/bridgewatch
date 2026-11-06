@@ -1,0 +1,198 @@
+name: The hardened-runtime CLI reads the keychain
+description: Prove that a CLI signed with the hardened runtime can still read a token through `security find-generic-password`, against a throwaway keychain item.
+
+# Shared by release.yml's `build` (the Developer ID signed CLI) and ci.yml's `cli`
+# (the same binary signed ad hoc, with the same hardened-runtime flag).
+# macOS only. No secret is passed in or read: the keychain, the item and its value are
+# all made up here and deleted at the end.
+#
+# The core reads a keyring item with an EMPTY account by shelling out to
+# `security find-generic-password -s <service> -a "" -w` (crates/bridgewatch-core/
+# src/token.rs), which is how glab's and gh's tokens are reused. The hardened runtime
+# is new for this binary, so the question is whether that child process still works
+# from inside it. It is answered end to end: `bridgewatch check` resolves the token
+# from the throwaway item and sends it to a loopback stand-in for GitLab, which
+# records the headers it is sent. The marker arriving there is the proof; the exit
+# code of `check` is not (the stand-in answers 404, so it is 4).
+#
+# With `keyring-crate: "true"` it also proves the OTHER path, the one `auth login`,
+# `auth status` and `auth logout` use: the keyring crate calling Security.framework
+# in-process (no `security` child), for a sign-in kept under service
+# `bridgewatch:oauth:<account>` and account `oauth` (crates/bridgewatch-core/src/
+# oauth/store.rs). That crate looks only in the user domain's DEFAULT keychain, not
+# the search list, so the throwaway keychain is made the default for the duration
+# and the old default is put back on exit.
+inputs:
+  binary:
+    description: Path to the signed CLI.
+    required: true
+  keyring-crate:
+    description: Also prove the keyring crate's own path (auth status and auth logout against a seeded sign-in).
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Probe
+      shell: bash
+      env:
+        BINARY: ${{ inputs.binary }}
+        KEYRING_CRATE: ${{ inputs.keyring-crate }}
+      run: |
+        set -euo pipefail
+        [ "$RUNNER_OS" = macOS ] || { echo "::error::the keychain probe is macOS only"; exit 1; }
+        bin="$(cd "$(dirname "$BINARY")" && pwd)/$(basename "$BINARY")"
+        # A binary without the hardened runtime would pass this and prove nothing.
+        sig="$(codesign -dv --verbose=2 "$bin" 2>&1)"
+        grep -qE '^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime' <<<"$sig" \
+          || { echo "::error::$BINARY is not signed with the hardened runtime"; printf '%s\n' "$sig"; exit 1; }
+
+        work="$(mktemp -d "$RUNNER_TEMP/keychain-probe.XXXXXX")"
+        kc="$work/probe.keychain-db"
+        kcpass="$(openssl rand -hex 16)"
+        service="bridgewatch-ci-probe-$(openssl rand -hex 4)"
+        marker="probe-$(openssl rand -hex 16)"
+        server=""
+        old_default=""
+        cleanup() {
+          if [ -n "$server" ]; then
+            kill "$server" 2>/dev/null || true
+            # Reaped here so bash prints no "Terminated" job notice for it.
+            wait "$server" 2>/dev/null || true
+          fi
+          if [ -n "$old_default" ]; then
+            security default-keychain -d user -s "$old_default" 2>/dev/null || true
+          fi
+          security delete-keychain "$kc" 2>/dev/null || true
+        }
+        trap cleanup EXIT
+
+        # A keychain of its own, unlocked, first in the user search list, so the
+        # CLI's plain `security find-generic-password` (no -k) finds the item.
+        security create-keychain -p "$kcpass" "$kc"
+        security set-keychain-settings "$kc"
+        security unlock-keychain -p "$kcpass" "$kc"
+        existing=()
+        while IFS= read -r line; do
+          line="${line#"${line%%[![:space:]]*}"}"
+          line="${line%\"}"
+          line="${line#\"}"
+          [ -n "$line" ] && existing+=("$line")
+        done < <(security list-keychains -d user)
+        security list-keychains -d user -s "$kc" "${existing[@]}"
+        # Empty account, as glab writes it. -T: /usr/bin/security may read it
+        # without a prompt.
+        security add-generic-password -s "$service" -a "" -w "$marker" -T /usr/bin/security "$kc"
+        # Positive control: the same lookup from this shell sees the item.
+        [ "$(security find-generic-password -s "$service" -a "" -w)" = "$marker" ] \
+          || { echo "::error::the probe item cannot be read from the shell either"; exit 1; }
+
+        # The loopback stand-in. It writes every request's headers to headers.txt and
+        # answers 404.
+        python3 -I - "$work" <<'PY' &
+        import http.server
+        import pathlib
+        import sys
+
+        work = pathlib.Path(sys.argv[1])
+
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                with open(work / "headers.txt", "a", encoding="utf-8") as out:
+                    out.write(f"{self.command} {self.path}\n")
+                    for key, value in self.headers.items():
+                        out.write(f"{key}: {value}\n")
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        (work / "port.tmp").write_text(str(server.server_address[1]), encoding="utf-8")
+        (work / "port.tmp").rename(work / "port")
+        server.serve_forever()
+        PY
+        server=$!
+        for _ in $(seq 1 50); do [ -s "$work/port" ] && break; sleep 0.2; done
+        [ -s "$work/port" ] || { echo "::error::the loopback stand-in did not start"; exit 1; }
+        port="$(cat "$work/port")"
+
+        cat > "$work/config.toml" <<EOF
+        [accounts.probe]
+        base_url = "http://127.0.0.1:$port"
+        token = { keyring = { service = "$service", user = "" } }
+
+        [[watches]]
+        id = "probe"
+        account = "probe"
+        project = 12345678
+        ref = "main"
+        EOF
+
+        rc=0
+        "$bin" --config "$work/config.toml" check || rc=$?
+        echo "bridgewatch check exited $rc"
+        [ -s "$work/headers.txt" ] || { echo "::error::the CLI sent no request to the stand-in"; exit 1; }
+        if ! grep -qF "$marker" "$work/headers.txt"; then
+          echo "::error::the hardened-runtime CLI did not send the keychain item's value"
+          sed -E 's/^([^:]+): .*/\1: <value>/' "$work/headers.txt"
+          exit 1
+        fi
+        echo "the hardened-runtime CLI read the keychain item through security find-generic-password"
+
+        [ "$KEYRING_CRATE" = true ] || exit 0
+
+        # The keyring crate's path. The account's base_url is the discard port, where
+        # nothing listens: `auth status` and `auth logout` only touch the credential
+        # store, and a connection attempt would fail rather than reach anything.
+        account="oauthprobe$(openssl rand -hex 4)"
+        oauth_service="bridgewatch:oauth:$account"
+        login="bridgewatch-ci-probe"
+        cat > "$work/oauth.toml" <<EOF
+        [accounts.$account]
+        base_url = "http://127.0.0.1:9"
+        token = { oauth = { client_id = "bridgewatch-ci-probe" } }
+
+        [[watches]]
+        id = "probe"
+        account = "$account"
+        project = 12345678
+        ref = "main"
+        EOF
+
+        old_default="$(security default-keychain -d user | sed -E 's/^[[:space:]]*"?//; s/"?[[:space:]]*$//')"
+        security default-keychain -d user -s "$kc"
+
+        # A made-up, unexpired sign-in in the store's own layout (TokenSet::to_json):
+        # the access token expires an hour from now, so `auth status` has no reason
+        # to refresh, and it never does in any case.
+        now="$(date +%s)"
+        doc="$(printf '{"version":1,"access_token":"probe-%s","refresh_token":"probe-%s","expires_at":%d,"scopes":["read_api"],"login":"%s","client_id":"bridgewatch-ci-probe","base_url":"http://127.0.0.1:9","obtained_at":%d}' \
+          "$(openssl rand -hex 16)" "$(openssl rand -hex 16)" "$((now + 3600))" "$login" "$now")"
+        # -A (any application may read it, no prompt) stands in for the ACL a real
+        # sign-in gets: there the binary creates the item itself through the keyring
+        # crate, so it is the item's owner and reads it back without asking. Here
+        # `security` creates it, and without -A the CLI's first read would raise an
+        # access prompt that no one is at the runner to answer.
+        security add-generic-password -A -s "$oauth_service" -a oauth -w "$doc" "$kc"
+
+        rc=0
+        status_out="$("$bin" --config "$work/oauth.toml" auth status --account "$account")" || rc=$?
+        printf '%s\n' "$status_out"
+        [ "$rc" -eq 0 ] || { echo "::error::auth status exited $rc against the seeded sign-in"; exit 1; }
+        grep -qF "signed in as @$login;" <<<"$status_out" \
+          || { echo "::error::auth status did not report the seeded sign-in"; exit 1; }
+        echo "the hardened-runtime CLI read the sign-in through the keyring crate"
+
+        "$bin" --config "$work/oauth.toml" auth logout --account "$account"
+        rc=0
+        security find-generic-password -s "$oauth_service" -a oauth "$kc" >/dev/null 2>&1 || rc=$?
+        # 44 is errSecItemNotFound as `security` reports it.
+        [ "$rc" -eq 44 ] \
+          || { echo "::error::after auth logout, find-generic-password exited $rc, not 44 (not found)"; exit 1; }
+        echo "the hardened-runtime CLI deleted the sign-in through the keyring crate"

@@ -1,0 +1,9 @@
+# Put here by .github/workflows/release.yml just before `npm pack`; never committed.
+/vendor/
+/LICENSE
+/NOTICE
+/THIRD-PARTY-LICENSES-cli.txt
+*.tgz
+
+# The tests' own scratch space.
+/test/.scratch/

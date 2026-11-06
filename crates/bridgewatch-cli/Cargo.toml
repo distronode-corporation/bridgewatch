@@ -1,6 +1,6 @@
 [package]
 name = "bridgewatch-cli"
-description = "Command-line bridgewatch: bridge-aware GitLab CI and GitHub Actions verdicts, config tooling and fixture recording. Install with cargo install."
+description = "Command-line bridgewatch: bridge-aware GitLab CI and GitHub Actions verdicts, config tooling and fixture recording. Install with npm (`npm install -g bridgewatch`), from the release tarballs, or with cargo install."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,10 +9,11 @@ repository.workspace = true
 authors.workspace = true
 default-run = "bridgewatch"
 # Not published to crates.io: `bridgewatch` is not a name this project has
-# reserved there. The app bundles do not carry this binary either (there is no
-# externalBin), so the way to get it is the README's
-# `cargo install --locked --path crates/bridgewatch-cli`.
-# Only bridgewatch-core is publishable.
+# reserved there. The release ships this binary instead, on npm as
+# `bridgewatch` and as `bridgewatch-cli_<version>_<target>.tar.gz` assets on
+# each GitHub release. The app bundles still do not carry it (there is no
+# externalBin), and `cargo install --locked --path crates/bridgewatch-cli`
+# builds it from source. Only bridgewatch-core is publishable.
 publish = false
 
 [[bin]]

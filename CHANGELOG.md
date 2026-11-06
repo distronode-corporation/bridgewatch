@@ -13,8 +13,37 @@ body line with a bracket.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-06
+
+The CLI ships with every release: on npm as `bridgewatch`, and as three tarballs on the
+release, signed and notarised on macOS. The `.dmg` is now notarised and stapled itself,
+and the app gets a Homebrew cask.
+
+### Added
+
+- **The CLI ships with every release.** `bridgewatch` is on npm: `npm install -g
+  bridgewatch`, or `npx bridgewatch` to run it without installing, on macOS and on Linux
+  with glibc 2.35 or newer, x64 and arm64. The package carries the native binary for each
+  platform and a small launcher (Node.js 18 or newer) that refuses musl or an older glibc
+  with a pointer to the GitHub downloads. The release also carries the CLI as three
+  tarballs, `bridgewatch-cli_<version>_<target>.tar.gz` for `universal-apple-darwin`,
+  `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, each holding the binary,
+  `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES-cli.txt`. The macOS binary is signed with
+  the Developer ID and notarised. The npm package is built from those same tarballs and
+  published with npm provenance, and the tarballs are covered by the release's provenance
+  attestation, so a release now carries ten assets (was seven). `cargo install --locked
+  --path crates/bridgewatch-cli` still builds it from source.
+- **A Homebrew cask** for the app on macOS: `brew install --cask
+  distronode-corporation/tap/bridgewatch` installs the release's `.dmg`.
+- **`bridgewatch init --oauth` and `--oauth-client-id <id>`.** The second names an
+  application of your own, as GitHub Enterprise Server and a self-managed GitLab need.
+  When the file signs in, `init` ends by printing the next step,
+  `bridgewatch auth login --account <name>`.
+
 ### Changed
 
+- **The `.dmg` is notarised and stapled itself**, not only the `.app` inside it, so
+  Gatekeeper can check the download offline before it is opened.
 - **Sign-in is the default way to add an account.** On github.com and gitlab.com, where
   bridgewatch has its own application, **Sign in with GitHub** (or GitLab) is now what a
   new account starts on everywhere:
@@ -37,19 +66,16 @@ body line with a bracket.
 
 ### Fixed
 
+- **`bridgewatch watch` stops on a Ctrl-C that arrives while it is polling.** One
+  during the first poll used to kill the process before it had a verdict, and one
+  during a later poll was dropped, so `watch` ran on. It now exits with the last
+  verdict's code, or 4 (unknown) when there is none yet.
 - **Settings: signing in through a newly typed client id writes it.** A successful
   sign-in already switched an account to `oauth`. When the account signed in already but
   through another application, the new client id stayed unwritten until **Use this
   source** was pressed. That button is now hidden for the sign-in the file already uses.
 - **Settings: every tab label stays on one line.** At the narrowest window, **Edit as
   text** wrapped onto three lines.
-
-### Added
-
-- **`bridgewatch init --oauth` and `--oauth-client-id <id>`.** The second names an
-  application of your own, as GitHub Enterprise Server and a self-managed GitLab need.
-  When the file signs in, `init` ends by printing the next step,
-  `bridgewatch auth login --account <name>`.
 
 ## [1.2.0] - 2026-10-25
 
@@ -499,7 +525,8 @@ per-workflow status dot other monitors already show.
   `glab:<host>:token` naming, which has not been checked against a live install.
 - Windows is not targeted.
 
-[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/distronode-corporation/bridgewatch/compare/v0.1.0...v1.0.0

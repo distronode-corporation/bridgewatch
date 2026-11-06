@@ -24,10 +24,11 @@ Apache-2.0.
 
 *The 1.2.0 popover on Linux, watching three of our public repositories.*
 
-**Status:** 1.2.0, released 2026-10-25. Download it from the
+**Status:** 1.3.0, released 2026-11-06. Download it from the
 [Releases page](https://github.com/distronode-corporation/bridgewatch/releases/latest): a
-signed and notarised universal `.dmg` for macOS, and a `.deb`, an `.rpm` and an
-`.AppImage` for Linux on x86_64 and arm64. See [Install](#install).
+signed and notarised universal `.dmg` for macOS, a `.deb`, an `.rpm` and an
+`.AppImage` for Linux on x86_64 and arm64, and the CLI as tarballs, also on npm as
+`bridgewatch`. See [Install](#install).
 
 **Links:** [project page](https://www.distronode.com/open-source/bridgewatch) ·
 [GitLab mirror](https://gitlab.com/distronode-corporation/bridgewatch) (read-only mirror;
@@ -319,7 +320,28 @@ extension enabled or the icon never appears. KDE, Cinnamon and XFCE work as they
 
 ## Install
 
-Download from the [Releases page](https://github.com/distronode-corporation/bridgewatch/releases).
+**The app on macOS, with Homebrew:**
+
+```
+brew install --cask distronode-corporation/tap/bridgewatch
+```
+
+The cask installs the `.dmg` the Releases page carries. From 1.3.0 the `.dmg` itself is
+notarised and stapled too, not only the `.app` inside it.
+
+**The CLI, with npm**, on macOS and on Linux with glibc 2.35 or newer, x64 and arm64:
+
+```
+npm install -g bridgewatch
+npx bridgewatch check        # or run it once without installing
+```
+
+The package needs Node.js 18 or newer and carries the native binary for each platform; a
+small launcher picks the right one. On musl, or a glibc older than 2.35, it refuses to
+start and points to the downloads below. See [CLI](#cli) for what it does.
+
+**Everything else** is on the [Releases page](https://github.com/distronode-corporation/bridgewatch/releases).
+A release carries these ten assets:
 
 | File | For |
 | --- | --- |
@@ -330,14 +352,18 @@ Download from the [Releases page](https://github.com/distronode-corporation/brid
 | `bridgewatch-<version>-1.aarch64.rpm` | Fedora and openSUSE, arm64 |
 | `bridgewatch_<version>_amd64.AppImage` | Other glibc 2.35+ Linux, x86_64 |
 | `bridgewatch_<version>_aarch64.AppImage` | Other glibc 2.35+ Linux, arm64 |
+| `bridgewatch-cli_<version>_universal-apple-darwin.tar.gz` | The CLI, macOS, Apple Silicon and Intel |
+| `bridgewatch-cli_<version>_x86_64-unknown-linux-gnu.tar.gz` | The CLI, glibc 2.35+ Linux, x86_64 |
+| `bridgewatch-cli_<version>_aarch64-unknown-linux-gnu.tar.gz` | The CLI, glibc 2.35+ Linux, arm64 |
 
-The `.dmg` is universal: one download runs natively on both Apple Silicon and Intel
-Macs. The Linux file names follow each format's own architecture spelling (`amd64` and
-`arm64` for Debian, `x86_64` and `aarch64` for RPM). Every asset carries a GitHub build
-provenance attestation:
+The `.dmg` and the macOS CLI are universal: one download runs natively on both Apple
+Silicon and Intel Macs. The Linux app file names follow each format's own architecture
+spelling (`amd64` and `arm64` for Debian, `x86_64` and `aarch64` for RPM); the CLI
+tarballs use Rust's target names. Every asset carries a GitHub build provenance
+attestation:
 
 ```
-gh attestation verify bridgewatch_1.2.0_amd64.deb --repo distronode-corporation/bridgewatch
+gh attestation verify bridgewatch_1.3.0_amd64.deb --repo distronode-corporation/bridgewatch
 ```
 
 Every release also carries the attestation as
@@ -348,29 +374,40 @@ Every release also carries the attestation as
 `/usr/share/doc/bridgewatch/` for the `.deb`, `/usr/share/licenses/bridgewatch/` for
 the `.rpm`, and among the app's resources in the `.dmg` and the `.AppImage`.
 
-The release assets contain the GUI only. The `bridgewatch` CLI is built from source,
-see [CLI](#cli).
+Each CLI tarball holds the `bridgewatch` binary, `LICENSE`, `NOTICE` and
+`THIRD-PARTY-LICENSES-cli.txt` (the licence texts of the Rust crates built into the CLI).
+To install one by hand:
+
+```
+tar -xzf bridgewatch-cli_<version>_x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 0755 bridgewatch /usr/local/bin/
+```
+
+The app bundles do not carry the CLI. To build it from source instead, see [CLI](#cli).
 
 ### macOS: signed and notarised
 
 The `.app` inside the `.dmg` is signed with the Developer ID **Distronode Corporation
 (R935BA6767)** and notarised by Apple, with the ticket stapled, so it opens like any other
-downloaded app. To check a copy yourself:
+downloaded app. The `.dmg` itself is notarised and stapled too. The CLI binary in its
+tarball is signed with the same Developer ID and notarised; a bare binary cannot carry a
+stapled ticket, so Gatekeeper looks its ticket up online. To check a copy yourself:
 
 ```
 codesign --verify --deep --strict /Applications/bridgewatch.app
 spctl --assess --type execute --verbose /Applications/bridgewatch.app
+spctl --assess --type open --context context:primary-signature --verbose bridgewatch_<version>_universal.dmg
 ```
 
-The second command should end with `source=Notarized Developer ID`.
+The second and third commands should end with `source=Notarized Developer ID`.
 
 ### Linux: .deb
 
 ```
-sudo apt install ./bridgewatch_1.2.0_amd64.deb
+sudo apt install ./bridgewatch_1.3.0_amd64.deb
 ```
 
-On arm64, use `bridgewatch_1.2.0_arm64.deb`. The package depends on `libsecret-tools`,
+On arm64, use `bridgewatch_1.3.0_arm64.deb`. The package depends on `libsecret-tools`,
 because bridgewatch runs `secret-tool` to read a keyring item that has an empty user name,
 which is how glab stores its token and how gh stores its active account's (see
 [Tokens](#tokens)).
@@ -378,11 +415,11 @@ which is how glab stores its token and how gh stores its active account's (see
 ### Linux: .rpm
 
 ```
-sudo dnf install ./bridgewatch-1.2.0-1.x86_64.rpm      # Fedora
-sudo zypper install ./bridgewatch-1.2.0-1.x86_64.rpm   # openSUSE
+sudo dnf install ./bridgewatch-1.3.0-1.x86_64.rpm      # Fedora
+sudo zypper install ./bridgewatch-1.3.0-1.x86_64.rpm   # openSUSE
 ```
 
-On arm64, use `bridgewatch-1.2.0-1.aarch64.rpm`. The package requires the file
+On arm64, use `bridgewatch-1.3.0-1.aarch64.rpm`. The package requires the file
 `/usr/bin/secret-tool` rather than a package name, for the same reason as the `.deb`: the
 package that ships it is `libsecret` on Fedora but `secret-tool` on openSUSE, and
 a file dependency resolves to the right one on each. The package is not GPG-signed; the
@@ -391,11 +428,11 @@ attestation above is how to check where it came from.
 ### Linux: AppImage
 
 ```
-chmod +x bridgewatch_1.2.0_amd64.AppImage
-./bridgewatch_1.2.0_amd64.AppImage
+chmod +x bridgewatch_1.3.0_amd64.AppImage
+./bridgewatch_1.3.0_amd64.AppImage
 ```
 
-On arm64, use `bridgewatch_1.2.0_aarch64.AppImage`. An AppImage declares no dependencies.
+On arm64, use `bridgewatch_1.3.0_aarch64.AppImage`. An AppImage declares no dependencies.
 If you reuse glab's or gh's token, install `secret-tool` yourself (`sudo apt install
 libsecret-tools` on Debian and Ubuntu, `sudo dnf install libsecret` on Fedora). A token stored in
 bridgewatch's own keyring entry goes through the Secret Service over D-Bus and does not
@@ -452,6 +489,44 @@ tray menu (**Setup wizard…**) or from Settings.
 
 A `--config` or `BRIDGEWATCH_CONFIG` path that does not exist is treated as a typo, not
 as a first run: bridgewatch reports it and creates nothing.
+
+## Sign in with GitHub or GitLab
+
+Instead of a token, an account can sign in. bridgewatch uses the OAuth device flow: it
+shows a short code, you enter it on the provider's own page in your browser, and
+bridgewatch waits until the provider says yes. There is no client secret and no local
+redirect listener.
+
+- **In the app.** On github.com and gitlab.com, the wizard's **Account** step and an
+  account's token field in Settings offer **Sign in with GitHub** or **Sign in with
+  GitLab**. The code is shown large, with **Copy** and a button that opens the
+  provider's page. In Settings a signed-in account also has **Sign in again** and **Sign
+  out**. On GitHub the app sees only repositories on accounts it is installed on, and
+  Settings links to **Install it on an organisation**.
+- **In the CLI.** The account's token source is `token = { oauth = true }`. Then:
+
+  ```
+  bridgewatch auth login --account gh     # prints the page to open and the code to enter
+  bridgewatch auth status                 # who each account is signed in as, until when, which scopes
+  bridgewatch auth logout --account gh    # removes the sign-in from the credential store
+  ```
+
+  The npm package runs the same commands: `npx bridgewatch auth login --account gh`.
+  `auth status` never prints a token and exits 70 when an account is not signed in.
+- **Which hosts.** The built-in applications cover github.com (the GitHub App
+  [bridgewatch-ci](https://github.com/apps/bridgewatch-ci)) and gitlab.com only. GitHub
+  Enterprise Server and self-managed GitLab need an OAuth application registered on that
+  server, named by its client id: `token = { oauth = { client_id = "..." } }`. A client
+  id is not a secret.
+- **Where the tokens are kept.** In the OS credential store (the macOS keychain, or the
+  Secret Service on Linux), under service `bridgewatch:oauth:<account>` and user
+  `oauth`. The config file holds only `token = { oauth = true }`. Signing out deletes
+  that item but does not revoke the grant at the provider; revoke it there if you want
+  the tokens dead rather than forgotten.
+
+Scopes and permissions, refresh, and what is never logged are in
+[SECURITY.md](SECURITY.md#sign-in-tokens-oauth). For retry and play, see the table in
+[Retry and play](#retry-and-play-opt-in).
 
 ## Crash reports (opt in)
 
@@ -906,8 +981,9 @@ stops a hostile or compromised instance from making the app open an arbitrary pa
 ## CLI
 
 The CLI runs the same core as the GUI, so anything the icon knows it can print: in a
-shell prompt, a status bar or a script. It is not in the release assets; build it
-with Rust 1.90 or newer, from a clone of this repository:
+shell prompt, a status bar or a script. Install it with npm or from the release
+tarballs (see [Install](#install)), or build it with Rust 1.90 or newer, from a clone of
+this repository:
 
 ```
 cargo install --locked --path crates/bridgewatch-cli
