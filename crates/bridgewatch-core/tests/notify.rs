@@ -1006,7 +1006,7 @@ fn every_template_variable_renders_through_the_real_path() {
 /// the same value as `{{pipeline.ref}}`. A ref other than the fixture's `main`
 /// proves the value comes from the row, not from a default.
 ///
-/// ⚠️ It rendered EMPTY through 1.3.0: `ref` is a Rust keyword, and `r#ref` in
+/// ⚠️ It rendered EMPTY through 1.2.0: `ref` is a Rust keyword, and `r#ref` in
 /// `context!` named the key `r#ref`, so the documented `ref` was undefined.
 #[test]
 fn the_ref_variable_renders_the_ref_name() {

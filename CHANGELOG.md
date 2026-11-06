@@ -13,14 +13,6 @@ body line with a bracket.
 
 ## [Unreleased]
 
-### Fixed
-
-- **`{{ref}}` renders the ref name in notification templates.** It always rendered empty:
-  `ref` is a Rust keyword, and the template context was built with `r#ref`, which MiniJinja
-  keys as `r#ref`, so the documented `ref` variable was undefined. It now holds the same
-  value as `{{pipeline.ref}}`, which was unaffected. A template that used `{{ref}}` and
-  relied on it being empty will now show the ref.
-
 ## [1.3.0] - 2026-11-06
 
 The CLI ships with every release: on npm as `bridgewatch`, and as three tarballs on the
@@ -55,6 +47,11 @@ and the app gets a Homebrew cask.
   during the first poll used to kill the process before it had a verdict, and one
   during a later poll was dropped, so `watch` ran on. It now exits with the last
   verdict's code, or 4 (unknown) when there is none yet.
+- **`{{ref}}` renders the ref name in notification templates.** It always rendered empty:
+  `ref` is a Rust keyword, and the template context was built with `r#ref`, which MiniJinja
+  keys as `r#ref`, so the documented `ref` variable was undefined. It now holds the same
+  value as `{{pipeline.ref}}`, which was unaffected. A template that used `{{ref}}` and
+  relied on it being empty will now show the ref.
 
 ## [1.2.0] - 2026-10-25
 
