@@ -89,6 +89,8 @@ and the app gets a Homebrew cask.
   sign-in already switched an account to `oauth`. When the account signed in already but
   through another application, the new client id stayed unwritten until **Use this
   source** was pressed. That button is now hidden for the sign-in the file already uses.
+  What is written is the client id the sign-in started with, even if the box was edited
+  while the code was pending, and "Signed in as" is shown once, not twice.
 - **Settings: every tab label stays on one line.** At the narrowest window, **Edit as
   text** wrapped onto three lines.
 
