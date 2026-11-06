@@ -820,6 +820,11 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
             let transport = Arc::new(ReqwestTransport::new(std::time::Duration::from_secs(
                 timeout,
             ))?);
+            // A repeated SIGINT must stay harmless: the npm launcher forwards
+            // the terminal's Ctrl-C, which also arrives here directly through
+            // the process group. The first completes this future and cancels
+            // the sign-in; the rest find tokio's handler installed and do
+            // nothing. See `watch`.
             let cancel = async {
                 let _ = tokio::signal::ctrl_c().await;
             };

@@ -240,36 +240,30 @@ describe("the wrapper as a process", () => {
     assert.equal(result.signal, "SIGTERM");
   });
 
-  test("the binary dying of SIGINT kills the wrapper with SIGINT (its ignore handler is gone)", async () => {
+  test("the binary dying of SIGINT kills the wrapper with SIGINT (its forwarding handler is gone)", async () => {
     const result = await run(["self-kill", "SIGINT"]);
     assert.equal(result.code, null);
     assert.equal(result.signal, "SIGINT");
   });
 
-  test("SIGINT to the wrapper alone is ignored and not forwarded", async () => {
-    let lines = [];
+  test("SIGINT to the wrapper and the binary at once (a terminal's Ctrl-C) exits once", async () => {
     const result = await run(["wait"], {
       onLine(line, proc) {
-        lines.push(line);
         if (line.startsWith("ready ")) {
-          const childPid = Number(line.slice("ready ".length));
+          process.kill(Number(line.slice("ready ".length)), "SIGINT");
           proc.kill("SIGINT");
-          // Give a forwarded signal ample time to arrive before the child is told
-          // directly, as a terminal's Ctrl-C would tell the whole process group.
-          setTimeout(() => {
-            assert.equal(proc.exitCode, null, "the wrapper exited on SIGINT");
-            assert.deepEqual(lines.slice(1), [], "the child saw a forwarded SIGINT");
-            process.kill(childPid, "SIGINT");
-          }, 500);
         }
       },
     });
-    assert.deepEqual(lines.slice(1), ["got SIGINT"]);
+    // Twice is fine (both can land before the fake binary's exit runs); the binary's
+    // own answer is the exit code, once.
+    assert.match(result.stdout, /^ready \d+\n(got SIGINT\n)+$/);
     assert.equal(result.signal, null);
     assert.equal(result.code, 10);
   });
 
   for (const [signal, code] of [
+    ["SIGINT", 10],
     ["SIGTERM", 11],
     ["SIGHUP", 12],
   ]) {

@@ -4,11 +4,15 @@
 // arguments and terminal, and exits the way the binary did. Plain CommonJS with no
 // dependencies, so it runs on every Node the package's `engines` admits.
 //
-// Signals: a terminal sends Ctrl-C (SIGINT) to the whole foreground process group, so
-// the binary already receives it and owns what happens next. This process ignores
-// SIGINT so that it outlives the binary and reports its exit. SIGTERM and SIGHUP are
-// usually aimed at this process alone (a supervisor, a closed session), so they are
-// forwarded. A binary killed by a signal is reported by dying of the same signal.
+// Signals: SIGINT, SIGTERM and SIGHUP sent to this process are forwarded to the binary,
+// and this process stays alive until the binary exits, then exits the same way. A
+// SIGINT aimed at this process alone (`kill -INT`, a supervisor, npm forwarding one
+// under npx) would otherwise never reach the binary, and `bridgewatch watch` would run
+// on with nobody to stop it. A terminal's Ctrl-C reaches the whole foreground process
+// group, so the binary then gets SIGINT twice, once from the terminal and once from
+// here. That is safe by design: the CLI treats a repeated SIGINT as the same request
+// (crates/bridgewatch-cli/src/main.rs), and npm itself already delivers it twice under
+// npx. A binary killed by a signal is reported by dying of the same signal.
 //
 // Required as a module (the tests), it only exports its helpers. The
 // BRIDGEWATCH_NPM_TEST_* variables exist for those tests and nothing else.
@@ -31,7 +35,7 @@ const TARGETS = {
   "linux-arm64": "aarch64-unknown-linux-gnu",
 };
 
-const FORWARDED_SIGNALS = ["SIGTERM", "SIGHUP"];
+const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 // "2.35" -> [2, 35]; anything that is not two dot-separated integers -> null.
 function parseGlibcVersion(value) {
@@ -140,8 +144,6 @@ function main() {
 
   const child = childProcess.spawn(file, process.argv.slice(2), { stdio: "inherit" });
 
-  const ignoreInterrupt = () => {};
-  process.on("SIGINT", ignoreInterrupt);
   const forwarders = FORWARDED_SIGNALS.map((signal) => {
     const forward = () => {
       child.kill(signal);
@@ -150,7 +152,6 @@ function main() {
     return [signal, forward];
   });
   const removeHandlers = () => {
-    process.removeListener("SIGINT", ignoreInterrupt);
     for (const [signal, forward] of forwarders) process.removeListener(signal, forward);
   };
 

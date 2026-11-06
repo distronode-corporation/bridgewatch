@@ -31,8 +31,8 @@ On an unsupported system the launcher says so and exits 1. The desktop app and o
 downloads are on the [Releases page](https://github.com/distronode-corporation/bridgewatch/releases).
 
 The launcher passes its arguments and terminal straight to the native binary and exits
-with its exit code. Ctrl-C goes to the binary; SIGTERM and SIGHUP sent to the launcher are
-forwarded to it.
+with its exit code. SIGINT (Ctrl-C), SIGTERM and SIGHUP sent to the launcher are forwarded
+to the binary, so `kill -INT` on the launcher stops `bridgewatch watch` too.
 
 ## Documentation
 
