@@ -314,7 +314,8 @@ extension enabled or the icon never appears. KDE, Cinnamon and XFCE work as they
 brew install --cask distronode-corporation/tap/bridgewatch
 ```
 
-The cask installs the same notarised `.dmg` the Releases page carries.
+The cask installs the `.dmg` the Releases page carries. From 1.3.0 the `.dmg` itself is
+notarised and stapled too, not only the `.app` inside it.
 
 **The CLI, with npm**, on macOS and on Linux with glibc 2.35 or newer, x64 and arm64:
 
