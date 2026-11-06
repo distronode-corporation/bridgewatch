@@ -713,7 +713,7 @@ jobs:
   # and git. `publish` does not wait for it: symbols arriving late, or a Sentry
   # outage, must not hold a release back, and a failure here is re-runnable.
   #
-  # Both secrets are `release` environment secrets, like the APPLE_* ones:
+  # The two secrets:
   #   SENTRY_AUTH_TOKEN       here, with project:releases and project:write on
   #                           distronode-corporation-eu/bridgewatch
   #   BRIDGEWATCH_SENTRY_DSN  in `build`, baked into the binary (a DSN is not a
