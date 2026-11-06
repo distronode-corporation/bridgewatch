@@ -1,8 +1,8 @@
 name: The hardened-runtime CLI reads the keychain
 description: Prove that a CLI signed with the hardened runtime can still read a token through `security find-generic-password`, against a throwaway keychain item.
 
-# Shared by release.yml's `build` (the Developer ID signed CLI) and ci.yml's
-# `installers` (the same binary signed ad hoc, with the same hardened-runtime flag).
+# Shared by release.yml's `build` (the Developer ID signed CLI) and ci.yml's `cli`
+# (the same binary signed ad hoc, with the same hardened-runtime flag).
 # macOS only. No secret is passed in or read: the keychain, the item and its value are
 # all made up here and deleted at the end.
 #

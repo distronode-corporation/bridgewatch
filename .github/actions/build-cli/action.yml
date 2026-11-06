@@ -1,7 +1,7 @@
 name: Build the CLI
 description: cargo build the bridgewatch CLI for this leg, fully stripped, into cli-out/bridgewatch, and check what came out.
 
-# Shared by release.yml's `build` and ci.yml's `installers`. No secret is passed in.
+# Shared by release.yml's `build` and ci.yml's `cli`. No secret is passed in.
 # The CLI is built in the same leg as the app, so it reuses that leg's toolchain and
 # its runner, and on Linux that runner is the glibc floor (release.yml's header): a
 # binary linked on ubuntu-22.04 needs glibc 2.35 or newer, which is also the floor
@@ -34,6 +34,8 @@ runs:
         set -euo pipefail
         unset CARGO_PROFILE_RELEASE_DEBUG CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO
         export CARGO_PROFILE_RELEASE_STRIP=true
+        # Cargo's own default when CARGO_TARGET_DIR is unset (the runners).
+        out_dir="${CARGO_TARGET_DIR:-target}"
         rm -rf cli-out
         mkdir -p cli-out
         case "$TARGET" in
@@ -43,8 +45,8 @@ runs:
             cargo build --release --locked -p bridgewatch-cli \
               --target aarch64-apple-darwin --target x86_64-apple-darwin
             lipo -create -output cli-out/bridgewatch \
-              target/aarch64-apple-darwin/release/bridgewatch \
-              target/x86_64-apple-darwin/release/bridgewatch
+              "$out_dir/aarch64-apple-darwin/release/bridgewatch" \
+              "$out_dir/x86_64-apple-darwin/release/bridgewatch"
             archs="$(lipo -archs cli-out/bridgewatch)"
             for arch in arm64 x86_64; do
               case " $archs " in
@@ -60,7 +62,7 @@ runs:
             have="$(uname -m)"
             [ "$have" = "$want" ] || { echo "::error::$TARGET must be built on a $want runner, this is $have"; exit 1; }
             cargo build --release --locked -p bridgewatch-cli
-            cp target/release/bridgewatch cli-out/bridgewatch
+            cp "$out_dir/release/bridgewatch" cli-out/bridgewatch
             sections="$(readelf -S --wide cli-out/bridgewatch)"
             if grep -qE '\.symtab|\.debug_' <<<"$sections"; then
               echo "::error::the CLI still carries a symbol table or debug sections"
