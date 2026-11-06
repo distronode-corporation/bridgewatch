@@ -417,7 +417,10 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          install -D -m 0755 cli-out/bridgewatch "packaging/npm/vendor/$TARGET/bridgewatch"
+          # mkdir, not `install -D`: on macOS (BSD install) -D names a destdir and creates
+          # nothing.
+          mkdir -p "packaging/npm/vendor/$TARGET"
+          install -m 0755 cli-out/bridgewatch "packaging/npm/vendor/$TARGET/bridgewatch"
           cd packaging/npm
           npm pack
           shopt -s nullglob

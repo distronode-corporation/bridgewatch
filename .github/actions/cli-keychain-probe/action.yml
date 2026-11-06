@@ -42,7 +42,11 @@ runs:
         marker="probe-$(openssl rand -hex 16)"
         server=""
         cleanup() {
-          if [ -n "$server" ]; then kill "$server" 2>/dev/null || true; fi
+          if [ -n "$server" ]; then
+            kill "$server" 2>/dev/null || true
+            # Reaped here so bash prints no "Terminated" job notice for it.
+            wait "$server" 2>/dev/null || true
+          fi
           security delete-keychain "$kc" 2>/dev/null || true
         }
         trap cleanup EXIT
