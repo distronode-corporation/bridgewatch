@@ -17,7 +17,7 @@ body line with a bracket.
 
 The CLI ships with every release: on npm as `bridgewatch`, and as three tarballs on the
 release, signed and notarised on macOS. The `.dmg` is now notarised and stapled itself,
-and the app gets a Homebrew cask.
+and the app is on Homebrew.
 
 ### Added
 
@@ -33,8 +33,8 @@ and the app gets a Homebrew cask.
   published with npm provenance, and the tarballs are covered by the release's provenance
   attestation, so a release now carries ten assets (was seven). `cargo install --locked
   --path crates/bridgewatch-cli` still builds it from source.
-- **A Homebrew cask** for the app on macOS: `brew install --cask
-  distronode-corporation/tap/bridgewatch` installs the release's `.dmg`.
+- **The app is on Homebrew.** `brew install --cask distronode-corporation/tap/bridgewatch`
+  installs the release's `.dmg` on macOS.
 
 ### Changed
 
