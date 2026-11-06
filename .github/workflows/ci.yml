@@ -404,11 +404,15 @@ jobs:
         if: runner.os == 'macOS'
         run: codesign --force --options runtime --identifier com.distronode.bridgewatch.cli --sign - cli-out/bridgewatch
 
+      # keyring-crate: also the in-process Security.framework path that `auth login`,
+      # `auth status` and `auth logout` use. CI only, so a surprise there fails a PR
+      # rather than a tag.
       - name: The hardened-runtime CLI reads the keychain
         if: runner.os == 'macOS'
         uses: $/.github/actions/cli-keychain-probe
         with:
           binary: cli-out/bridgewatch
+          keyring-crate: "true"
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
