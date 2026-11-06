@@ -1029,6 +1029,24 @@ fn init_next_step_says_never_to_redirect_onto_the_config_and_carries_config() {
     );
 }
 
+/// The printed next step is a command the shell reads back as written: an
+/// account name with a space is quoted, as the config path is.
+#[test]
+fn init_next_step_quotes_an_account_name_with_a_space() {
+    let dir = TempDir::new("init-next-step-space");
+    let path = dir.0.join("config.toml");
+    let out = run(bin().arg("--config").arg(&path).args([
+        "init",
+        "--account",
+        "my team",
+        "--project",
+        "group/app",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("auth login --account 'my team'"), "{err}");
+}
+
 /// ⛔ A token source never crosses hosts. Moving an account to another
 /// instance with an explicit --account takes the new host's default, in both
 /// directions; without --account, init refuses to repoint it at all and says

@@ -70,6 +70,18 @@ body line with a bracket.
   either was edited on a re-run, so the file could name an application or an instance its
   tokens never came from, and the first poll asked to sign in again. The wizard now asks
   for a new sign-in instead.
+- **A renamed account keeps its sign-in in the wizard.** A sign-in made after renaming the
+  account, on a re-run or after an earlier sign-in, was stored under the old name, and one
+  that finished after a rename while the code was pending was recorded under the new
+  name, so the saved account had no sign-in either way. A sign-in is now stored under the
+  name the form shows when it starts, and Finish moves it to the saved name when the
+  account was renamed afterwards.
+- **The wizard never keeps a hidden CLI token selected.** When the CLI's token had been
+  picked and the instance changed to one where none is found, the option disappeared but
+  stayed chosen, and **Next** could not go on. It now falls back to sign-in where the
+  instance offers it, else to a pasted token.
+- **`init` quotes the account name in the `auth login` step it prints**, so a name with
+  a space can be pasted as it is.
 - **Settings: every tab label stays on one line.** At the narrowest window, **Edit as
   text** wrapped onto three lines.
 

@@ -127,6 +127,22 @@ async function github(api: WizardApi, oauth?: OAuthApi) {
   await click('input[name="provider"][value="github"]');
 }
 
+/** From the account step to Finish on a GitHub repository; returns `save`'s one call. */
+async function finishFromAccount(api: ReturnType<typeof fakeApi>) {
+  await click('[data-action="next"]');
+  expect(stepId()).toBe("project");
+  await type("#wizard-project-input", "acme/web");
+  await click('[data-action="resolve-project"]');
+  await click('[data-action="next"]'); // watch
+  await click('[data-action="next"]'); // deploy
+  await click('input[name="marker-mode"][value="none"]');
+  await click('[data-action="next"]'); // preferences
+  await click('[data-action="next"]'); // review
+  await click('[data-action="finish"]');
+  expect(api.save).toHaveBeenCalledTimes(1);
+  return api.save.mock.calls[0];
+}
+
 describe("sign-in, while this build has no built-in application", () => {
   it("is not offered, and the other token options are exactly as before", async () => {
     const oauth = fakeOAuth();
@@ -277,18 +293,41 @@ describe("sign-in with a built-in application", () => {
     const api = fakeApi();
     await github(api, oauth);
     await click('[data-action="oauth-sign-in"]');
+    expect(oauth.start.mock.calls[0][0]).toMatchObject({ account: "github" });
     await type("#wizard-account", "work");
-    await click('[data-action="next"]');
-    await type("#wizard-project-input", "acme/web");
-    await click('[data-action="resolve-project"]');
-    await click('[data-action="next"]'); // watch
-    await click('[data-action="next"]'); // deploy
-    await click('input[name="marker-mode"][value="none"]');
-    await click('[data-action="next"]'); // preferences
-    await click('[data-action="next"]'); // review
-    await click('[data-action="finish"]');
-    expect(api.save).toHaveBeenCalledTimes(1);
-    const [answers, options] = api.save.mock.calls[0];
+    // A rename keeps the sign-in: Finish moves it.
+    expect(q('[data-slot="oauth-signed-in"]')).not.toBeNull();
+    const [answers, options] = await finishFromAccount(api);
+    expect(answers).toMatchObject({ account: "work", token: { oauth: true } });
+    expect(options).toEqual({ secret: undefined, oauthAccount: "github" });
+  });
+
+  it("stores a sign-in made after a rename under the new name, and moves nothing", async () => {
+    const oauth = fakeOAuth(() => BUILT_IN);
+    const api = fakeApi();
+    await github(api, oauth);
+    await click('[data-action="oauth-sign-in"]');
+    await type("#wizard-account", "work");
+    await click('[data-action="oauth-sign-in"]');
+    expect(oauth.start.mock.calls[1][0]).toMatchObject({ account: "work" });
+    const [answers, options] = await finishFromAccount(api);
+    expect(answers).toMatchObject({ account: "work", token: { oauth: true } });
+    expect(options).toEqual({ secret: undefined });
+  });
+
+  it("moves a sign-in that finished after a rename while the code was pending", async () => {
+    const oauth = fakeOAuth(() => BUILT_IN);
+    let approve: (s: SignedIn) => void = () => {};
+    oauth.wait.mockImplementation(() => new Promise<SignedIn>((resolve) => (approve = resolve)));
+    const api = fakeApi();
+    await github(api, oauth);
+    await click('[data-action="oauth-sign-in"]');
+    expect(oauth.start.mock.calls[0][0]).toMatchObject({ account: "github" });
+    await type("#wizard-account", "work");
+    approve(SIGNED);
+    await settle();
+    expect(q('[data-slot="oauth-signed-in"]')).not.toBeNull();
+    const [answers, options] = await finishFromAccount(api);
     expect(answers).toMatchObject({ account: "work", token: { oauth: true } });
     expect(options).toEqual({ secret: undefined, oauthAccount: "github" });
   });
@@ -329,6 +368,30 @@ describe("re-running on a config that already signs in", () => {
     expect(text('[data-action="oauth-sign-in"]')).toBe("Sign in again");
     await click('[data-action="next"]');
     expect(stepId()).toBe("project");
+  });
+
+  const RERUN = { provider: "github", account: "gh", base_url: "https://api.github.com", token: { oauth: true } } as const;
+
+  it("moves the stored sign-in when the account is renamed without signing in again", async () => {
+    const api = fakeApi();
+    await start(api, fakeOAuth(() => BUILT_IN), { initial: RERUN });
+    await type("#wizard-account", "work");
+    expect(q('[data-slot="oauth-stored"]')).not.toBeNull();
+    const [answers, options] = await finishFromAccount(api);
+    expect(answers).toMatchObject({ account: "work", token: { oauth: true } });
+    expect(options).toEqual({ secret: undefined, oauthAccount: "gh" });
+  });
+
+  it("stores a new sign-in under the renamed account, and moves nothing", async () => {
+    const oauth = fakeOAuth(() => BUILT_IN);
+    const api = fakeApi();
+    await start(api, oauth, { initial: RERUN });
+    await type("#wizard-account", "work");
+    await click('[data-action="oauth-sign-in"]');
+    expect(oauth.start.mock.calls[0][0]).toMatchObject({ account: "work" });
+    const [answers, options] = await finishFromAccount(api);
+    expect(answers).toMatchObject({ account: "work", token: { oauth: true } });
+    expect(options).toEqual({ secret: undefined });
   });
 });
 
@@ -474,6 +537,48 @@ describe("changing the instance while gitlab.com's glab token was found", () => 
     await settle();
     expect(checkedMode()).toBe("paste");
     expect(q('input[name="token-mode"][value="glab"]')).toBeNull();
+  });
+});
+
+describe("a CLI token the user picked, after an instance change finds none", () => {
+  const LAB = { keyring: { service: "glab:gitlab.com:token", user: "" } };
+
+  /** The new host's detection is held until availability has answered for it. */
+  async function pickGlabThenMove(acme: OAuthAvailability) {
+    let answerAcme: (d: unknown) => void = () => {};
+    const api = fakeApi();
+    api.detectCliToken.mockImplementation((base: string) =>
+      base === "https://gitlab.com"
+        ? Promise.resolve({ status: "found", source: LAB })
+        : new Promise((r) => (answerAcme = r)),
+    );
+    const oauth = fakeOAuth();
+    oauth.availability.mockImplementation(async (_p: string, base: string) =>
+      base === "https://gitlab.com" ? { ...OFF, host: "gitlab.com" } : acme,
+    );
+    await start(api, oauth);
+    // A pick, so `modeChosen` is set: glab was already preselected, and a
+    // click on a checked radio changes nothing.
+    await click('input[name="token-mode"][value="env"]');
+    await click('input[name="token-mode"][value="glab"]');
+    expect(checkedMode()).toBe("glab");
+    await click('input[name="instance"][value="self-managed"]');
+    await type("#wizard-base-url", "https://gitlab.acme.com");
+    q<HTMLInputElement>("#wizard-base-url")!.dispatchEvent(new Event("blur"));
+    await settle();
+    answerAcme({ status: "not_found", service: "glab:gitlab.acme.com:token" });
+    await settle();
+    expect(q('input[name="token-mode"][value="glab"]')).toBeNull();
+  }
+
+  it("falls back to a pasted token, never a hidden radio", async () => {
+    await pickGlabThenMove({ ...OFF, needs_client_id: true, host: "gitlab.acme.com" });
+    expect(checkedMode()).toBe("paste");
+  });
+
+  it("falls back to sign-in where the new instance offers it", async () => {
+    await pickGlabThenMove({ ...OFF, available: true, host: "gitlab.acme.com" });
+    expect(checkedMode()).toBe("oauth");
   });
 });
 

@@ -55,6 +55,7 @@
     tokenSourceOf,
     validateStep,
     type Draft,
+    type SignInStart,
     type StepErrors,
   } from "./model";
 
@@ -123,6 +124,9 @@
    * asks for a new one: the file would otherwise name an instance or an
    * application its stored tokens never came from, and the first poll would
    * say "sign in again". Returns whether it forgot one.
+   *
+   * A renamed ACCOUNT is not forgotten: the sign-in stays stored under
+   * `draft.oauthAccount`, and Finish moves it to the saved name.
    */
   function forgetSignInIfMoved(): boolean {
     if (signedInBase === null) return false;
@@ -193,9 +197,12 @@
     modeChosen = true;
   }
 
-  function signedIn(signed: SignedIn, started: { base: string; clientId: string }) {
+  function signedIn(signed: SignedIn, started: SignInStart) {
     draft.oauthLogin = signed.login ?? "(unknown)";
-    draft.oauthAccount = draft.account.trim();
+    // ⛔ The name it was stored under, which is not always the one the form
+    // shows by now (a rename while the code was pending): Finish moves it from
+    // here to the saved name.
+    draft.oauthAccount = started.account;
     draft.oauthStored = false;
     modeChosen = true;
     signedInBase = started.base;
@@ -286,12 +293,20 @@
       const adopt = draft.tokenMode === "cli" || mayPreselect();
       if (adopt || sameSource(draft.cliSource, detectedSource)) draft.cliSource = result.source;
       detectedSource = result.source;
-    } else if (draft.cliSource !== null && sameSource(draft.cliSource, detectedSource)) {
-      draft.cliSource = null;
+    } else {
+      if (draft.cliSource !== null && sameSource(draft.cliSource, detectedSource)) draft.cliSource = null;
       detectedSource = null;
-      if (draft.tokenMode === "cli") draft.tokenMode = "paste";
+      // ⛔ Also when an instance change cleared the source before this answer
+      // came, and whatever `modeChosen` says: the CLI option is hidden with
+      // no source, and a hidden radio must never stay selected.
+      if (draft.tokenMode === "cli" && draft.cliSource === null) leaveCli();
     }
     preselect();
+  }
+
+  /** The CLI's token is gone: sign in where this instance offers it, else paste one. */
+  function leaveCli() {
+    draft.tokenMode = oauth && availability?.available ? "oauth" : "paste";
   }
 
   function instanceChanged() {

@@ -8,7 +8,7 @@
   import FieldMessage from "./FieldMessage.svelte";
   import DeviceSignIn from "../DeviceSignIn.svelte";
   import type { CliTokenDetection, Identity, Provider } from "./api";
-  import { baseUrlOf, type Draft, type StepErrors, type TokenMode } from "./model";
+  import { baseUrlOf, type Draft, type SignInStart, type StepErrors, type TokenMode } from "./model";
   import type { OAuthApi, OAuthAvailability, SignedIn } from "../../lib/oauth";
   import { cliName, providerName } from "../../lib/providers";
 
@@ -29,8 +29,8 @@
     oauth?: OAuthApi;
     /** Whether sign-in is offered for this instance and client id. */
     availability?: OAuthAvailability | null;
-    /** A sign-in finished, with the instance and client id it STARTED with. */
-    onSignedIn?: (signed: SignedIn, started: { base: string; clientId: string }) => void;
+    /** A sign-in finished, with the instance, client id and account name it STARTED with. */
+    onSignedIn?: (signed: SignedIn, started: SignInStart) => void;
     /** The typed client id changed. */
     onClientIdChange?: () => void;
     /** The user picked a token source: the wizard stops preselecting one. */
@@ -67,10 +67,11 @@
 
   /**
    * What the sign-in in progress started with. ⛔ The wizard judges a finished
-   * sign-in by THIS, not by what the form says by then: the instance and the
-   * client id can both change while the code is pending.
+   * sign-in by THIS, not by what the form says by then: the instance, the
+   * client id and the account name can all change while the code is pending.
+   * `account` is the name the sign-in is stored under.
    */
-  let started = { base: "", clientId: "" };
+  let started: SignInStart = { base: "", clientId: "", account: "" };
 
   /** Offer the keyring option when detection found the CLI's item, or when re-running on a config that already uses one. */
   const cliFound = $derived(cli?.status === "found" || draft.cliSource !== null);
@@ -252,9 +253,12 @@
           <DeviceSignIn
             api={oauth}
             request={() => {
-              started = { base: baseUrlOf(draft), clientId: draft.oauthClientId.trim() };
+              // ⛔ Stored under the name the form shows NOW, never a name an
+              // earlier sign-in was made under: on a re-run, or after signing
+              // in, renaming and signing in again, that name is not saved.
+              started = { base: baseUrlOf(draft), clientId: draft.oauthClientId.trim(), account: draft.account.trim() };
               return {
-                account: (draft.oauthAccount ?? draft.account).trim() || draft.account.trim(),
+                account: started.account,
                 provider: draft.provider,
                 base_url: started.base,
                 client_id: started.clientId || null,

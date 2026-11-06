@@ -825,7 +825,7 @@ fn next_step(
              redirect it onto that file: the shell empties it before init reads it); then \
              sign in: bridgewatch {config}auth login --account {}",
             path.display(),
-            answers.account
+            shell_word(&answers.account)
         )
     })
 }
