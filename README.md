@@ -307,7 +307,27 @@ extension enabled or the icon never appears. KDE, Cinnamon and XFCE work as they
 
 ## Install
 
-Download from the [Releases page](https://github.com/distronode-corporation/bridgewatch/releases).
+**The app on macOS, with Homebrew:**
+
+```
+brew install --cask distronode-corporation/tap/bridgewatch
+```
+
+The cask installs the same notarised `.dmg` the Releases page carries.
+
+**The CLI, with npm**, on macOS and on Linux with glibc 2.35 or newer, x64 and arm64:
+
+```
+npm install -g bridgewatch
+npx bridgewatch check        # or run it once without installing
+```
+
+The package needs Node.js 18 or newer and carries the native binary for each platform; a
+small launcher picks the right one. On musl, or a glibc older than 2.35, it refuses to
+start and points to the downloads below. See [CLI](#cli) for what it does.
+
+**Everything else** is on the [Releases page](https://github.com/distronode-corporation/bridgewatch/releases).
+A release carries these ten assets:
 
 | File | For |
 | --- | --- |
@@ -318,11 +338,15 @@ Download from the [Releases page](https://github.com/distronode-corporation/brid
 | `bridgewatch-<version>-1.aarch64.rpm` | Fedora and openSUSE, arm64 |
 | `bridgewatch_<version>_amd64.AppImage` | Other glibc 2.35+ Linux, x86_64 |
 | `bridgewatch_<version>_aarch64.AppImage` | Other glibc 2.35+ Linux, arm64 |
+| `bridgewatch-cli_<version>_universal-apple-darwin.tar.gz` | The CLI, macOS, Apple Silicon and Intel |
+| `bridgewatch-cli_<version>_x86_64-unknown-linux-gnu.tar.gz` | The CLI, glibc 2.35+ Linux, x86_64 |
+| `bridgewatch-cli_<version>_aarch64-unknown-linux-gnu.tar.gz` | The CLI, glibc 2.35+ Linux, arm64 |
 
-The `.dmg` is universal: one download runs natively on both Apple Silicon and Intel
-Macs. The Linux file names follow each format's own architecture spelling (`amd64` and
-`arm64` for Debian, `x86_64` and `aarch64` for RPM). Every asset carries a GitHub build
-provenance attestation:
+The `.dmg` and the macOS CLI are universal: one download runs natively on both Apple
+Silicon and Intel Macs. The Linux app file names follow each format's own architecture
+spelling (`amd64` and `arm64` for Debian, `x86_64` and `aarch64` for RPM); the CLI
+tarballs use Rust's target names. Every asset carries a GitHub build provenance
+attestation:
 
 ```
 gh attestation verify bridgewatch_1.2.0_amd64.deb --repo distronode-corporation/bridgewatch
@@ -336,21 +360,32 @@ Every release also carries the attestation as
 `/usr/share/doc/bridgewatch/` for the `.deb`, `/usr/share/licenses/bridgewatch/` for
 the `.rpm`, and among the app's resources in the `.dmg` and the `.AppImage`.
 
-The release assets contain the GUI only. The `bridgewatch` CLI is built from source,
-see [CLI](#cli).
+Each CLI tarball holds the `bridgewatch` binary, `LICENSE`, `NOTICE` and
+`THIRD-PARTY-LICENSES-cli.txt` (the licence texts of the Rust crates built into the CLI).
+To install one by hand:
+
+```
+tar -xzf bridgewatch-cli_<version>_x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 0755 bridgewatch /usr/local/bin/
+```
+
+The app bundles do not carry the CLI. To build it from source instead, see [CLI](#cli).
 
 ### macOS: signed and notarised
 
 The `.app` inside the `.dmg` is signed with the Developer ID **Distronode Corporation
 (R935BA6767)** and notarised by Apple, with the ticket stapled, so it opens like any other
-downloaded app. To check a copy yourself:
+downloaded app. The `.dmg` itself is notarised and stapled too. The CLI binary in its
+tarball is signed with the same Developer ID and notarised; a bare binary cannot carry a
+stapled ticket, so Gatekeeper looks its ticket up online. To check a copy yourself:
 
 ```
 codesign --verify --deep --strict /Applications/bridgewatch.app
 spctl --assess --type execute --verbose /Applications/bridgewatch.app
+spctl --assess --type open --context context:primary-signature --verbose bridgewatch_<version>_universal.dmg
 ```
 
-The second command should end with `source=Notarized Developer ID`.
+The second and third commands should end with `source=Notarized Developer ID`.
 
 ### Linux: .deb
 
@@ -890,8 +925,9 @@ stops a hostile or compromised instance from making the app open an arbitrary pa
 ## CLI
 
 The CLI runs the same core as the GUI, so anything the icon knows it can print: in a
-shell prompt, a status bar or a script. It is not in the release assets; build it
-with Rust 1.90 or newer, from a clone of this repository:
+shell prompt, a status bar or a script. Install it with npm or from the release
+tarballs (see [Install](#install)), or build it with Rust 1.90 or newer, from a clone of
+this repository:
 
 ```
 cargo install --locked --path crates/bridgewatch-cli

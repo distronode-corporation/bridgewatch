@@ -13,6 +13,28 @@ body line with a bracket.
 
 ## [Unreleased]
 
+### Added
+
+- **The CLI ships with every release.** `bridgewatch` is on npm: `npm install -g
+  bridgewatch`, or `npx bridgewatch` to run it without installing, on macOS and on Linux
+  with glibc 2.35 or newer, x64 and arm64. The package carries the native binary for each
+  platform and a small launcher (Node.js 18 or newer) that refuses musl or an older glibc
+  with a pointer to the GitHub downloads. The release also carries the CLI as three
+  tarballs, `bridgewatch-cli_<version>_<target>.tar.gz` for `universal-apple-darwin`,
+  `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, each holding the binary,
+  `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES-cli.txt`. The macOS binary is signed with
+  the Developer ID and notarised. The npm package is built from those same tarballs and
+  published with npm provenance, and the tarballs are covered by the release's provenance
+  attestation, so a release now carries ten assets (was seven). `cargo install --locked
+  --path crates/bridgewatch-cli` still builds it from source.
+- **A Homebrew cask** for the app on macOS: `brew install --cask
+  distronode-corporation/tap/bridgewatch` installs the release's `.dmg`.
+
+### Changed
+
+- **The `.dmg` is notarised and stapled itself**, not only the `.app` inside it, so
+  Gatekeeper can check the download offline before it is opened.
+
 ## [1.2.0] - 2026-10-25
 
 Crash reports that stay off until you say yes, the licence texts in every bundle, the
