@@ -13,6 +13,8 @@ description: cargo build the bridgewatch CLI for this leg, fully stripped, into 
 # $GITHUB_ENV for the app's Sentry files. The CLI sends no crash reports, so this step
 # alone puts the release profile back: STRIP=true, no debug info. It is asserted on
 # Linux (no .symtab, no .debug_* section); the macOS profile strips by default.
+# On macOS the minimum OS version of each slice is asserted too (at most 10.15 for
+# x86_64 and 11.0 for arm64).
 inputs:
   target:
     description: universal-apple-darwin, x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu.
@@ -55,6 +57,26 @@ runs:
               esac
             done
             echo "architectures: $archs"
+            # ⛔ The macOS floor the README promises (10.15), per architecture. A
+            # toolchain or MACOSX_DEPLOYMENT_TARGET change that raised it would still
+            # sign, notarise and run here, then refuse to start on older Macs. vtool
+            # prints `minos` (LC_BUILD_VERSION) or `version` (LC_VERSION_MIN_MACOSX).
+            for pair in x86_64:10.15 arm64:11.0; do
+              arch="${pair%%:*}"
+              ceiling="${pair#*:}"
+              build="$(vtool -arch "$arch" -show-build cli-out/bridgewatch)"
+              minos="$(awk '$1 == "minos" || $1 == "version" {print $2; exit}' <<<"$build")"
+              if [ -z "$minos" ]; then
+                printf '%s\n' "$build"
+                echo "::error::no minimum macOS version found in the $arch slice"
+                exit 1
+              fi
+              if [ "$(printf '%s\n' "$minos" "$ceiling" | sort -V | tail -n 1)" != "$ceiling" ]; then
+                echo "::error::the $arch slice needs macOS $minos; the floor is $ceiling"
+                exit 1
+              fi
+              echo "$arch: minimum macOS $minos (floor $ceiling)"
+            done
             ;;
           x86_64-unknown-linux-gnu | aarch64-unknown-linux-gnu)
             # Native only: the runner is the glibc floor, so no cross-compilation.
