@@ -13,6 +13,12 @@ body line with a bracket.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-06
+
+The CLI ships with every release: on npm as `bridgewatch`, and as three tarballs on the
+release, signed and notarised on macOS. The `.dmg` is now notarised and stapled itself,
+and the app gets a Homebrew cask.
+
 ### Added
 
 - **The CLI ships with every release.** `bridgewatch` is on npm: `npm install -g
@@ -483,7 +489,8 @@ per-workflow status dot other monitors already show.
   `glab:<host>:token` naming, which has not been checked against a live install.
 - Windows is not targeted.
 
-[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/distronode-corporation/bridgewatch/compare/v0.1.0...v1.0.0
