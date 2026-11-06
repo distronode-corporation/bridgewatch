@@ -129,17 +129,24 @@ describe("helpers", () => {
     assert.equal(reporter.excludeNetwork, "as it was");
   });
 
-  test("readReport on this Node: no network section, the setting put back", () => {
+  // `excludeNetwork` exists from Node 20.13 and 22. On an older Node (the package
+  // admits 18) the setting is ignored and the report keeps its network section,
+  // which costs time and nothing else.
+  const excludesNetwork = typeof process.report.excludeNetwork === "boolean";
+
+  test("readReport on this Node: the report it needs, the setting put back", () => {
     const before = process.report.excludeNetwork;
     const report = wrapper.readReport(process.report);
     assert.equal(typeof report.header, "object");
-    assert.equal(report.header.networkInterfaces, undefined);
+    if (process.platform === "linux") assert.equal(typeof report.header.glibcVersionRuntime, "string");
+    if (excludesNetwork) assert.equal(report.header.networkInterfaces, undefined);
     assert.equal(process.report.excludeNetwork, before);
   });
 
   test("environment's default report goes through readReport", () => {
     const report = wrapper.environment({}).report();
-    assert.equal(report.header.networkInterfaces, undefined);
+    assert.equal(typeof report.header, "object");
+    if (excludesNetwork) assert.equal(report.header.networkInterfaces, undefined);
   });
 
   test("environment takes the test overrides", () => {

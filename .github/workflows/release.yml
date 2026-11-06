@@ -667,35 +667,13 @@ jobs:
       # it at 0755 with LICENSE, NOTICE and the CLI's own third-party licence texts.
       # Its exact listing and the binary's mode are asserted. The `npm` job extracts
       # these same files, so this is also the npm package's input.
+      # The script is shared with ci.yml's `npm-rehearsal`, which runs it on every pull
+      # request, so this step is not first exercised at a tag.
       - name: Package the CLI
         shell: bash
         run: |
-          set -euo pipefail
-          name="bridgewatch-cli_${VERSION}_${CLI_TARGET}"
-          root="$RUNNER_TEMP/cli-package"
-          rm -rf "$root"
-          mkdir -p "$root/$name"
-          install -m 0755 cli-out/bridgewatch "$root/$name/bridgewatch"
-          install -m 0644 LICENSE NOTICE target/licenses/THIRD-PARTY-LICENSES-cli.txt "$root/$name/"
-          tarball="staging/$name.tar.gz"
-          if [ "$RUNNER_OS" = macOS ]; then
-            # bsdtar; COPYFILE_DISABLE keeps AppleDouble ._ files out.
-            COPYFILE_DISABLE=1 tar --uid 0 --gid 0 --uname root --gname root \
-              -czf "$tarball" -C "$root" "$name"
-          else
-            tar --owner=0 --group=0 --numeric-owner -czf "$tarball" -C "$root" "$name"
-          fi
-          expected="$(printf '%s\n' "$name/" "$name/bridgewatch" "$name/LICENSE" "$name/NOTICE" \
-            "$name/THIRD-PARTY-LICENSES-cli.txt" | sort)"
-          actual="$(tar -tzf "$tarball" | sort)"
-          if [ "$expected" != "$actual" ]; then
-            echo "::error::$tarball does not hold exactly the four expected files"
-            diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
-            exit 1
-          fi
-          mode="$(tar -tvzf "$tarball" | awk -v f="$name/bridgewatch" '$NF == f {print $1}')"
-          [ "$mode" = "-rwxr-xr-x" ] || { echo "::error::the CLI in $tarball is $mode, not -rwxr-xr-x"; exit 1; }
-          ls -l "$tarball"
+          bash .github/scripts/package-cli.sh "$VERSION" "$CLI_TARGET" cli-out/bridgewatch \
+            target/licenses/THIRD-PARTY-LICENSES-cli.txt staging
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -1045,75 +1023,20 @@ jobs:
               --deny-self-hosted-runners
           done
 
-      # Into packaging/npm/vendor/<target>/bridgewatch at 0755, after asserting each
-      # tarball holds exactly what `Package the CLI` put in it (so nothing else can be
-      # extracted). The licence files go to the package root once: LICENSE and NOTICE
-      # from this checkout (the tagged commit), and THIRD-PARTY-LICENSES-cli.txt from
-      # the tarballs, which must all carry the same one.
+      # The shared scripts ci.yml's `npm-rehearsal` runs on every pull request, so
+      # neither step is first exercised here. npm-stage.sh checks each tarball's exact
+      # listing before extracting it into packaging/npm/vendor/<target>/ at 0755 and
+      # puts the licence files at the package root; npm-pack.sh packs it and asserts
+      # the nine-file list and that every executable is 0755. The file it checked is
+      # the one published.
       - name: Stage the package
-        run: |
-          set -euo pipefail
-          pkg=packaging/npm
-          have="$(node -p 'require("./packaging/npm/package.json").version')"
-          if [ "$have" != "$VERSION" ]; then
-            echo "::error::packaging/npm/package.json is $have, the tag is $VERSION."
-            exit 1
-          fi
-          first=""
-          for t in $TARGETS; do
-            name="bridgewatch-cli_${VERSION}_${t}"
-            tarball="$RUNNER_TEMP/dl/$name.tar.gz"
-            expected="$(printf '%s\n' "$name/" "$name/bridgewatch" "$name/LICENSE" "$name/NOTICE" \
-              "$name/THIRD-PARTY-LICENSES-cli.txt" | sort)"
-            actual="$(tar -tzf "$tarball" | sort)"
-            if [ "$expected" != "$actual" ]; then
-              echo "::error::$name.tar.gz does not hold exactly the four expected files"
-              diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
-              exit 1
-            fi
-            out="$RUNNER_TEMP/x/$t"
-            mkdir -p "$out" "$pkg/vendor/$t"
-            tar -xzf "$tarball" -C "$out" --strip-components=1
-            install -m 0755 "$out/bridgewatch" "$pkg/vendor/$t/bridgewatch"
-            if [ -z "$first" ]; then
-              first="$out/THIRD-PARTY-LICENSES-cli.txt"
-            elif ! cmp -s "$first" "$out/THIRD-PARTY-LICENSES-cli.txt"; then
-              echo "::error::the tarballs carry different THIRD-PARTY-LICENSES-cli.txt files"
-              exit 1
-            fi
-          done
-          install -m 0644 "$first" "$pkg/THIRD-PARTY-LICENSES-cli.txt"
-          install -m 0644 LICENSE NOTICE "$pkg/"
-          find "$pkg" -type f -not -path '*/test/*' | sort
+        run: bash .github/scripts/npm-stage.sh "$VERSION" "$RUNNER_TEMP/dl"
 
-      # The tarball that is published is the one these checks read: its file list is
-      # exactly the nine files below, and every executable in it is 0755, because a
-      # vendored binary that lost its mode fails on every user's machine with EACCES.
       - name: Pack and check the package
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/npm"
-          (cd packaging/npm && npm pack --pack-destination "$RUNNER_TEMP/npm")
-          tgz="$RUNNER_TEMP/npm/bridgewatch-$VERSION.tgz"
-          [ -s "$tgz" ] || { echo "::error::npm pack wrote no $tgz"; exit 1; }
-          expected="$(printf 'package/%s\n' package.json README.md LICENSE NOTICE \
-            THIRD-PARTY-LICENSES-cli.txt bin/bridgewatch.js \
-            vendor/universal-apple-darwin/bridgewatch \
-            vendor/x86_64-unknown-linux-gnu/bridgewatch \
-            vendor/aarch64-unknown-linux-gnu/bridgewatch | sort)"
-          actual="$(tar -tzf "$tgz" | sort)"
-          if [ "$expected" != "$actual" ]; then
-            echo "::error::the npm package does not hold exactly the expected files"
-            diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
-            exit 1
-          fi
-          for f in bin/bridgewatch.js vendor/universal-apple-darwin/bridgewatch \
-                   vendor/x86_64-unknown-linux-gnu/bridgewatch vendor/aarch64-unknown-linux-gnu/bridgewatch; do
-            mode="$(tar -tvzf "$tgz" | awk -v f="package/$f" '$NF == f {print $1}')"
-            [ "$mode" = "-rwxr-xr-x" ] || { echo "::error::package/$f is ${mode:-missing}, not -rwxr-xr-x"; exit 1; }
-          done
-          tar -tvzf "$tgz"
-          echo "TGZ=$tgz" >> "$GITHUB_ENV"
+          bash .github/scripts/npm-pack.sh "$VERSION" "$RUNNER_TEMP/npm"
+          echo "TGZ=$RUNNER_TEMP/npm/bridgewatch-$VERSION.tgz" >> "$GITHUB_ENV"
 
       - name: Publish to npm
         run: npm publish "$TGZ" --provenance --access public
