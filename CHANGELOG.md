@@ -41,6 +41,13 @@ and the app gets a Homebrew cask.
 - **The `.dmg` is notarised and stapled itself**, not only the `.app` inside it, so
   Gatekeeper can check the download offline before it is opened.
 
+### Fixed
+
+- **`bridgewatch watch` stops on a Ctrl-C that arrives while it is polling.** One
+  during the first poll used to kill the process before it had a verdict, and one
+  during a later poll was dropped, so `watch` ran on. It now exits with the last
+  verdict's code, or 4 (unknown) when there is none yet.
+
 ## [1.2.0] - 2026-10-25
 
 Crash reports that stay off until you say yes, the licence texts in every bundle, the
