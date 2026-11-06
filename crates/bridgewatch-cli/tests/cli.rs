@@ -916,6 +916,81 @@ fn init_keeps_its_own_entry_by_default_where_sign_in_needs_a_client_id() {
     }
 }
 
+/// With no token flag, an account the file already has keeps its token
+/// source (as a re-run of the wizard does) and no sign-in step is printed; a
+/// new account in the same file takes the default; an explicit flag still
+/// changes an existing account's source.
+#[test]
+fn init_keeps_an_existing_accounts_token_source_unless_a_flag_says_otherwise() {
+    let dir = TempDir::new("init-keep-token");
+    let path = dir.write(
+        "config.toml",
+        "[accounts.gitlab]\ntoken = { env = \"MY_GITLAB_TOKEN\" }\n\n\
+         [[watches]]\nid = \"main\"\naccount = \"gitlab\"\nproject = \"group/app\"\n\
+         deploy_markers = [\"deploy\"]\n",
+    );
+    let original = std::fs::read_to_string(&path).unwrap();
+
+    // Existing account, no flag: its source is kept, nothing else to do.
+    let out = run(bin()
+        .arg("--config")
+        .arg(&path)
+        .args(["init", "--project", "group/other"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("token = { env = \"MY_GITLAB_TOKEN\" }"),
+        "{text}"
+    );
+    assert!(!text.contains("oauth"), "{text}");
+    assert!(!stderr(&out).contains("auth login"), "{}", stderr(&out));
+
+    // A new account in the same file takes the default for its host.
+    let out = run(bin().arg("--config").arg(&path).args([
+        "init",
+        "--provider",
+        "github",
+        "--project",
+        "owner/repo",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("token = { env = \"MY_GITLAB_TOKEN\" }"),
+        "{text}"
+    );
+    assert!(text.contains("[accounts.github]"), "{text}");
+    let github = text.split("[accounts.github]").nth(1).unwrap();
+    assert!(github.contains("token = { oauth = true }"), "{text}");
+    assert!(
+        stderr(&out).contains("bridgewatch auth login --account github"),
+        "{}",
+        stderr(&out)
+    );
+
+    // An explicit flag still changes the existing account's source.
+    let out =
+        run(bin()
+            .arg("--config")
+            .arg(&path)
+            .args(["init", "--project", "group/other", "--oauth"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("token = { oauth = true }"), "{text}");
+    assert!(!text.contains("MY_GITLAB_TOKEN"), "{text}");
+    assert!(
+        stderr(&out).contains("bridgewatch auth login --account gitlab"),
+        "{}",
+        stderr(&out)
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        original,
+        "disk untouched"
+    );
+}
+
 /// `--oauth` asks for sign-in outright, and `--oauth-client-id` names an
 /// application of the user's own, which a self-managed instance needs; without
 /// one there, the answer is refused with what to register.

@@ -135,8 +135,9 @@ npx bridgewatch auth login --account github
 ```
 
 Save what `init` prints as the file `bridgewatch config path` names before signing in;
-`init` writes nothing itself, and its last line on stderr is the `auth login` command for
-the account it wrote. With no token flag it signs in on github.com and gitlab.com; `--gh`,
+`init` writes nothing itself. When it writes a sign-in source, its last line on stderr is
+the `auth login` command for that account. With no token flag, a new account signs in on
+github.com and gitlab.com, and one the file already has keeps its source. `--gh`,
 `--token-env` and the others choose another source, and `--oauth-client-id` names an
 application of your own on GitHub Enterprise.
 
@@ -954,8 +955,9 @@ GitLab, `owner/repo` or a repository URL on GitHub), `--base-url`, `--account`, 
 GitHub), `--deploy-marker` (repeatable), `--schedule`, `--preflight <glob>` (GitLab
 only), `--primary`, `--live-secs`, and one token source (`--oauth`, `--oauth-client-id
 <id>`, `--glab`, `--gh`, `--token-env <var>`, `--token-keyring <service>` or
-`--token-command <program> <arg>...`; none means `oauth = true` on github.com and
-gitlab.com and `own = true` elsewhere). `--token-command` takes everything after it, arguments starting with `-`
+`--token-command <program> <arg>...`). With none, an account the file already has keeps
+its source, and a new one gets `oauth = true` on github.com and gitlab.com and `own =
+true` elsewhere. `--token-command` takes everything after it, arguments starting with `-`
 included (`--token-command gh auth token --hostname ghe.example.com`), so it goes last. It reads no token, fetches nothing and writes nothing: it prints the file
 to stdout, and if a config file already exists it prints that file edited, with its
 comments and other watches kept. When that file already has a primary watch, the new

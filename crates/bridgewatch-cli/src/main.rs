@@ -247,8 +247,9 @@ struct InitArgs {
     /// Poll interval while a pipeline is live, in seconds.
     #[arg(long, value_name = "SECS")]
     live_secs: Option<u64>,
-    /// Sign in with GitHub or GitLab: token = { oauth = true }. The default on
-    /// github.com and gitlab.com when no token flag is given; sign in with
+    /// Sign in with GitHub or GitLab: token = { oauth = true }. With no token
+    /// flag, a new account on github.com or gitlab.com gets this, and an
+    /// account the file already has keeps its source. Sign in with
     /// `bridgewatch auth login --account <name>` once the file is saved.
     #[arg(long, group = "token")]
     oauth: bool,
@@ -598,6 +599,23 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
             anyhow::anyhow!("--gh is github's keyring item; use --glab for a gitlab account"),
         ));
     }
+    let path = config::resolve_path(config_args.config.as_deref());
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(raw) => Some(raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(Failure::new(
+                exit::CONFIG,
+                anyhow::anyhow!("{}: {e}", path.display()),
+            ));
+        }
+    };
+    let account = args
+        .account
+        .unwrap_or_else(|| wizard::suggest_account_name(provider, &base_url));
+    // With no token flag, an account the file already has keeps its source, as
+    // a re-run of the wizard does; only a new account takes the default.
+    let mut kept = false;
     let token = if args.glab || args.gh {
         let service = wizard::cli_service_for(provider, &base_url)
             .ok_or_else(|| Failure::new(exit::USAGE, anyhow::anyhow!("--base-url has no host")))?;
@@ -618,6 +636,9 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         TokenSource::Oauth(OAuthSource {
             client_id: args.oauth_client_id,
         })
+    } else if let Some(token) = existing_token(existing.as_deref(), &account) {
+        kept = true;
+        token
     } else {
         default_token_source(provider, &base_url)
     };
@@ -626,9 +647,7 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         .unwrap_or_else(|| wizard::suggest_watch_id(&project.to_string(), &args.ref_name));
     let answers = WizardAnswers {
         provider,
-        account: args
-            .account
-            .unwrap_or_else(|| wizard::suggest_account_name(provider, &base_url)),
+        account,
         base_url,
         token,
         project: Some(project),
@@ -645,17 +664,6 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         live_secs: args.live_secs,
     };
 
-    let path = config::resolve_path(config_args.config.as_deref());
-    let existing = match std::fs::read_to_string(&path) {
-        Ok(raw) => Some(raw),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            return Err(Failure::new(
-                exit::CONFIG,
-                anyhow::anyhow!("{}: {e}", path.display()),
-            ));
-        }
-    };
     match wizard::build_config(&answers, existing.as_deref()) {
         Ok(built) => {
             for w in &built.warnings {
@@ -678,7 +686,7 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
                 path.display()
             );
             print!("{}", built.toml);
-            if let Some(next) = next_step(&answers, &path) {
+            if let Some(next) = next_step(&answers, &path).filter(|_| !kept) {
                 eprintln!("{next}");
             }
             Ok(exit::OK)
@@ -712,6 +720,14 @@ fn default_token_source(provider: config::Provider, base_url: &str) -> config::T
     } else {
         config::TokenSource::Own(true)
     }
+}
+
+/// The token source the config file already gives `account`, if the file
+/// has that account and reads as a configuration at all. A file that does not
+/// is refused by `build_config` with its own message, so `None` is enough here.
+fn existing_token(existing: Option<&str>, account: &str) -> Option<config::TokenSource> {
+    let config: Config = toml::from_str(existing?).ok()?;
+    config.accounts.get(account).map(|a| a.token.clone())
 }
 
 /// What `init` tells the user to do after saving the file, when there is

@@ -27,8 +27,10 @@ body line with a bracket.
     both answers, and never changes a choice you have already made.
   - Settings' **Add account** writes `token = { oauth = true }` for a new github.com or
     gitlab.com account, instead of bridgewatch's own entry.
-  - `bridgewatch init` with no token flag writes `token = { oauth = true }` there. It
-    keeps `own = true` on any other host.
+  - `bridgewatch init` with no token flag writes `token = { oauth = true }` there for a
+    new account, and `own = true` on any other host. An account the file already has
+    keeps its token source, as a re-run of the wizard does. Until now, a flagless `init`
+    into an existing file rewrote that account's source to `own = true`.
   - In the wizard, the **Sign in** button sits directly under its option, before the
     alternatives. The section is called **Access**, and what a token must be allowed to do
     is said only while a token option is chosen.
