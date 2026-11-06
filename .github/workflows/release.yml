@@ -344,6 +344,20 @@ jobs:
       - name: Cargo.lock is up to date
         run: cargo fetch --locked
 
+      # ── The CLI, built first ─────────────────────────────────────────────────
+      # ⛔ BEFORE "Write the notarization key", on purpose: `cargo build` runs the
+      # build scripts and proc macros of the crates only the CLI links, and none of
+      # that code should run while the notary key is on disk. The local action
+      # (shared with ci.yml) builds it fully stripped into cli-out/bridgewatch, whatever
+      # the next step sets for the app, and checks the architectures, the strip, the
+      # macOS minimum and `--version`. The app's bundles and debug files later in this
+      # leg are untouched by it; it is signed, probed and packaged after them.
+      - name: Build the CLI
+        uses: $/.github/actions/build-cli
+        with:
+          target: ${{ matrix.cli_target }}
+          version: ${{ needs.guard.outputs.version }}
+
       # ⛔ CRASH REPORTS NEED DEBUG INFORMATION THAT THE SHIPPED BINARY DOES NOT
       # CARRY. Cargo.toml's release profile strips everything (`strip = true`), so
       # for this workflow only:
@@ -368,7 +382,8 @@ jobs:
           fi
 
       # The notary key is a file for the Tauri CLI (APPLE_API_KEY_PATH), so it is
-      # written to the runner's temp dir, which is wiped with the job.
+      # written to the runner's temp dir. It is deleted by "Remove the notarization
+      # key" after the last submission, and the temp dir is wiped with the job.
       - name: Write the notarization key
         if: runner.os == 'macOS'
         env:
@@ -486,7 +501,15 @@ jobs:
             || { echo "::error::expected exactly one staged .dmg"; exit 1; }
           dmg="${dmgs[0]}"
           bash .github/scripts/notarise.sh "$dmg"
-          xcrun stapler staple "$dmg"
+          # Apple's ticket can lag the Accepted verdict by a moment (stapler error 65),
+          # so the staple is tried up to three times, 15 s apart.
+          stapled=false
+          for attempt in 1 2 3; do
+            if xcrun stapler staple "$dmg"; then stapled=true; break; fi
+            echo "stapling attempt $attempt failed"
+            if [ "$attempt" -lt 3 ]; then sleep 15; fi
+          done
+          [ "$stapled" = true ] || { echo "::error::could not staple the notarisation ticket to $dmg"; exit 1; }
           xcrun stapler validate "$dmg"
           # Captured first, then matched: see the pipefail note in the next step.
           assessed="$(spctl -a -t open --context context:primary-signature -vv "$dmg" 2>&1)" \
@@ -566,17 +589,6 @@ jobs:
             [ -n "$(find "$work/squashfs-root" -type f -name "$f" -size +0)" ] || { echo "::error::the .AppImage has no $f"; exit 1; }
           done
 
-      # ── The CLI ──────────────────────────────────────────────────────────────
-      # Built in this leg after the app, so the app's bundles and debug files above
-      # are untouched by it. The local action (shared with ci.yml) builds it fully
-      # stripped into cli-out/bridgewatch and checks the architectures, the strip and
-      # `--version`.
-      - name: Build the CLI
-        uses: $/.github/actions/build-cli
-        with:
-          target: ${{ matrix.cli_target }}
-          version: ${{ needs.guard.outputs.version }}
-
       # tauri-action's keychain is not available to this step (and is not reused on
       # purpose), so the CLI gets a temporary keychain of its own, deleted on exit.
       # The hardened runtime and a stable identifier, which a bare Mach-O otherwise
@@ -650,6 +662,15 @@ jobs:
           rm -f "$zip"
           # Signing must not have broken the binary.
           "$bin" --version
+
+      # The CLI was the last notary submission, so the key leaves the disk here, and
+      # also when anything above failed. Nothing after this step needs it.
+      - name: Remove the notarization key
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ -n "${APPLE_API_KEY_PATH:-}" ]; then rm -f "$APPLE_API_KEY_PATH"; fi
+          rm -f "$RUNNER_TEMP/notary.p8"
 
       # The core reads glab's and gh's tokens by running `security
       # find-generic-password`; whether that still works from inside a
@@ -1014,12 +1035,14 @@ jobs:
             gh release download "$TAG" --pattern "$name" --dir "$RUNNER_TEMP/dl"
           done
           (cd "$RUNNER_TEMP/dl" && sha256sum -c "$RUNNER_TEMP/SHA256SUMS")
-          # Pinned to this workflow, at this tag, on a GitHub-hosted runner: an
-          # attestation from any other workflow or ref in the repository does not count.
+          # Pinned to this workflow, at this tag and its commit, on a GitHub-hosted
+          # runner: an attestation from any other workflow, ref or commit in the
+          # repository does not count.
           for f in "$RUNNER_TEMP"/dl/*.tar.gz; do
             gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
               --source-ref "refs/tags/$TAG" \
+              --source-digest "$GITHUB_SHA" \
               --deny-self-hosted-runners
           done
 
