@@ -484,10 +484,13 @@ fn render(
         failures => &row.failures,
         warnings => &row.warnings,
         gates => &row.gates,
-        r#ref => &row.ref_name,
         source => &row.source,
         id => row.id,
         url => &row.web_url,
+        // `ref` is a Rust keyword, and `context!` keys a pair by
+        // `stringify!($key)`, so `r#ref => ...` named the key "r#ref" and
+        // `{{ref}}` was undefined. The key goes in by string instead.
+        ..minijinja::Value::from_pairs([("ref", minijinja::Value::from(&row.ref_name))]),
     };
 
     let title = env.render_str(&watch.notify.title, &context)?;
