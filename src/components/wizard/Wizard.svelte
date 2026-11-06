@@ -110,8 +110,29 @@
   // --- step 1: sign in with GitHub / GitLab ---------------------------------
   let availability = $state<OAuthAvailability | null>(null);
   let availabilitySeq = 0;
-  /** The instance the sign-in on this page was made against. */
-  let signedInBase: string | null = null;
+  /**
+   * The instance and the client id ("" = the built-in application) that the
+   * sign-in on this page, or the one a re-run found stored, was made with.
+   */
+  let signedInBase: string | null = untrack(() => (draft.oauthStored ? baseUrlOf(draft) : null));
+  let signedInClientId: string | null = untrack(() => (draft.oauthStored ? draft.oauthClientId.trim() : null));
+
+  /**
+   * ⛔ A sign-in, fresh or stored, belongs to the instance and the application
+   * it was made with. Once the form names another, it is forgotten and Finish
+   * asks for a new one: the file would otherwise name an instance or an
+   * application its stored tokens never came from, and the first poll would
+   * say "sign in again". Returns whether it forgot one.
+   */
+  function forgetSignInIfMoved(): boolean {
+    if (signedInBase === null) return false;
+    if (signedInBase === baseUrlOf(draft) && signedInClientId === draft.oauthClientId.trim()) return false;
+    draft.oauthLogin = null;
+    draft.oauthStored = false;
+    signedInBase = null;
+    signedInClientId = null;
+    return true;
+  }
 
   async function refreshAvailability() {
     if (!oauth) return;
@@ -172,13 +193,23 @@
     modeChosen = true;
   }
 
-  function signedIn(signed: SignedIn) {
+  function signedIn(signed: SignedIn, started: { base: string; clientId: string }) {
     draft.oauthLogin = signed.login ?? "(unknown)";
     draft.oauthAccount = draft.account.trim();
     draft.oauthStored = false;
     modeChosen = true;
-    signedInBase = baseUrlOf(draft);
+    signedInBase = started.base;
+    signedInClientId = started.clientId;
     delete errors.token;
+    // It finished for what it STARTED with; if the form moved on while the
+    // code was pending, it does not count.
+    if (forgetSignInIfMoved())
+      errors.token = "The instance or client id changed while you were signing in. Sign in again.";
+  }
+
+  function clientIdChanged() {
+    forgetSignInIfMoved();
+    void refreshAvailability();
   }
 
   // --- confirmation dialog -------------------------------------------------
@@ -274,11 +305,8 @@
       cliBase = null;
       detectedSource = null;
     }
-    // A sign-in belongs to the instance it was made on.
-    if (signedInBase !== null && signedInBase !== baseUrlOf(draft)) {
-      draft.oauthLogin = null;
-      signedInBase = null;
-    }
+    // A sign-in, fresh or stored, belongs to the instance it was made on.
+    forgetSignInIfMoved();
     void detect();
     void refreshAvailability();
   }
@@ -299,6 +327,7 @@
     suggestionsKey = null;
     delete errors.project;
     signedInBase = null;
+    signedInClientId = null;
     availability = null;
     void detect();
     void refreshAvailability();
@@ -642,7 +671,7 @@
           {oauth}
           {availability}
           onSignedIn={signedIn}
-          onClientIdChange={() => void refreshAvailability()}
+          onClientIdChange={clientIdChanged}
           onModePick={modePicked}
         />
       {:else if step.id === "project"}

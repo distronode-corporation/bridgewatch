@@ -96,6 +96,11 @@ and the app gets a Homebrew cask.
   source** was pressed. That button is now hidden for the sign-in the file already uses.
   What is written is the client id the sign-in started with, even if the box was edited
   while the code was pending, and "Signed in as" is shown once, not twice.
+- **The wizard counts a sign-in only for what it was made with.** A sign-in that finished
+  after the client id or the instance changed still counted, and so did a stored one after
+  either was edited on a re-run, so the file could name an application or an instance its
+  tokens never came from, and the first poll asked to sign in again. The wizard now asks
+  for a new sign-in instead.
 - **Settings: every tab label stays on one line.** At the narrowest window, **Edit as
   text** wrapped onto three lines.
 

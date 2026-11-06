@@ -29,8 +29,8 @@
     oauth?: OAuthApi;
     /** Whether sign-in is offered for this instance and client id. */
     availability?: OAuthAvailability | null;
-    /** A sign-in finished. */
-    onSignedIn?: (signed: SignedIn) => void;
+    /** A sign-in finished, with the instance and client id it STARTED with. */
+    onSignedIn?: (signed: SignedIn, started: { base: string; clientId: string }) => void;
     /** The typed client id changed. */
     onClientIdChange?: () => void;
     /** The user picked a token source: the wizard stops preselecting one. */
@@ -64,6 +64,13 @@
 
   const github = $derived(draft.provider === "github");
   const cliTool = $derived(cliName(draft.provider));
+
+  /**
+   * What the sign-in in progress started with. ⛔ The wizard judges a finished
+   * sign-in by THIS, not by what the form says by then: the instance and the
+   * client id can both change while the code is pending.
+   */
+  let started = { base: "", clientId: "" };
 
   /** Offer the keyring option when detection found the CLI's item, or when re-running on a config that already uses one. */
   const cliFound = $derived(cli?.status === "found" || draft.cliSource !== null);
@@ -244,15 +251,18 @@
           {/if}
           <DeviceSignIn
             api={oauth}
-            request={() => ({
-              account: (draft.oauthAccount ?? draft.account).trim() || draft.account.trim(),
-              provider: draft.provider,
-              base_url: baseUrlOf(draft),
-              client_id: draft.oauthClientId.trim() || null,
-            })}
+            request={() => {
+              started = { base: baseUrlOf(draft), clientId: draft.oauthClientId.trim() };
+              return {
+                account: (draft.oauthAccount ?? draft.account).trim() || draft.account.trim(),
+                provider: draft.provider,
+                base_url: started.base,
+                client_id: started.clientId || null,
+              };
+            }}
             label={draft.oauthLogin || draft.oauthStored ? "Sign in again" : signInName}
             disabled={!draft.account.trim()}
-            onsignedin={(signed) => onSignedIn?.(signed)}
+            onsignedin={(signed) => onSignedIn?.(signed, started)}
           />
           <FieldMessage id="wizard-token-msg" message={errors.token} />
         </div>

@@ -476,3 +476,75 @@ describe("changing the instance while gitlab.com's glab token was found", () => 
     expect(q('input[name="token-mode"][value="glab"]')).toBeNull();
   });
 });
+
+describe("a sign-in counts only for the instance and client id it was made with", () => {
+  it("voids a sign-in that finishes after the client id was edited while the code was pending", async () => {
+    const oauth = fakeOAuth(() => BUILT_IN);
+    let approve: (s: SignedIn) => void = () => {};
+    oauth.wait.mockImplementation(() => new Promise<SignedIn>((resolve) => (approve = resolve)));
+    await github(fakeApi(), oauth);
+    await click('[data-action="oauth-sign-in"]');
+    expect(oauth.start.mock.calls[0][0]).toMatchObject({ client_id: null });
+    await type("#wizard-oauth-client-id", "Iv23liLATER");
+    approve(SIGNED);
+    await settle();
+    expect(q('[data-slot="oauth-signed-in"]')).toBeNull();
+    expect(text("#wizard-token-msg")).toContain("changed while you were signing in");
+    await click('[data-action="next"]');
+    expect(stepId()).toBe("account");
+  });
+
+  it("forgets a finished sign-in once the client id is edited", async () => {
+    await github(fakeApi(), fakeOAuth(() => BUILT_IN));
+    await click('[data-action="oauth-sign-in"]');
+    expect(q('[data-slot="oauth-signed-in"]')).not.toBeNull();
+    await type("#wizard-oauth-client-id", "Iv23liOTHER");
+    expect(q('[data-slot="oauth-signed-in"]')).toBeNull();
+    expect(text('[data-action="oauth-sign-in"]')).toBe("Sign in with GitHub");
+    await click('[data-action="next"]');
+    expect(stepId()).toBe("account");
+    expect(text('[data-slot="field-error"]')).toBe("Sign in with GitHub first, or choose another source.");
+  });
+
+  it("forgets a re-run's stored sign-in on a client id edit", async () => {
+    await start(fakeApi(), fakeOAuth((id) => ({ ...BUILT_IN, available: true, builtin: !id })), {
+      initial: {
+        provider: "github",
+        account: "gh",
+        base_url: "https://api.github.com",
+        token: { oauth: { client_id: "Iv23liFILE" } },
+      },
+    });
+    expect(q('[data-slot="oauth-stored"]')).not.toBeNull();
+    await type("#wizard-oauth-client-id", "Iv23liNEW");
+    expect(q('[data-slot="oauth-stored"]')).toBeNull();
+    await click('[data-action="next"]');
+    expect(stepId()).toBe("account");
+  });
+
+  it("forgets a re-run's stored sign-in on an instance change", async () => {
+    await start(fakeApi(), fakeOAuth((id) => (id ? { ...OFF, available: true } : { ...BUILT_IN, host: "gitlab.com" })), {
+      initial: { provider: "gitlab", account: "gitlab", base_url: "https://gitlab.com", token: { oauth: true } },
+    });
+    expect(q('[data-slot="oauth-stored"]')).not.toBeNull();
+    await click('input[name="instance"][value="self-managed"]');
+    await type("#wizard-base-url", "https://gitlab.acme.com");
+    q<HTMLInputElement>("#wizard-base-url")!.dispatchEvent(new Event("blur"));
+    await settle();
+    expect(q('[data-slot="oauth-stored"]')).toBeNull();
+  });
+
+  it("still counts a sign-in made through a typed client id, end to end", async () => {
+    const oauth = fakeOAuth((id) => (id ? { ...OFF, available: true } : OFF));
+    const api = fakeApi();
+    await github(api, oauth);
+    await type("#wizard-oauth-client-id", "Iv23liMINE");
+    await click('input[name="token-mode"][value="oauth"]');
+    await click('[data-action="oauth-sign-in"]');
+    expect(q('[data-slot="oauth-signed-in"]')).not.toBeNull();
+    await click('[data-action="test-connection"]');
+    expect(api.testConnection.mock.calls.at(-1)![0]).toMatchObject({ token: { oauth: { client_id: "Iv23liMINE" } } });
+    await click('[data-action="next"]');
+    expect(stepId()).toBe("project");
+  });
+});
