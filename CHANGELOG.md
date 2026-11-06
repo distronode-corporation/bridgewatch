@@ -13,6 +13,30 @@ body line with a bracket.
 
 ## [Unreleased]
 
+### Changed
+
+- **Sign-in is the default way to add an account.** On github.com and gitlab.com, where
+  bridgewatch has its own application, **Sign in with GitHub** (or GitLab) is now what a
+  new account starts on everywhere:
+  - The setup wizard preselects it on a fresh start even when a gh or glab token was
+    found. **Use gh's token** (or glab's) is still listed below it. The CLI's token is
+    preselected only where sign-in needs a client id of your own, as on GitHub
+    Enterprise Server or a self-managed GitLab.
+  - Until now the preselection depended on which answer arrived first, so a found gh
+    token could win over sign-in from one launch to the next. It is now decided from
+    both answers, and never changes a choice you have already made.
+  - Settings' **Add account** writes `token = { oauth = true }` for a new github.com or
+    gitlab.com account, instead of bridgewatch's own entry.
+  - `bridgewatch init` with no token flag writes `token = { oauth = true }` there. It
+    keeps `own = true` on any other host.
+
+### Added
+
+- **`bridgewatch init --oauth` and `--oauth-client-id <id>`.** The second names an
+  application of your own, as GitHub Enterprise Server and a self-managed GitLab need.
+  When the file signs in, `init` ends by printing the next step,
+  `bridgewatch auth login --account <name>`.
+
 ## [1.2.0] - 2026-10-25
 
 Crash reports that stay off until you say yes, the licence texts in every bundle, the

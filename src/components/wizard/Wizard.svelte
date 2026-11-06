@@ -121,17 +121,62 @@
       const answer = await oauth.availability(provider, baseUrlOf(draft), draft.oauthClientId.trim() || null);
       if (seq !== availabilitySeq) return;
       availability = answer;
-      // Recommended means chosen, on a fresh start where nothing else has been.
-      if (answer.builtin && freshStart && draft.tokenMode === "paste" && !draft.secret) draft.tokenMode = "oauth";
+      preselect();
     } catch {
-      if (seq === availabilitySeq) availability = null;
+      if (seq === availabilitySeq) {
+        availability = null;
+        preselect();
+      }
     }
+  }
+
+  // --- step 1: which token source a fresh start preselects -----------------
+  /** The user picked a token source themselves: nothing here changes it after that. */
+  let modeChosen = false;
+
+  /**
+   * Whether the token source is still the wizard's to choose: a fresh start,
+   * one of the three it preselects, and nothing the user did since (a pick, a
+   * pasted token, a typed client id, a finished sign-in).
+   */
+  function mayPreselect(): boolean {
+    if (!freshStart || modeChosen) return false;
+    if (draft.secret || draft.oauthClientId.trim() || draft.oauthLogin) return false;
+    return draft.tokenMode === "paste" || draft.tokenMode === "oauth" || draft.tokenMode === "cli";
+  }
+
+  /**
+   * Preselect the token source from what is known so far: "Sign in" where this
+   * host has a built-in application, else the provider CLI's token when
+   * detection found one, else a pasted token.
+   *
+   * ⛔ Run after EITHER answer arrives, availability or CLI detection, and
+   * decided from both, never from the one that just landed. Each used to
+   * switch the mode on its own when it found the form still on "paste", so a
+   * found gh token beat "Sign in" whenever detection answered first, and the
+   * same fresh start ended on a different radio from one launch to the next.
+   */
+  function preselect() {
+    if (!mayPreselect()) return;
+    if (availability?.builtin) {
+      draft.tokenMode = "oauth";
+    } else if (cli?.status === "found") {
+      draft.cliSource = cli.source;
+      draft.tokenMode = "cli";
+    } else {
+      draft.tokenMode = "paste";
+    }
+  }
+
+  function modePicked() {
+    modeChosen = true;
   }
 
   function signedIn(signed: SignedIn) {
     draft.oauthLogin = signed.login ?? "(unknown)";
     draft.oauthAccount = draft.account.trim();
     draft.oauthStored = false;
+    modeChosen = true;
     signedInBase = baseUrlOf(draft);
     delete errors.token;
   }
@@ -204,15 +249,15 @@
     if (seq !== detectSeq) return;
     cli = result;
     if (result.status === "found") {
-      const adopt = draft.tokenMode === "cli" || (freshStart && draft.tokenMode === "paste" && !draft.secret);
+      const adopt = draft.tokenMode === "cli" || mayPreselect();
       if (adopt || sameSource(draft.cliSource, detectedSource)) draft.cliSource = result.source;
       detectedSource = result.source;
-      if (adopt) draft.tokenMode = "cli";
     } else if (draft.cliSource !== null && sameSource(draft.cliSource, detectedSource)) {
       draft.cliSource = null;
       detectedSource = null;
       if (draft.tokenMode === "cli") draft.tokenMode = "paste";
     }
+    preselect();
   }
 
   function instanceChanged() {
@@ -228,7 +273,10 @@
 
   function providerChanged(provider: Provider) {
     if (draft.provider === provider) return;
+    const before = draft.tokenMode;
     switchProvider(draft, provider);
+    // A pick the switch undid (a CLI token, a sign-in) is no pick any more.
+    if (draft.tokenMode !== before) modeChosen = false;
     // The last provider's detection answers nothing about this one.
     cli = null;
     detectedSource = null;
@@ -582,6 +630,7 @@
           {availability}
           onSignedIn={signedIn}
           onClientIdChange={() => void refreshAvailability()}
+          onModePick={modePicked}
         />
       {:else if step.id === "project"}
         <ProjectStep

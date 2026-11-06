@@ -33,6 +33,8 @@
     onSignedIn?: (signed: SignedIn) => void;
     /** The typed client id changed. */
     onClientIdChange?: () => void;
+    /** The user picked a token source: the wizard stops preselecting one. */
+    onModePick?: () => void;
   }
 
   let {
@@ -49,6 +51,7 @@
     availability = null,
     onSignedIn,
     onClientIdChange,
+    onModePick,
   }: Props = $props();
 
   /** "Sign in with ..." is offered when a client id exists, built in or typed, or is already chosen. */
@@ -118,6 +121,7 @@
 
   function selectMode(mode: TokenMode) {
     draft.tokenMode = mode;
+    onModePick?.();
     if (mode === "cli" && cli?.status === "found") draft.cliSource = cli.source;
   }
 </script>

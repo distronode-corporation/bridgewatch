@@ -247,6 +247,20 @@ struct InitArgs {
     /// Poll interval while a pipeline is live, in seconds.
     #[arg(long, value_name = "SECS")]
     live_secs: Option<u64>,
+    /// Sign in with GitHub or GitLab: token = { oauth = true }. The default on
+    /// github.com and gitlab.com when no token flag is given; sign in with
+    /// `bridgewatch auth login --account <name>` once the file is saved.
+    #[arg(long, group = "token")]
+    oauth: bool,
+    /// Sign in through an OAuth application of your own, as GitHub
+    /// Enterprise Server and self-managed GitLab need: token = { oauth = {
+    /// client_id = "..." } }. Implies --oauth.
+    #[arg(
+        long,
+        value_name = "ID",
+        conflicts_with_all = ["glab", "gh", "token_env", "token_keyring", "token_command"]
+    )]
+    oauth_client_id: Option<String>,
     /// Use glab's keyring item for this instance (glab:<host>:token).
     #[arg(long, group = "token")]
     glab: bool,
@@ -561,7 +575,7 @@ async fn job_action(config_args: &ConfigArgs, args: JobActionArgs, action: JobAc
 
 /// `bridgewatch init`: the wizard's `build_config`, answered from flags.
 fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
-    use bridgewatch_core::config::TokenSource;
+    use bridgewatch_core::config::{OAuthSource, TokenSource};
     use bridgewatch_core::wizard::{self, WizardAnswers, WizardError};
 
     let usage = |e: WizardError| Failure::new(exit::USAGE, e);
@@ -600,8 +614,12 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         }
     } else if !args.token_command.is_empty() {
         TokenSource::Command(args.token_command)
+    } else if args.oauth || args.oauth_client_id.is_some() {
+        TokenSource::Oauth(OAuthSource {
+            client_id: args.oauth_client_id,
+        })
     } else {
-        TokenSource::Own(true)
+        default_token_source(provider, &base_url)
     };
     let watch_id = args
         .watch_id
@@ -660,6 +678,9 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
                 path.display()
             );
             print!("{}", built.toml);
+            if let Some(next) = next_step(&answers, &path) {
+                eprintln!("{next}");
+            }
             Ok(exit::OK)
         }
         Err(e @ WizardError::Answers(_)) => {
@@ -676,6 +697,37 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         )),
         Err(e) => Err(Failure::new(exit::USAGE, e)),
     }
+}
+
+/// The token source `init` writes when no token flag is given: sign-in where
+/// this build has a built-in application for the host (github.com and
+/// gitlab.com), the wizard's preselection too; bridgewatch's own credential
+/// entry anywhere else, where signing in would need a client id of the user's
+/// own and so cannot be the silent default.
+fn default_token_source(provider: config::Provider, base_url: &str) -> config::TokenSource {
+    let account = config::Account::for_instance(provider, base_url);
+    let builtin = bridgewatch_core::oauth::BuiltinClients::shipped();
+    if bridgewatch_core::oauth::builtin_client_id(&account, &builtin).is_some() {
+        config::TokenSource::Oauth(config::OAuthSource::default())
+    } else {
+        config::TokenSource::Own(true)
+    }
+}
+
+/// What `init` tells the user to do after saving the file, when there is
+/// something left: an account that signs in has no sign-in stored yet, and
+/// nothing reaches the provider until it has.
+fn next_step(
+    answers: &bridgewatch_core::wizard::WizardAnswers,
+    path: &std::path::Path,
+) -> Option<String> {
+    matches!(answers.token, config::TokenSource::Oauth(_)).then(|| {
+        format!(
+            "next: save this as {}, then sign in: bridgewatch auth login --account {}",
+            path.display(),
+            answers.account
+        )
+    })
 }
 
 /// The crates `[log].level` is scoped to: this binary and the engine under it.

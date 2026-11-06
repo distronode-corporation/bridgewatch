@@ -307,3 +307,117 @@ describe("re-running on a config that already signs in", () => {
     expect(stepId()).toBe("project");
   });
 });
+
+describe("a fresh start where gh's token is found too", () => {
+  const GH_FOUND = { status: "found", source: { keyring: { service: "gh:github.com", user: "" } } } as const;
+
+  /** A promise the test resolves when it chooses, to order the two answers. */
+  function later<T>() {
+    let resolve: (value: T) => void = () => {};
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  /** Both answers held back, so the test decides which lands first. */
+  function held(availability: OAuthAvailability) {
+    const detection = later<typeof GH_FOUND>();
+    const signIn = later<OAuthAvailability>();
+    const api = fakeApi();
+    api.detectCliToken.mockImplementation(() => detection.promise);
+    const oauth = fakeOAuth();
+    oauth.availability.mockImplementation(() => signIn.promise);
+    return {
+      api,
+      oauth,
+      detect: async () => {
+        detection.resolve(GH_FOUND);
+        await settle();
+      },
+      answer: async () => {
+        signIn.resolve(availability);
+        await settle();
+      },
+    };
+  }
+
+  const startGithub = (api: WizardApi, oauth: OAuthApi) => start(api, oauth, { initial: { provider: "github" } });
+
+  it("preselects Sign in when detection answers first, with gh's token listed below it", async () => {
+    const h = held(BUILT_IN);
+    await startGithub(h.api, h.oauth);
+    await h.detect();
+    expect(checkedMode()).toBe("gh");
+    await h.answer();
+    expect(checkedMode()).toBe("oauth");
+    expect(tokenModes()).toEqual(["oauth", "gh", "paste", "env", "command"]);
+  });
+
+  it("preselects Sign in when availability answers first, and detection does not take it back", async () => {
+    const h = held(BUILT_IN);
+    await startGithub(h.api, h.oauth);
+    await h.answer();
+    expect(checkedMode()).toBe("oauth");
+    await h.detect();
+    expect(checkedMode()).toBe("oauth");
+    expect(tokenModes()).toEqual(["oauth", "gh", "paste", "env", "command"]);
+  });
+
+  it("keeps what the user picked before availability answered", async () => {
+    const h = held(BUILT_IN);
+    await startGithub(h.api, h.oauth);
+    await h.detect();
+    await click('input[name="token-mode"][value="paste"]');
+    await h.answer();
+    expect(checkedMode()).toBe("paste");
+  });
+
+  it("keeps gh's token when the user picked it, even though it was already preselected", async () => {
+    const h = held(BUILT_IN);
+    await startGithub(h.api, h.oauth);
+    await h.detect();
+    await click('input[name="token-mode"][value="env"]');
+    await click('input[name="token-mode"][value="gh"]');
+    await h.answer();
+    expect(checkedMode()).toBe("gh");
+  });
+
+  it("preselects gh's token when there is no built-in sign-in, in either order", async () => {
+    let h = held(OFF);
+    await startGithub(h.api, h.oauth);
+    await h.detect();
+    await h.answer();
+    expect(checkedMode()).toBe("gh");
+    expect(tokenModes()).toEqual(["gh", "paste", "env", "command"]);
+    if (component) void unmount(component);
+    component = null;
+    document.body.innerHTML = "";
+    host = document.createElement("div");
+    document.body.append(host);
+
+    h = held(OFF);
+    await startGithub(h.api, h.oauth);
+    await h.answer();
+    await h.detect();
+    expect(checkedMode()).toBe("gh");
+  });
+
+  it("falls back to gh's token on a GitHub Enterprise host with no client id", async () => {
+    const api = fakeApi();
+    api.detectCliToken.mockImplementation(async (base: string) =>
+      base === "https://api.github.com"
+        ? GH_FOUND
+        : { status: "found", source: { keyring: { service: "gh:ghe.acme.com", user: "" } } },
+    );
+    const oauth = fakeOAuth();
+    oauth.availability.mockImplementation(async (_p: string, base: string) =>
+      base === "https://api.github.com" ? BUILT_IN : { ...OFF, needs_client_id: true, host: "ghe.acme.com" },
+    );
+    await startGithub(api, oauth);
+    expect(checkedMode()).toBe("oauth");
+    await click('input[name="instance"][value="self-managed"]');
+    await type("#wizard-base-url", "https://ghe.acme.com");
+    q<HTMLInputElement>("#wizard-base-url")!.dispatchEvent(new Event("blur"));
+    await settle();
+    expect(checkedMode()).toBe("gh");
+  });
+});

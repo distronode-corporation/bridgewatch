@@ -848,6 +848,150 @@ fn init_prints_a_config_that_validates_and_writes_nothing() {
     assert_eq!(code(&check), 0, "{}", stderr(&check));
 }
 
+/// With no token flag, github.com and gitlab.com sign in (the wizard's
+/// preselection too), and the next step is printed: the exact `auth login`
+/// command for the account written. The file it prints validates.
+#[test]
+fn init_signs_in_by_default_on_the_hosted_instances_and_says_what_is_next() {
+    let dir = TempDir::new("init-oauth-default");
+    let path = dir.0.join("config.toml");
+    for (provider, project, account) in [
+        ("github", "owner/repo", "github"),
+        ("gitlab", "group/app", "gitlab"),
+    ] {
+        let out = run(bin().args(["--config"]).arg(&path).args([
+            "init",
+            "--provider",
+            provider,
+            "--project",
+            project,
+        ]));
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(!path.exists(), "init prints; it never writes");
+        let text = stdout(&out);
+        assert!(text.contains("token = { oauth = true }"), "{text}");
+        assert!(!text.contains("own = true"), "{text}");
+        let err = stderr(&out);
+        assert!(
+            err.contains(&format!(
+                "then sign in: bridgewatch auth login --account {account}"
+            )),
+            "{err}"
+        );
+        assert!(err.contains(&path.display().to_string()), "{err}");
+
+        let written = dir.write("printed.toml", &text);
+        let check = run(bin()
+            .args(["--config"])
+            .arg(&written)
+            .args(["config", "validate"]));
+        assert_eq!(code(&check), 0, "{}", stderr(&check));
+    }
+}
+
+/// Where this build has no built-in application (a self-managed GitLab,
+/// GitHub Enterprise), no flag keeps bridgewatch's own entry, as before, and
+/// there is no sign-in step to print.
+#[test]
+fn init_keeps_its_own_entry_by_default_where_sign_in_needs_a_client_id() {
+    let dir = TempDir::new("init-own-default");
+    let path = dir.0.join("config.toml");
+    for (provider, base_url) in [
+        ("gitlab", "https://gitlab.example.com"),
+        ("github", "https://ghe.example.com"),
+    ] {
+        let out = run(bin().args(["--config"]).arg(&path).args([
+            "init",
+            "--provider",
+            provider,
+            "--base-url",
+            base_url,
+            "--project",
+            "group/app",
+        ]));
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let text = stdout(&out);
+        assert!(text.contains("token = { own = true }"), "{text}");
+        assert!(!stderr(&out).contains("auth login"), "{}", stderr(&out));
+    }
+}
+
+/// `--oauth` asks for sign-in outright, and `--oauth-client-id` names an
+/// application of the user's own, which a self-managed instance needs; without
+/// one there, the answer is refused with what to register.
+#[test]
+fn init_oauth_flags_write_the_sign_in_source() {
+    let dir = TempDir::new("init-oauth-flags");
+    let path = dir.0.join("config.toml");
+
+    let out = run(bin().args(["--config"]).arg(&path).args([
+        "init",
+        "--project",
+        "group/app",
+        "--oauth",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("token = { oauth = true }"));
+
+    let out = run(bin().args(["--config"]).arg(&path).args([
+        "init",
+        "--provider",
+        "github",
+        "--base-url",
+        "https://ghe.example.com",
+        "--project",
+        "platform/api",
+        "--oauth-client-id",
+        "Iv1.0123456789abcdef",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains(r#"token = { oauth = { client_id = "Iv1.0123456789abcdef" } }"#),
+        "{text}"
+    );
+    assert!(
+        stderr(&out).contains("bridgewatch auth login --account ghe"),
+        "{}",
+        stderr(&out)
+    );
+    let written = dir.write("printed.toml", &text);
+    let check = run(bin()
+        .args(["--config"])
+        .arg(&written)
+        .args(["config", "validate"]));
+    assert_eq!(code(&check), 0, "{}", stderr(&check));
+
+    let out = run(bin().args(["--config"]).arg(&path).args([
+        "init",
+        "--base-url",
+        "https://gitlab.example.com",
+        "--project",
+        "group/app",
+        "--oauth",
+    ]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("that server's own application"),
+        "{}",
+        stderr(&out)
+    );
+
+    // Sign-in is one token source among the others, never two at once.
+    for extra in [
+        &["--oauth", "--glab"][..],
+        &["--oauth-client-id", "x", "--token-env", "T"][..],
+    ] {
+        let out = run(bin()
+            .args(["--config"])
+            .arg(&path)
+            .args(["init", "--project", "group/app"])
+            .args(extra));
+        assert_eq!(code(&out), 64, "{extra:?}: {}", stderr(&out));
+    }
+    assert!(!path.exists());
+}
+
 /// ⛔ `--token-command` takes arguments that start with '-'. The README's GHES
 /// recipe, `gh auth token --hostname <host>`, was refused by clap as an
 /// unexpected argument.

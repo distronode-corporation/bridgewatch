@@ -116,18 +116,29 @@ and never started (its `on:` did not match, or GitHub refused the file). See
 ### Quick start: the wizard
 
 Pick **GitHub Actions** on the first step of the [setup wizard](#first-run-the-setup-wizard),
-then **github.com** or **GitHub Enterprise**. If you have run `gh auth login`, the wizard
-offers **Use gh's token**: it writes the keyring source for gh's item (see
-[Reusing gh's login](#reusing-ghs-login)) and never copies the token. Then pick a
-repository (or type `owner/repo` or its URL), the events to watch, and optionally one
-workflow file. A new GitHub watch polls every 30 s while live and every 120 s when idle,
-because of the [rate limit](#rate-limits).
+then **github.com** or **GitHub Enterprise**. On github.com, **Sign in with GitHub** is
+already chosen: approve bridgewatch in your browser with the short code it shows, and the
+sign-in is kept in the system keychain and renews itself. There is no token to create or
+paste. If you have run `gh auth login`, **Use gh's token** is listed below it, and is the
+one chosen where sign-in needs an application of your own (GitHub Enterprise). It writes
+the keyring source for gh's item (see [Reusing gh's login](#reusing-ghs-login)) and never
+copies the token. Then pick a repository (or type `owner/repo` or its URL), the events to
+watch, and optionally one workflow file. A new GitHub watch polls every 30 s while live
+and every 120 s when idle, because of the [rate limit](#rate-limits).
 
-The command-line equivalent prints the same file without touching the network:
+The command-line equivalent prints the same file without touching the network, then
+signs in:
 
 ```
-bridgewatch init --provider github --project octo-org/octo-repo --gh --workflow ci.yml
+npx bridgewatch init --provider github --project owner/repo
+npx bridgewatch auth login --account github
 ```
+
+Save what `init` prints as the file `bridgewatch config path` names before signing in;
+`init` writes nothing itself, and its last line on stderr is the `auth login` command for
+the account it wrote. With no token flag it signs in on github.com and gitlab.com; `--gh`,
+`--token-env` and the others choose another source, and `--oauth-client-id` names an
+application of your own on GitHub Enterprise.
 
 The wizard writes a `group = "run"` watch: one row per workflow run, of the one workflow
 you named or of every workflow. To get one row per push, set **One row is** to `commit` on
@@ -401,9 +412,13 @@ it.
 The wizard's steps:
 
 1. **Account.** GitLab (the default) or GitHub Actions; gitlab.com or a self-managed
-   URL, or github.com or a GitHub Enterprise URL; and a token source: the provider CLI's
-   keyring item (glab's or gh's, offered when one exists for that host), a pasted token
-   (stored in bridgewatch's own keyring entry), an environment variable, or a command.
+   URL, or github.com or a GitHub Enterprise URL; and a token source. On gitlab.com and
+   github.com that starts on **Sign in with GitLab** (or GitHub): approve bridgewatch in
+   your browser with a short code, and the sign-in is kept in the system keychain and
+   renews itself. The others are below it: the provider CLI's keyring item (glab's or
+   gh's, offered when one exists for that host, and chosen first where sign-in needs an
+   application of your own), a pasted token (stored in bridgewatch's own keyring entry),
+   an environment variable, or a command.
    **Test connection** names the user the token authenticates as. On GitLab it warns
    when the token is a project access token or lacks the `read_api` scope; on GitHub it
    lists a classic token's scopes and warns when `repo` is missing, see
@@ -937,9 +952,10 @@ the default, or `github`), `--project` (required; an id, a path or a project URL
 GitLab, `owner/repo` or a repository URL on GitHub), `--base-url`, `--account`, `--ref`,
 `--watch-id`, `--workflow` (GitHub only), `--source` (repeatable; a workflow event on
 GitHub), `--deploy-marker` (repeatable), `--schedule`, `--preflight <glob>` (GitLab
-only), `--primary`, `--live-secs`, and one token source (`--glab`, `--gh`, `--token-env
-<var>`, `--token-keyring <service>` or `--token-command <program> <arg>...`; none means
-`own = true`). `--token-command` takes everything after it, arguments starting with `-`
+only), `--primary`, `--live-secs`, and one token source (`--oauth`, `--oauth-client-id
+<id>`, `--glab`, `--gh`, `--token-env <var>`, `--token-keyring <service>` or
+`--token-command <program> <arg>...`; none means `oauth = true` on github.com and
+gitlab.com and `own = true` elsewhere). `--token-command` takes everything after it, arguments starting with `-`
 included (`--token-command gh auth token --hostname ghe.example.com`), so it goes last. It reads no token, fetches nothing and writes nothing: it prints the file
 to stdout, and if a config file already exists it prints that file edited, with its
 comments and other watches kept. When that file already has a primary watch, the new
