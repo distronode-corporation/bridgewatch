@@ -176,8 +176,9 @@ enum Command {
     ///
     /// Non-interactive and offline: nothing is fetched, no token is read, and
     /// nothing is written. When the config file already exists it is EDITED
-    /// (comments and other watches kept) and the result printed; redirect it
-    /// yourself once it reads right.
+    /// (comments and other watches kept) and the result printed. Write it to a
+    /// NEW file, check it, then move it over the config: never redirect onto
+    /// the config itself, which the shell empties before init reads it.
     Init(Box<InitArgs>),
 }
 
@@ -248,6 +249,21 @@ struct InitArgs {
     /// Poll interval while a pipeline is live, in seconds.
     #[arg(long, value_name = "SECS")]
     live_secs: Option<u64>,
+    /// Sign in with GitHub or GitLab: token = { oauth = true }. With no token
+    /// flag, a new account on github.com or gitlab.com gets this, and an
+    /// account the file already has keeps its source. Sign in with
+    /// `bridgewatch auth login --account <name>` once the file is saved.
+    #[arg(long, group = "token")]
+    oauth: bool,
+    /// Sign in through an OAuth application of your own, as GitHub
+    /// Enterprise Server and self-managed GitLab need: token = { oauth = {
+    /// client_id = "..." } }. Implies --oauth.
+    #[arg(
+        long,
+        value_name = "ID",
+        conflicts_with_all = ["glab", "gh", "token_env", "token_keyring", "token_command"]
+    )]
+    oauth_client_id: Option<String>,
     /// Use glab's keyring item for this instance (glab:<host>:token).
     #[arg(long, group = "token")]
     glab: bool,
@@ -562,7 +578,7 @@ async fn job_action(config_args: &ConfigArgs, args: JobActionArgs, action: JobAc
 
 /// `bridgewatch init`: the wizard's `build_config`, answered from flags.
 fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
-    use bridgewatch_core::config::TokenSource;
+    use bridgewatch_core::config::{OAuthSource, TokenSource};
     use bridgewatch_core::wizard::{self, WizardAnswers, WizardError};
 
     let usage = |e: WizardError| Failure::new(exit::USAGE, e);
@@ -585,6 +601,69 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
             anyhow::anyhow!("--gh is github's keyring item; use --glab for a gitlab account"),
         ));
     }
+    let path = config::resolve_path(config_args.config.as_deref());
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(raw) => Some(raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(Failure::new(
+                exit::CONFIG,
+                anyhow::anyhow!("{}: {e}", path.display()),
+            ));
+        }
+    };
+    let named = args.account.is_some();
+    let account = args
+        .account
+        .unwrap_or_else(|| wizard::suggest_account_name(provider, &base_url));
+    // The account the file already has under that name, read leniently and
+    // without validation: one unknown key elsewhere in the file must not make
+    // it look absent. A file that does not parse at all is refused by
+    // `build_config` with its own message.
+    let current = existing
+        .as_deref()
+        .and_then(|raw| config::parse_lenient(raw, &path).ok())
+        .and_then(|(c, _)| c.accounts.get(&account).cloned());
+    let same_instance = current
+        .as_ref()
+        .is_some_and(|a| same_instance(a, provider, &base_url));
+    // ⛔ A derived name is the host's first label, so gitlab.com and
+    // gitlab.acme.com are both "gitlab". Repointing the existing account to
+    // another host silently is how one instance's token reaches the other;
+    // only an explicit --account may do it.
+    if let Some(a) = current.as_ref().filter(|_| !same_instance && !named) {
+        return Err(Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!(
+                "account {account:?} in {} is on {} ({}), and this init is for {} ({}). Pass \
+                 --account <new-name> to add a new account for {}, or edit the file to move \
+                 {account:?}",
+                path.display(),
+                a.base_url,
+                a.provider.as_str(),
+                base_url,
+                provider.as_str(),
+                base_url,
+            ),
+        ));
+    }
+    // The source already in the file, on this same instance only: a token
+    // source never carries across hosts.
+    let kept_source = current
+        .as_ref()
+        .filter(|_| same_instance)
+        .map(|a| a.token.clone());
+    let any_flag = args.glab
+        || args.gh
+        || args.token_env.is_some()
+        || args.token_keyring.is_some()
+        || !args.token_command.is_empty()
+        || args.oauth
+        || args.oauth_client_id.is_some();
+    // Kept, not chosen now: the file accepted it, so it is not re-checked as
+    // though it had just been typed. `--oauth` alone on an account that already
+    // signs in keeps that source too, client id and all.
+    let mut kept = false;
     let token = if args.glab || args.gh {
         let service = wizard::cli_service_for(provider, &base_url)
             .ok_or_else(|| Failure::new(exit::USAGE, anyhow::anyhow!("--base-url has no host")))?;
@@ -601,17 +680,31 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         }
     } else if !args.token_command.is_empty() {
         TokenSource::Command(args.token_command)
+    } else if let Some(client_id) = args.oauth_client_id {
+        TokenSource::Oauth(OAuthSource {
+            client_id: Some(client_id),
+        })
+    } else if let Some(source @ TokenSource::Oauth(_)) = kept_source.clone().filter(|_| args.oauth)
+    {
+        kept = true;
+        source
+    } else if args.oauth {
+        TokenSource::Oauth(OAuthSource::default())
+    } else if let Some(source) = kept_source {
+        kept = true;
+        source
     } else {
-        TokenSource::Own(true)
+        default_token_source(provider, &base_url)
     };
+    // The sign-in step is printed when this run chose a sign-in: a flag, or the
+    // default for a new account. A source kept without any flag is as it was.
+    let announce = !(kept && !any_flag);
     let watch_id = args
         .watch_id
         .unwrap_or_else(|| wizard::suggest_watch_id(&project.to_string(), &args.ref_name));
     let answers = WizardAnswers {
         provider,
-        account: args
-            .account
-            .unwrap_or_else(|| wizard::suggest_account_name(provider, &base_url)),
+        account,
         base_url,
         token,
         project: Some(project),
@@ -628,18 +721,12 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         live_secs: args.live_secs,
     };
 
-    let path = config::resolve_path(config_args.config.as_deref());
-    let existing = match std::fs::read_to_string(&path) {
-        Ok(raw) => Some(raw),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            return Err(Failure::new(
-                exit::CONFIG,
-                anyhow::anyhow!("{}: {e}", path.display()),
-            ));
-        }
+    let built = if kept {
+        wizard::build_config_keeping_token(&answers, existing.as_deref())
+    } else {
+        wizard::build_config(&answers, existing.as_deref())
     };
-    match wizard::build_config(&answers, existing.as_deref()) {
+    match built {
         Ok(built) => {
             for w in &built.warnings {
                 eprintln!("warning: {}: {}", w.path, w.message);
@@ -661,6 +748,11 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
                 path.display()
             );
             print!("{}", built.toml);
+            if let Some(next) =
+                next_step(&answers, &path, config_args.config.is_some()).filter(|_| announce)
+            {
+                eprintln!("{next}");
+            }
             Ok(exit::OK)
         }
         Err(e @ WizardError::Answers(_)) => {
@@ -676,6 +768,79 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
             anyhow::Error::new(e).context(format!("cannot edit {}", path.display())),
         )),
         Err(e) => Err(Failure::new(exit::USAGE, e)),
+    }
+}
+
+/// The token source `init` writes when no token flag is given: sign-in where
+/// this build has a built-in application for the host (github.com and
+/// gitlab.com), the wizard's preselection too; bridgewatch's own credential
+/// entry anywhere else, where signing in would need a client id of the user's
+/// own and so cannot be the silent default.
+fn default_token_source(provider: config::Provider, base_url: &str) -> config::TokenSource {
+    let account = config::Account::for_instance(provider, base_url);
+    let builtin = bridgewatch_core::oauth::BuiltinClients::shipped();
+    if bridgewatch_core::oauth::builtin_client_id(&account, &builtin).is_some() {
+        config::TokenSource::Oauth(config::OAuthSource::default())
+    } else {
+        config::TokenSource::Own(true)
+    }
+}
+
+/// True when an account in the file is on the instance `init` was asked
+/// for: the same provider and the same base URL, compared as the core compares
+/// instances (lowercase scheme and host, no default port, no trailing slash).
+fn same_instance(account: &config::Account, provider: config::Provider, base_url: &str) -> bool {
+    let wanted = config::Account::for_instance(provider, base_url);
+    let key = |url: &str| {
+        let url = url.trim().trim_end_matches('/');
+        let origin = bridgewatch_core::oauth::origin_of(url);
+        let rest = url
+            .split_once("://")
+            .and_then(|(_, r)| r.find('/').map(|i| r[i..].to_string()))
+            .unwrap_or_default();
+        (origin, rest)
+    };
+    account.provider == provider && key(&account.base_url) == key(&wanted.base_url)
+}
+
+/// What `init` tells the user to do after saving the file, when there is
+/// something left: an account that signs in has no sign-in stored yet, and
+/// nothing reaches the provider until it has.
+fn next_step(
+    answers: &bridgewatch_core::wizard::WizardAnswers,
+    path: &std::path::Path,
+    explicit_config: bool,
+) -> Option<String> {
+    matches!(answers.token, config::TokenSource::Oauth(_)).then(|| {
+        // ⛔ Never `>` onto the config itself: the shell empties the file
+        // before init reads it, and what is printed is then the new account
+        // alone, with every other account, watch and comment gone.
+        let config = if explicit_config {
+            format!("--config {} ", shell_word(&path.display().to_string()))
+        } else {
+            String::new()
+        };
+        format!(
+            "next: write this output to a new file, check it, and move it over {} (never \
+             redirect it onto that file: the shell empties it before init reads it); then \
+             sign in: bridgewatch {config}auth login --account {}",
+            path.display(),
+            shell_word(&answers.account)
+        )
+    })
+}
+
+/// A word a POSIX shell reads back as itself: bare when it is only safe
+/// characters, single-quoted otherwise.
+fn shell_word(text: &str) -> String {
+    let safe = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,".contains(c));
+    if safe {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
     }
 }
 

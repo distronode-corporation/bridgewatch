@@ -1,7 +1,8 @@
 import { flushSync, mount, unmount, type ComponentProps } from "svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { reactive } from "../../lib/__tests__/props.svelte";
+import type { OAuthApi, OAuthAvailability } from "../../lib/oauth";
 import type { Edit } from "../../lib/types";
 import AccountsTab from "./AccountsTab.svelte";
 
@@ -19,12 +20,13 @@ afterEach(() => {
   host?.remove();
 });
 
-function render(config: unknown = { accounts: {} }) {
+function render(config: unknown = { accounts: {} }, oauth?: OAuthApi) {
   host = document.createElement("div");
   document.body.append(host);
   const edits: Edit[][] = [];
   const props = reactive({
     config,
+    oauth,
     onedit: (e: Edit[]) => {
       edits.push(e);
       return Promise.resolve();
@@ -146,5 +148,89 @@ describe("AccountsTab, changing an existing account's provider", () => {
     header.dispatchEvent(new Event("change", { bubbles: true }));
     flushSync();
     expect(h.edits).toEqual([[{ op: "set", path: "accounts.work.header", value: { string: "Authorization: Bearer" } }]]);
+  });
+});
+
+describe("AccountsTab, adding an account where sign-in is built in", () => {
+  const availability = (builtin: boolean): OAuthAvailability => ({
+    available: builtin,
+    builtin,
+    needs_client_id: false,
+    host: "github.com",
+    install_url: null,
+  });
+
+  /** A sign-in API whose availability says built-in for the providers listed. */
+  function fakeOAuth(builtin: string[]): OAuthApi {
+    return {
+      availability: vi.fn(async (provider: string) => availability(builtin.includes(provider))),
+      start: vi.fn(),
+      wait: vi.fn(),
+      cancel: vi.fn(async () => {}),
+      openVerification: vi.fn(async () => {}),
+      openInstall: vi.fn(async () => {}),
+      status: vi.fn(async () => null),
+      signOut: vi.fn(async () => {}),
+      copy: vi.fn(async () => true),
+      onProgress: vi.fn(async () => () => {}),
+    } as unknown as OAuthApi;
+  }
+
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+      flushSync();
+    }
+  };
+
+  it("signs a new gitlab.com or github.com account in, the wizard's default too", async () => {
+    const oauth = fakeOAuth(["gitlab", "github"]);
+    const h = render({ accounts: {} }, oauth);
+    await settle();
+    h.add("work");
+    await settle();
+    h.add("hub", "github");
+    await settle();
+    h.add("hub2");
+    await settle();
+    expect(h.edits[0]).toEqual([
+      { op: "set", path: "accounts.work.base_url", value: { string: "https://gitlab.com" } },
+      { op: "set", path: "accounts.work.token.oauth", value: { boolean: true } },
+    ]);
+    expect(h.edits[1]).toEqual([
+      { op: "set", path: "accounts.hub.provider", value: { string: "github" } },
+      { op: "set", path: "accounts.hub.token.oauth", value: { boolean: true } },
+    ]);
+    // Still github, still answered: the same default.
+    expect(h.edits[2].at(-1)).toEqual({ op: "set", path: "accounts.hub2.token.oauth", value: { boolean: true } });
+    expect(oauth.availability).toHaveBeenCalledWith("github", "https://api.github.com", null);
+  });
+
+  it("keeps bridgewatch's own entry where this build has no built-in sign-in", async () => {
+    const h = render({ accounts: {} }, fakeOAuth(["gitlab"]));
+    await settle();
+    h.add("hub", "github");
+    await settle();
+    expect(h.edits[0].at(-1)).toEqual({ op: "set", path: "accounts.hub.token.own", value: { boolean: true } });
+  });
+
+  it("asks for the provider chosen at the moment of adding, and never adds one name twice", async () => {
+    const oauth = fakeOAuth(["github"]);
+    const h = render({ accounts: {} }, oauth);
+    h.add("hub", "github");
+    // A second click while the question is out finds the name already cleared.
+    [...host.querySelectorAll<HTMLButtonElement>(".add button")].find((b) => /Add account/.test(b.textContent ?? ""))!.click();
+    await settle();
+    expect(h.edits).toHaveLength(1);
+    expect(h.edits[0].at(-1)).toEqual({ op: "set", path: "accounts.hub.token.oauth", value: { boolean: true } });
+  });
+
+  it("falls back to bridgewatch's own entry when availability cannot be read", async () => {
+    const oauth = fakeOAuth([]);
+    vi.mocked(oauth.availability).mockRejectedValue(new Error("no shell"));
+    const h = render({ accounts: {} }, oauth);
+    h.add("work");
+    await settle();
+    expect(h.edits[0].at(-1)).toEqual({ op: "set", path: "accounts.work.token.own", value: { boolean: true } });
   });
 });

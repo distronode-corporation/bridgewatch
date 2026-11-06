@@ -8,7 +8,7 @@
   import FieldMessage from "./FieldMessage.svelte";
   import DeviceSignIn from "../DeviceSignIn.svelte";
   import type { CliTokenDetection, Identity, Provider } from "./api";
-  import { baseUrlOf, type Draft, type StepErrors, type TokenMode } from "./model";
+  import { baseUrlOf, type Draft, type SignInStart, type StepErrors, type TokenMode } from "./model";
   import type { OAuthApi, OAuthAvailability, SignedIn } from "../../lib/oauth";
   import { cliName, providerName } from "../../lib/providers";
 
@@ -29,10 +29,12 @@
     oauth?: OAuthApi;
     /** Whether sign-in is offered for this instance and client id. */
     availability?: OAuthAvailability | null;
-    /** A sign-in finished. */
-    onSignedIn?: (signed: SignedIn) => void;
+    /** A sign-in finished, with the instance, client id and account name it STARTED with. */
+    onSignedIn?: (signed: SignedIn, started: SignInStart) => void;
     /** The typed client id changed. */
     onClientIdChange?: () => void;
+    /** The user picked a token source: the wizard stops preselecting one. */
+    onModePick?: () => void;
   }
 
   let {
@@ -49,16 +51,27 @@
     availability = null,
     onSignedIn,
     onClientIdChange,
+    onModePick,
   }: Props = $props();
 
   /** "Sign in with ..." is offered when a client id exists, built in or typed, or is already chosen. */
   const offerSignIn = $derived(!!oauth && (availability?.available === true || draft.tokenMode === "oauth"));
   const signInName = $derived(`Sign in with ${providerName(draft.provider)}`);
+  /** Sign-in is the chosen access: its panel replaces the token hint and fields. */
+  const signingIn = $derived(draft.tokenMode === "oauth");
   /** The own-application box starts open where only a typed client id will do, or one is typed. */
   const clientIdOpen = $derived(draft.oauthClientId.trim() !== "" || availability?.needs_client_id === true);
 
   const github = $derived(draft.provider === "github");
   const cliTool = $derived(cliName(draft.provider));
+
+  /**
+   * What the sign-in in progress started with. ⛔ The wizard judges a finished
+   * sign-in by THIS, not by what the form says by then: the instance, the
+   * client id and the account name can all change while the code is pending.
+   * `account` is the name the sign-in is stored under.
+   */
+  let started: SignInStart = { base: "", clientId: "", account: "" };
 
   /** Offer the keyring option when detection found the CLI's item, or when re-running on a config that already uses one. */
   const cliFound = $derived(cli?.status === "found" || draft.cliSource !== null);
@@ -118,6 +131,7 @@
 
   function selectMode(mode: TokenMode) {
     draft.tokenMode = mode;
+    onModePick?.();
     if (mode === "cli" && cli?.status === "found") draft.cliSource = cli.source;
   }
 </script>
@@ -194,9 +208,16 @@
     {/if}
   </fieldset>
 
-  <fieldset class="flex flex-col gap-2" aria-describedby="wizard-token-needs wizard-token-msg">
-    <legend class="mb-1 text-sm font-medium">Token</legend>
-    <p id="wizard-token-needs" class="text-muted-foreground text-xs" data-slot="token-needs">{needs}</p>
+  <fieldset
+    class="flex flex-col gap-2"
+    aria-describedby={signingIn ? "wizard-token-msg" : "wizard-token-needs wizard-token-msg"}
+  >
+    <legend class="mb-1 text-sm font-medium">Access</legend>
+    <!-- What a token must be allowed to do: said for the token choices only,
+         since a sign-in asks for exactly what it needs on the provider's page. -->
+    {#if !signingIn}
+      <p id="wizard-token-needs" class="text-muted-foreground text-xs" data-slot="token-needs">{needs}</p>
+    {/if}
     {#if offerSignIn}
       <!-- First, and the recommended way: nothing to create, copy or paste
            but a short code, and the tokens renew themselves. -->
@@ -217,6 +238,39 @@
           >
         </span>
       </label>
+      <!-- The chosen sign-in's button sits under its own option, before the alternatives. -->
+      {#if signingIn && oauth}
+        <div class="flex flex-col gap-1.5 pl-6" data-slot="oauth-panel">
+          {#if draft.oauthLogin}
+            <p class="m-0 text-sm" data-slot="oauth-signed-in">
+              Signed in as <span class="font-mono">@{draft.oauthLogin}</span>.
+            </p>
+          {:else if draft.oauthStored}
+            <p class="text-muted-foreground m-0 text-xs" data-slot="oauth-stored">
+              This account is already signed in. Sign in again only to replace it.
+            </p>
+          {/if}
+          <DeviceSignIn
+            api={oauth}
+            request={() => {
+              // ⛔ Stored under the name the form shows NOW, never a name an
+              // earlier sign-in was made under: on a re-run, or after signing
+              // in, renaming and signing in again, that name is not saved.
+              started = { base: baseUrlOf(draft), clientId: draft.oauthClientId.trim(), account: draft.account.trim() };
+              return {
+                account: started.account,
+                provider: draft.provider,
+                base_url: started.base,
+                client_id: started.clientId || null,
+              };
+            }}
+            label={draft.oauthLogin || draft.oauthStored ? "Sign in again" : signInName}
+            disabled={!draft.account.trim()}
+            onsignedin={(signed) => onSignedIn?.(signed, started)}
+          />
+          <FieldMessage id="wizard-token-msg" message={errors.token} />
+        </div>
+      {/if}
     {/if}
     {#each modes as mode (mode.value)}
       {#if mode.value !== "cli" || cliFound}
@@ -238,29 +292,7 @@
     {/each}
 
     <div class="pl-6">
-      {#if draft.tokenMode === "oauth" && oauth}
-        {#if draft.oauthLogin}
-          <p class="m-0 text-sm" data-slot="oauth-signed-in">
-            Signed in as <span class="font-mono">@{draft.oauthLogin}</span>.
-          </p>
-        {:else if draft.oauthStored}
-          <p class="text-muted-foreground m-0 text-xs" data-slot="oauth-stored">
-            This account is already signed in. Sign in again only to replace it.
-          </p>
-        {/if}
-        <DeviceSignIn
-          api={oauth}
-          request={() => ({
-            account: (draft.oauthAccount ?? draft.account).trim() || draft.account.trim(),
-            provider: draft.provider,
-            base_url: baseUrlOf(draft),
-            client_id: draft.oauthClientId.trim() || null,
-          })}
-          label={draft.oauthLogin || draft.oauthStored ? "Sign in again" : signInName}
-          disabled={!draft.account.trim()}
-          onsignedin={(signed) => onSignedIn?.(signed)}
-        />
-      {:else if draft.tokenMode === "paste"}
+      {#if draft.tokenMode === "paste"}
         <Label for="wizard-secret" class="sr-only">Access token</Label>
         <Input
           id="wizard-secret"
@@ -298,7 +330,9 @@
           aria-describedby="wizard-token-msg"
         />
       {/if}
-      <FieldMessage id="wizard-token-msg" message={errors.token} />
+      {#if !(signingIn && oauth)}
+        <FieldMessage id="wizard-token-msg" message={errors.token} />
+      {/if}
     </div>
     {#if oauth}
       <details class="text-xs" open={clientIdOpen} data-slot="oauth-own-app">
