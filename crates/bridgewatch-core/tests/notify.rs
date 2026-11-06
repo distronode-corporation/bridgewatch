@@ -973,9 +973,9 @@ fn every_template_variable_renders_through_the_real_path() {
     // printed `["a", "b"]`. Every other field here rendered identically under
     // 2.24.0. `join` is the spelling a template should use for a list.
     //
-    // ⚠️ `{{ref}}` renders EMPTY, under 2 and 3 alike: `r#ref` in `context!` names
-    // the key `r#ref` (`stringify!` keeps the prefix), so the documented `ref` is
-    // undefined. `pipeline.ref` works. Pinned here so a fix shows up as a change.
+    // `{{ref}}` is the ref name, the same value as `pipeline.ref`. It rendered
+    // EMPTY until the key went in by string: `r#ref` in `context!` named the key
+    // `r#ref` (`stringify!` keeps the prefix).
     let body = "['verify:android', 'e2e<web>&co']|verify:android, e2e<web>&co|lint|2|cov:1|\
                 main|deployed_with_failure|13054|False|\
                 https://gitlab.example/p/-/pipelines/2856963900|deploy:origins|None|False||None|\
@@ -986,18 +986,54 @@ fn every_template_variable_renders_through_the_real_path() {
             (
                 NotifyKind::Deployed,
                 "main-push|primary|deployed|deployed_with_failure|live|4cfaced|\
-                 4cfaced9d33af808||push|2856963900|\
+                 4cfaced9d33af808|main|push|2856963900|\
                  https://gitlab.example/p/-/pipelines/2856963900|deploy:origins|1",
                 body,
             ),
             (
                 NotifyKind::BlockingFailure,
                 "main-push|primary|blocking_failure|deployed_with_failure|live|4cfaced|\
-                 4cfaced9d33af808||push|2856963900|\
+                 4cfaced9d33af808|main|push|2856963900|\
                  https://gitlab.example/p/-/pipelines/2856963900|verify:android,e2e<web>&co|2",
                 body,
             ),
         ],
         "{rendered:#?}"
     );
+}
+
+/// `{{ref}}` is the ref the pipeline ran on, in a title and a body alike, and
+/// the same value as `{{pipeline.ref}}`. A ref other than the fixture's `main`
+/// proves the value comes from the row, not from a default.
+///
+/// ⚠️ It rendered EMPTY through 1.3.0: `ref` is a Rust keyword, and `r#ref` in
+/// `context!` named the key `r#ref`, so the documented `ref` was undefined.
+#[test]
+fn the_ref_variable_renders_the_ref_name() {
+    let mut watch = support::config_with(&[
+        Edit::Set {
+            path: "watches.0.notify.title".into(),
+            value: EditValue::String("{{ref}} {{sha7}}: {{kind}}".into()),
+        },
+        Edit::Set {
+            path: "watches.0.notify.body".into(),
+            value: EditValue::String(
+                "{{ref}}|{{ref is defined}}|{{ref == pipeline.ref}}|{{ref | upper}}".into(),
+            ),
+        },
+    ])
+    .watches
+    .remove(0);
+    watch.notify.finished = false;
+
+    let mut row = row_view("deployed", "live");
+    row.ref_name = "release/2.4".into();
+
+    let mut ledger = NotifyLedger::default();
+    ledger.baseline(&watch.id);
+    let out = notifications_for(&watch, &view_of(&watch, row), &mut ledger);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert_eq!(out[0].kind, NotifyKind::Deployed);
+    assert_eq!(out[0].title, "release/2.4 4cfaced: deployed");
+    assert_eq!(out[0].body, "release/2.4|True|True|RELEASE/2.4");
 }
