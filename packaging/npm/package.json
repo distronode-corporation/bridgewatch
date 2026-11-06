@@ -1,0 +1,39 @@
+{
+  "name": "bridgewatch",
+  "version": "1.2.0",
+  "description": "The bridgewatch CLI: bridge-aware GitLab CI and GitHub Actions verdicts, config tooling and fixture recording.",
+  "license": "Apache-2.0",
+  "author": "Distronode <opensource@distronode.com>",
+  "homepage": "https://www.distronode.com/open-source/bridgewatch",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/distronode-corporation/bridgewatch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/distronode-corporation/bridgewatch/issues"
+  },
+  "bin": {
+    "bridgewatch": "bin/bridgewatch.js"
+  },
+  "files": [
+    "/bin/bridgewatch.js",
+    "/vendor/universal-apple-darwin/bridgewatch",
+    "/vendor/x86_64-unknown-linux-gnu/bridgewatch",
+    "/vendor/aarch64-unknown-linux-gnu/bridgewatch",
+    "/README.md",
+    "/LICENSE",
+    "/NOTICE",
+    "/THIRD-PARTY-LICENSES-cli.txt"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
