@@ -1,0 +1,82 @@
+name: Build the CLI
+description: cargo build the bridgewatch CLI for this leg, fully stripped, into cli-out/bridgewatch, and check what came out.
+
+# Shared by release.yml's `build` and ci.yml's `installers`. No secret is passed in.
+# The CLI is built in the same leg as the app, so it reuses that leg's toolchain and
+# its runner, and on Linux that runner is the glibc floor (release.yml's header): a
+# binary linked on ubuntu-22.04 needs glibc 2.35 or newer, which is also the floor
+# packaging/npm/bin/bridgewatch.js refuses below.
+#
+# ⛔ FULLY STRIPPED, WHATEVER THE LEG SET FOR THE APP. release.yml's "Keep debug
+# information for crash reports" step exports CARGO_PROFILE_RELEASE_STRIP=debuginfo
+# (Linux) and CARGO_PROFILE_RELEASE_DEBUG / _SPLIT_DEBUGINFO (macOS) through
+# $GITHUB_ENV for the app's Sentry files. The CLI sends no crash reports, so this step
+# alone puts the release profile back: STRIP=true, no debug info. It is asserted on
+# Linux (no .symtab, no .debug_* section); the macOS profile strips by default.
+inputs:
+  target:
+    description: universal-apple-darwin, x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu.
+    required: true
+  version:
+    description: The version `bridgewatch --version` must report.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Build and check
+      shell: bash
+      # Through `env:`, never interpolated into the script (zizmor's template-injection).
+      env:
+        TARGET: ${{ inputs.target }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        unset CARGO_PROFILE_RELEASE_DEBUG CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO
+        export CARGO_PROFILE_RELEASE_STRIP=true
+        rm -rf cli-out
+        mkdir -p cli-out
+        case "$TARGET" in
+          universal-apple-darwin)
+            [ "$RUNNER_OS" = macOS ] || { echo "::error::$TARGET is built on macOS only"; exit 1; }
+            # Both halves, joined with lipo, as tauri-cli does for the app.
+            cargo build --release --locked -p bridgewatch-cli \
+              --target aarch64-apple-darwin --target x86_64-apple-darwin
+            lipo -create -output cli-out/bridgewatch \
+              target/aarch64-apple-darwin/release/bridgewatch \
+              target/x86_64-apple-darwin/release/bridgewatch
+            archs="$(lipo -archs cli-out/bridgewatch)"
+            for arch in arm64 x86_64; do
+              case " $archs " in
+                *" $arch "*) ;;
+                *) echo "::error::the universal CLI lacks $arch (has: $archs)"; exit 1 ;;
+              esac
+            done
+            echo "architectures: $archs"
+            ;;
+          x86_64-unknown-linux-gnu | aarch64-unknown-linux-gnu)
+            # Native only: the runner is the glibc floor, so no cross-compilation.
+            want="${TARGET%%-*}"
+            have="$(uname -m)"
+            [ "$have" = "$want" ] || { echo "::error::$TARGET must be built on a $want runner, this is $have"; exit 1; }
+            cargo build --release --locked -p bridgewatch-cli
+            cp target/release/bridgewatch cli-out/bridgewatch
+            sections="$(readelf -S --wide cli-out/bridgewatch)"
+            if grep -qE '\.symtab|\.debug_' <<<"$sections"; then
+              echo "::error::the CLI still carries a symbol table or debug sections"
+              exit 1
+            fi
+            ;;
+          *)
+            echo "::error::unknown CLI target $TARGET"
+            exit 1
+            ;;
+        esac
+        chmod 0755 cli-out/bridgewatch
+        reported="$(cli-out/bridgewatch --version)"
+        if [ "$reported" != "bridgewatch $VERSION" ]; then
+          echo "::error::the CLI reports \"$reported\", expected \"bridgewatch $VERSION\""
+          exit 1
+        fi
+        ls -l cli-out/bridgewatch
+        echo "$reported"
