@@ -9,6 +9,7 @@
 mod auth;
 mod render;
 
+use std::future::Future;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -820,6 +821,11 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
             let transport = Arc::new(ReqwestTransport::new(std::time::Duration::from_secs(
                 timeout,
             ))?);
+            // A repeated SIGINT must stay harmless: the npm launcher forwards
+            // the terminal's Ctrl-C, which also arrives here directly through
+            // the process group. The first completes this future and cancels
+            // the sign-in; the rest find tokio's handler installed and do
+            // nothing. See `watch`.
             let cancel = async {
                 let _ = tokio::signal::ctrl_c().await;
             };
@@ -1011,10 +1017,42 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
     let mut previous: Option<String> = None;
     let mut ticks = 0u32;
     let limit = args.ticks;
+    // The verdict to exit with if Ctrl-C arrives before the first tick has one.
+    let mut verdict = exit::UNKNOWN;
+
+    // ⛔ ONE Ctrl-C listener for the whole run, pinned here and raced against the
+    // tick as well as the sleep. A fresh `ctrl_c()` per sleep registered nothing
+    // while a tick was in flight: before the first sleep the default action still
+    // applied (the process died of SIGINT, with no verdict), and after it a Ctrl-C
+    // during a tick was delivered to no listener and dropped, so `watch` ran on.
+    // Cancelling a tick here is safe: the ledger and the deploy-time history are
+    // written synchronously and atomically inside it, never across an await.
+    //
+    // ⛔ A REPEATED SIGINT MUST STAY HARMLESS. The npm launcher
+    // (packaging/npm/bin/bridgewatch.js) forwards every SIGINT it receives, and a
+    // terminal's Ctrl-C also reaches this process directly through the process
+    // group, so one keypress is two signals here. The first completes this
+    // listener and `watch` returns its verdict; the rest find tokio's handler
+    // still installed and do nothing. Never turn a second SIGINT into "force quit".
+    let interrupt = tokio::signal::ctrl_c();
+    tokio::pin!(interrupt);
+    // `ctrl_c()` is an async fn: it installs the handler on its FIRST poll, not when
+    // called (tokio 1.54.1, signal/ctrl_c.rs). Polled once here, so the handler is in
+    // place before the first tick starts, whatever order `select!` polls in.
+    if std::future::poll_fn(|cx| std::task::Poll::Ready(interrupt.as_mut().poll(cx)))
+        .await
+        .is_ready()
+    {
+        return Ok(verdict);
+    }
 
     loop {
-        let mut tick = poller.tick().await;
+        let mut tick = tokio::select! {
+            tick = poller.tick() => tick,
+            _ = &mut interrupt => return Ok(verdict),
+        };
         apply_selection_state(&mut tick.snapshot, &args.watches);
+        verdict = exit_code(&tick.snapshot);
         ticks += 1;
 
         let line = if args.json {
@@ -1047,7 +1085,7 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
 
         tokio::select! {
             _ = tokio::time::sleep(tick.next_interval) => {}
-            _ = tokio::signal::ctrl_c() => return Ok(exit_code(&tick.snapshot)),
+            _ = &mut interrupt => return Ok(verdict),
         }
     }
 }

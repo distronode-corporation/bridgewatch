@@ -66,7 +66,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo check -p bridgewatch-app --locked
-python3 scripts/check-version.py            # Cargo.toml and package.json agree; tauri.conf.json sets no version
+python3 scripts/check-version.py            # Cargo.toml and both package.json agree; tauri.conf.json sets no version
 python3 src-tauri/icons/generate.py --check # tray icons match the generator
 npm run typecheck                           # tsc
 npm run check                               # svelte-check

@@ -28,8 +28,10 @@ use bridgewatch_core::oauth::{
 use bridgewatch_core::token::{self, Secret, TokenError};
 use support::MemoryStore;
 
-/// A build whose applications are registered. The shipped build's are all
-/// `None`, and the tests that care say which they use.
+/// A build whose applications are registered, with made-up ids so that these
+/// tests do not depend on the shipped ones. The shipped build's are
+/// `BuiltinClients::shipped()`, and `BuiltinClients::default()` is a build with
+/// none; the tests that care say which they use.
 const REGISTERED: BuiltinClients = BuiltinClients {
     github_com: Some("Iv23liBRIDGEWATCH"),
     github_app_slug: Some("bridgewatch-ci"),
@@ -537,9 +539,8 @@ fn enterprise_and_self_managed_need_a_client_id_of_their_own() {
     );
 }
 
-/// The shipped build has no applications registered. Until it does,
-/// github.com and gitlab.com need a typed client id too, and say it is THIS
-/// BUILD that lacks one.
+/// The shipped build carries its registered applications, so github.com and
+/// gitlab.com sign in with the built-in client id and need none typed.
 #[test]
 fn the_shipped_build_signs_in_with_the_registered_applications() {
     // Registered 2026-09-19: the GitHub App `bridgewatch-ci` owned by
