@@ -146,6 +146,16 @@ export function findTokenPrefix(text: string, provider: Provider = "gitlab"): st
   return GITHUB_TOKEN_PREFIXES.find((prefix) => text.includes(prefix)) ?? null;
 }
 
+/**
+ * What a sign-in started with: the instance, the client id ("" = the built-in
+ * application) and the account name it is stored under.
+ */
+export interface SignInStart {
+  base: string;
+  clientId: string;
+  account: string;
+}
+
 /** The form's state, flat and serialisable. */
 export interface Draft {
   /** Which CI provider. GitLab first and the default, so its path is unchanged. */

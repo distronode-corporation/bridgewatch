@@ -236,14 +236,17 @@
 </script>
 
 <div class="settings bg-background text-foreground flex h-screen flex-col px-3.5 pt-2.5 pb-3.5 text-[13px]">
-  <nav class="border-border flex items-center gap-1 border-b pb-2">
-    <div class="bg-muted flex items-center gap-0.5 rounded-2xl p-0.5" role="tablist">
+  <!-- ⛔ Every tab label stays on one line: at a narrow window "Edit as text"
+       wrapped onto three. The tab strip never shrinks; the buttons on the
+       right wrap to a second row first. -->
+  <nav class="border-border flex flex-wrap items-center gap-1 border-b pb-2">
+    <div class="bg-muted flex shrink-0 items-center gap-0.5 rounded-2xl p-0.5" role="tablist">
       {#each TABS as t (t.id)}
         <button
           role="tab"
           aria-selected={tab === t.id}
           class={[
-            "tab rounded-xl px-2.5 py-1 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+            "tab rounded-xl px-2 py-1 text-xs font-medium whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
             tab === t.id
               ? "active bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground",
