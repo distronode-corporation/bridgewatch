@@ -291,7 +291,7 @@ const MAX_UNKNOWN_KEYS: usize = 32;
 /// file, so [`attach_spans`] resolves them against the original text instead.
 /// Everything else — a syntax error, an unknown enum variant, a value of the
 /// wrong type — is still fatal, because bridgewatch cannot guess what was meant.
-fn parse_lenient(raw: &str, path: &Path) -> Result<(Config, Vec<Diagnostic>), ConfigError> {
+pub fn parse_lenient(raw: &str, path: &Path) -> Result<(Config, Vec<Diagnostic>), ConfigError> {
     let mut text = raw.to_string();
     let mut diagnostics = Vec::new();
 

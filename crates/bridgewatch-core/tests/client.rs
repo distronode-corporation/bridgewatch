@@ -842,6 +842,56 @@ fn a_github_account_builds_a_poller() {
         .expect("a GitHub poller builds");
 }
 
+/// An account that signs in and has no sign-in stored yet (what `bridgewatch
+/// init` writes by default on github.com and gitlab.com) is an error on its
+/// own watches that names the exact command to run, which is what `check` and
+/// `watch` print. Nothing is sent: the store answers before any request.
+#[tokio::test]
+async fn a_watch_on_an_account_never_signed_in_says_to_run_auth_login() {
+    let raw = r#"
+        [accounts.gitlab]
+        token = { oauth = true }
+
+        [accounts.github]
+        provider = "github"
+        token = { oauth = true }
+
+        [[watches]]
+        id = "lab"
+        account = "gitlab"
+        project = 1
+
+        [[watches]]
+        id = "hub"
+        account = "github"
+        project = "owner/repo"
+        role = "secondary"
+        "#;
+    let config: bridgewatch_core::Config = toml::from_str(raw).expect("the table deserialises");
+    let mut poller = bridgewatch_core::poll::Poller::from_config(&config, &OneVariable)
+        .expect("an account that is not signed in still builds a poller");
+    let tick = poller.tick().await;
+    for (watch, account, provider) in [("lab", "gitlab", "GitLab"), ("hub", "github", "GitHub")] {
+        let view = tick
+            .snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == watch)
+            .expect("the watch is in the snapshot");
+        let error = view.error.as_deref().unwrap_or_default();
+        assert!(
+            error.contains(&format!(
+                "account \"{account}\" is not signed in to {provider}"
+            )),
+            "{error}"
+        );
+        assert!(
+            error.contains(&format!("bridgewatch auth login --account {account}")),
+            "{error}"
+        );
+    }
+}
+
 /// Only the accounts a watch uses have their token resolved.
 ///
 /// ⛔ Every configured account used to be resolved, one after another, before

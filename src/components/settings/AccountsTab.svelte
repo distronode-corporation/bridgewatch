@@ -3,6 +3,8 @@
   import { providerSwitch } from "../../lib/settings/provider-switch";
   import { defaultBaseUrl } from "../../lib/providers";
   import { getAt } from "../../lib/settings/values";
+  import { inTauri, oauthApi } from "../../lib/ipc";
+  import type { OAuthApi } from "../../lib/oauth";
   import type { Edit, Provider } from "../../lib/types";
   import { Button } from "$lib/components/ui/button/index.js";
   import Field from "./Field.svelte";
@@ -12,9 +14,11 @@
   interface Props {
     config: unknown;
     onedit: (edits: Edit[]) => void | Promise<void>;
+    /** Sign-in commands: the shell's in the app, a fake in a test, none elsewhere. */
+    oauth?: OAuthApi;
   }
 
-  let { config, onedit }: Props = $props();
+  let { config, onedit, oauth = inTauri() ? oauthApi() : undefined }: Props = $props();
 
   const names = $derived(Object.keys((getAt(config, "accounts") ?? {}) as Record<string, unknown>));
   const fields = entriesFor("accounts").filter((e) => e.control !== "token");
@@ -48,22 +52,42 @@
     return onedit([...edits, ...extra]);
   }
 
-  function addAccount() {
+  /**
+   * Whether a new account on `provider`'s hosted instance (where a new account
+   * starts) can sign in with nothing to type: this build has a built-in
+   * application there. Asked when the account is added, so the answer is the
+   * provider actually chosen. No sign-in commands, or no answer: no.
+   */
+  async function builtinSignIn(provider: Provider): Promise<boolean> {
+    if (!oauth) return false;
+    try {
+      return (await oauth.availability(provider, defaultBaseUrl(provider), null)).builtin;
+    } catch {
+      return false;
+    }
+  }
+
+  async function addAccount() {
     const name = newName.trim();
     if (name === "") return;
-    const token: Edit = {
-      op: "set",
-      path: concretePath("accounts.*.token.own", name),
-      value: { boolean: true },
-    };
-    if (newProvider === "github") {
+    const provider = newProvider;
+    // ⛔ Cleared before the question, so a second click while it is out finds
+    // no name and adds nothing, rather than the same account twice.
+    newName = "";
+    // Sign-in where it works with nothing to type, as the wizard preselects
+    // it, else bridgewatch's own entry. The Token source below changes either.
+    // Without sign-in commands nothing is awaited, so the write is as immediate as it always was.
+    const signIn = oauth ? await builtinSignIn(provider) : false;
+    const token: Edit = signIn
+      ? { op: "set", path: concretePath("accounts.*.token.oauth", name), value: { boolean: true } }
+      : { op: "set", path: concretePath("accounts.*.token.own", name), value: { boolean: true } };
+    if (provider === "github") {
       // ⛔ `provider` and the token, and nothing else. base_url, api_path and
       // header all default per provider, so writing GitLab's values (or even
       // today's GitHub ones) would pin them into a file that should follow the
       // code, and https://gitlab.com with /api/v4 on a github account is a
       // file that loads and then 404s every request.
-      onedit([{ op: "set", path: concretePath("accounts.*.provider", name), value: { string: "github" } }, token]);
-      newName = "";
+      await onedit([{ op: "set", path: concretePath("accounts.*.provider", name), value: { string: "github" } }, token]);
       return;
     }
     // Enough keys to make the account valid on its own; everything else has a
@@ -73,7 +97,7 @@
     // called `gitlab.com` (naming an account after its host is the obvious
     // thing to do) went into the core as `accounts` → `gitlab` → `com` and
     // wrote a nested table that is not an account at all.
-    onedit([
+    await onedit([
       {
         op: "set",
         path: concretePath("accounts.*.base_url", name),
@@ -81,7 +105,6 @@
       },
       token,
     ]);
-    newName = "";
   }
 </script>
 
@@ -104,6 +127,7 @@
       value={getAt(config, concretePath("accounts.*.token", name))}
       provider={providerOf(accountAt(name))}
       baseUrl={String(getAt(config, concretePath("accounts.*.base_url", name)) ?? "")}
+      {oauth}
       {onedit}
     />
   </section>
@@ -115,5 +139,5 @@
     <option value="gitlab">GitLab</option>
     <option value="github">GitHub</option>
   </select>
-  <Button variant="outline" size="sm" onclick={addAccount} disabled={newName.trim() === ""}>Add account</Button>
+  <Button variant="outline" size="sm" onclick={() => void addAccount()} disabled={newName.trim() === ""}>Add account</Button>
 </div>

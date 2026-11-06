@@ -1657,7 +1657,30 @@ pub fn build_config(
     answers: &WizardAnswers,
     existing: Option<&str>,
 ) -> Result<BuiltConfig, WizardError> {
-    let issues = validate_answers(answers);
+    build_config_inner(answers, existing, false)
+}
+
+/// [`build_config`] for answers whose token source was KEPT from the existing
+/// file rather than chosen now (`bridgewatch init` with no token flag on an
+/// account the file already has). The source is not re-checked as though it had
+/// just been typed: the file already accepted it, and the result still has to
+/// load and still must not contain anything shaped like a token.
+pub fn build_config_keeping_token(
+    answers: &WizardAnswers,
+    existing: Option<&str>,
+) -> Result<BuiltConfig, WizardError> {
+    build_config_inner(answers, existing, true)
+}
+
+fn build_config_inner(
+    answers: &WizardAnswers,
+    existing: Option<&str>,
+    token_kept: bool,
+) -> Result<BuiltConfig, WizardError> {
+    let mut issues = validate_answers(answers);
+    if token_kept {
+        issues.retain(|i| !(i.step == WizardStep::Account && i.field == "token"));
+    }
     if !issues.is_empty() {
         return Err(WizardError::Answers(issues));
     }

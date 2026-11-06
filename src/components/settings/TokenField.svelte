@@ -150,6 +150,16 @@
     offerSignIn ? [["oauth", `Sign in with ${providerName(provider)}`], ...kinds] : kinds,
   );
 
+  /** The file already signs in through exactly the application the form names. */
+  const fileHasThisSignIn = $derived(current.kind === "oauth" && current.clientId === clientId.trim());
+
+  /**
+   * The client id the sign-in in progress started with. ⛔ What is written on
+   * success is THIS, not whatever the box says by then: an edit while the code
+   * was pending would otherwise name an application that never issued the tokens.
+   */
+  let signingClientId = "";
+
   /** Who this account is signed in as, when it signs in. */
   async function loadStatus() {
     if (!oauth) return;
@@ -252,10 +262,9 @@
     write("own", [{ op: "set", path: `${path}.own`, value: { boolean: true } }]);
   }
 
-  function chooseOauth() {
+  function chooseOauth(id = clientId.trim()) {
     // `oauth` is written as `true` or as `{ client_id = ".." }`, and the core
     // cannot set a key inside a boolean, so the key is cleared first either way.
-    const id = clientId.trim();
     write("oauth", [
       { op: "unset", path: `${path}.oauth` },
       id
@@ -386,19 +395,25 @@
       <div class="pair flex flex-wrap items-start gap-1.5">
         <DeviceSignIn
           api={oauth}
-          request={() => ({ account, provider, base_url: instance, client_id: clientId.trim() || null })}
+          request={() => {
+            signingClientId = clientId.trim();
+            return { account, provider, base_url: instance, client_id: signingClientId || null };
+          }}
           label={status ? "Sign in again" : undefined}
-          onsignedin={(signed) => {
+          onsignedin={() => {
             // Signing in stores the tokens, and pressing Sign in on this option
             // is the choice itself, so the account is switched to it in the same
             // step. It used to wait for "Use this source", and a real sign-in
             // on 2026-09-19 left both accounts reading their old source with a
             // stored sign-in nobody used.
-            const switching = current.kind !== "oauth";
-            if (switching) chooseOauth();
-            message = switching
-              ? `Signed in as @${signed.login ?? "unknown"}. This account now uses the sign-in.`
-              : `Signed in as @${signed.login ?? "unknown"}.`;
+            // ⛔ A different client id counts as switching too: signing in with a
+            // typed id while the file still says the built-in one stored tokens
+            // the file's application could never refresh.
+            const switching = !(current.kind === "oauth" && current.clientId === signingClientId);
+            if (switching) chooseOauth(signingClientId);
+            // Who signed in is the status line's to say, once; this line only
+            // adds that the source changed.
+            message = switching ? "This account now uses the sign-in." : "";
             void loadStatus();
           }}
         />
@@ -468,7 +483,11 @@
       </div>
     {/if}
 
-    <Button variant="secondary" size="sm" class="apply self-start" onclick={apply}>Use this source</Button>
+    <!-- Not for a sign-in the file already uses: a successful sign-in writes its
+         source itself, so the button would only rewrite what is there. -->
+    {#if !(kind === "oauth" && fileHasThisSignIn)}
+      <Button variant="secondary" size="sm" class="apply self-start" onclick={apply}>Use this source</Button>
+    {/if}
     {#if message}
       <p class={["message m-0", HINT]}>{message}</p>
     {/if}

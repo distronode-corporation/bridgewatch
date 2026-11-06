@@ -13,6 +13,78 @@ body line with a bracket.
 
 ## [Unreleased]
 
+### Added
+
+- **`bridgewatch init --oauth` and `--oauth-client-id <id>`.** The second names an
+  application of your own, as GitHub Enterprise Server and a self-managed GitLab need.
+  When the file signs in, `init` ends by printing the next step,
+  `bridgewatch auth login --account <name>`.
+
+### Changed
+
+- **Sign-in is the default way to add an account.** On github.com and gitlab.com, where
+  bridgewatch has its own application, **Sign in with GitHub** (or GitLab) is now what a
+  new account starts on everywhere:
+  - The setup wizard preselects it on a fresh start even when a gh or glab token was
+    found. **Use gh's token** (or glab's) is still listed below it. The CLI's token is
+    preselected only where sign-in needs a client id of your own, as on GitHub
+    Enterprise Server or a self-managed GitLab.
+  - Until now the preselection depended on which answer arrived first, so a found gh
+    token could win over sign-in from one launch to the next. It is now decided from
+    both answers, and never changes a choice you have already made.
+  - Settings' **Add account** writes `token = { oauth = true }` for a new github.com or
+    gitlab.com account, instead of bridgewatch's own entry.
+  - `bridgewatch init` with no token flag writes `token = { oauth = true }` there for a
+    new account, and `own = true` on any other host. An account the file already has
+    keeps its token source on the same instance, as a re-run of the wizard does; until
+    now a flagless `init` rewrote it to `own = true`. A kept source is not re-checked as
+    though it had just been typed, an unknown key elsewhere in the file does not hide the
+    account, and `--oauth` alone keeps an existing sign-in's client id.
+  - In the wizard, the **Sign in** button sits directly under its option, before the
+    alternatives. The section is called **Access**, and what a token must be allowed to do
+    is said only while a token option is chosen.
+
+### Fixed
+
+- **`bridgewatch init` never moves a token source to another host.** The derived account
+  name is the host's first label, so gitlab.com and gitlab.acme.com are both `gitlab`,
+  and `init` for the second host rewrote the first account's `base_url` while keeping its
+  token source. `init` now refuses to repoint an existing account to another host unless
+  `--account` names it, and a source is kept only on the same instance.
+- **`init` no longer suggests redirecting onto the config.** Its help, its last line and
+  the README said to redirect the output, and a `>` onto the config empties it before
+  `init` reads it. They now say to write a new file, check it and move it into place.
+  The printed `auth login` step carries `--config` when it was given.
+- **The wizard never uses the previous instance's CLI token.** After the instance changed,
+  the old host's glab or gh token stayed preselected until the new detection answered, so
+  **Test connection** in that gap could send it to the new host. A detected token is now
+  tied to the instance it was found for.
+- **Settings: signing in through a newly typed client id writes it.** A successful
+  sign-in already switched an account to `oauth`. When the account signed in already but
+  through another application, the new client id stayed unwritten until **Use this
+  source** was pressed. That button is now hidden for the sign-in the file already uses.
+  What is written is the client id the sign-in started with, even if the box was edited
+  while the code was pending, and "Signed in as" is shown once, not twice.
+- **The wizard counts a sign-in only for what it was made with.** A sign-in that finished
+  after the client id or the instance changed still counted, and so did a stored one after
+  either was edited on a re-run, so the file could name an application or an instance its
+  tokens never came from, and the first poll asked to sign in again. The wizard now asks
+  for a new sign-in instead.
+- **A renamed account keeps its sign-in in the wizard.** A sign-in made after renaming the
+  account, on a re-run or after an earlier sign-in, was stored under the old name, and one
+  that finished after a rename while the code was pending was recorded under the new
+  name, so the saved account had no sign-in either way. A sign-in is now stored under the
+  name the form shows when it starts, and Finish moves it to the saved name when the
+  account was renamed afterwards.
+- **The wizard never keeps a hidden CLI token selected.** When the CLI's token had been
+  picked and the instance changed to one where none is found, the option disappeared but
+  stayed chosen, and **Next** could not go on. It now falls back to sign-in where the
+  instance offers it, else to a pasted token.
+- **`init` quotes the account name in the `auth login` step it prints**, so a name with
+  a space can be pasted as it is.
+- **Settings: every tab label stays on one line.** At the narrowest window, **Edit as
+  text** wrapped onto three lines.
+
 ## [1.3.0] - 2026-11-06
 
 The CLI ships with every release: on npm as `bridgewatch`, and as three tarballs on the
