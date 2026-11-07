@@ -75,6 +75,14 @@ export function bridgeWord(verdict: string): string {
       : verdict;
 }
 
+/**
+ * A shorter bridge verdict for a narrow popover, or null when the word is
+ * already short. The full `bridgeWord` stays in the title and aria-label.
+ */
+export function bridgeShortWord(verdict: string): string | null {
+  return verdict === "passed_with_warnings" ? "warnings" : null;
+}
+
 const DEPLOY_TONES: Record<string, Tone> = {
   absent: "grey",
   in_progress: "blue",

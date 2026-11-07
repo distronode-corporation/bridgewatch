@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   bridgeTone,
+  bridgeShortWord,
   bridgeWord,
   configErrorLines,
   countdown,
@@ -95,6 +96,9 @@ describe("bridge and deploy words", () => {
 
   it("spells the two-word verdicts out", () => {
     expect(bridgeWord("passed_with_warnings")).toBe("passed, with warnings");
+    // The narrow-window form, only where the word is long.
+    expect(bridgeShortWord("passed_with_warnings")).toBe("warnings");
+    expect(bridgeShortWord("failed")).toBe(null);
     expect(bridgeWord("awaiting_gate")).toBe("awaiting a gate");
   });
 

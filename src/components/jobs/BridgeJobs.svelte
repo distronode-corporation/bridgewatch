@@ -27,7 +27,7 @@
   import WorkflowIcon from "@lucide/svelte/icons/workflow";
 
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
-  import { TONE_DOT, TONE_TEXT, bridgeTone, bridgeWord } from "../../lib/format";
+  import { TONE_DOT, TONE_TEXT, bridgeShortWord, bridgeTone, bridgeWord } from "../../lib/format";
   import type { BridgeView, JobsMode, Provider } from "../../lib/types";
   import JobList from "./JobList.svelte";
   import { filterJobs, type ExpansionStore } from "./jobs";
@@ -110,8 +110,20 @@
         class={["size-2 shrink-0 rounded-full", TONE_DOT[tone], bridge.verdict === "running" && "bw-live"]}
         aria-hidden="true"
       ></span>
-      <span class="text-foreground min-w-0 flex-1 truncate font-mono" title={bridge.name}>{bridge.name}</span>
-      <span class={["status ml-auto shrink-0", TONE_TEXT[tone]]}>{bridgeWord(bridge.verdict)}</span>
+      <!-- The NAME has priority: it keeps at least 12ch, and the status gives
+           way first (it truncates, and in a narrow window a long verdict is
+           shortened; see .bw-wide-only in app.css). The trigger's aria-label
+           and the status's title keep the full verdict. -->
+      <span class="name text-foreground min-w-[12ch] flex-1 truncate font-mono" title={bridge.name}>{bridge.name}</span>
+      <span class={["status ml-auto min-w-0 truncate", TONE_TEXT[tone]]} title={bridgeWord(bridge.verdict)}>
+        {#if bridgeShortWord(bridge.verdict)}
+          <span class="bw-wide-only">{bridgeWord(bridge.verdict)}</span><span class="bw-narrow-only"
+            >{bridgeShortWord(bridge.verdict)}</span
+          >
+        {:else}
+          {bridgeWord(bridge.verdict)}
+        {/if}
+      </span>
       <span class="count text-muted-foreground w-6 shrink-0 text-right tabular-nums" title="jobs listed / jobs in the child"
         >{#if bridge.dived && bridge.jobs.length > 0}{mode === "all"
             ? bridge.jobs.length

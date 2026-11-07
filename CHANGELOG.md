@@ -56,7 +56,9 @@ body line with a bracket.
     something, so "deployed deployed" is gone.
   - **Bridge and job rows are in columns.** The name truncates, and the status and job
     count line up on the right. The trigger job, child pipeline and workflow run links
-    are icons, each with the name a screen reader reads.
+    are icons, each with the name a screen reader reads. The name keeps at least 12
+    characters: a long status gives way first, and in a narrow popover "passed, with
+    warnings" reads "warnings", with the full words in its tooltip and accessible name.
   - **Job tools are 12px words.** **log**, **retry** and **play** show on hover or
     keyboard focus, and always on a failed job.
   - **Watches are separated by space** instead of a tinted band and a rule.

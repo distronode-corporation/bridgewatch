@@ -276,6 +276,41 @@ describe("BridgeJobs, the two links on the header", () => {
   });
 });
 
+describe("BridgeJobs, a long name beside a long status", () => {
+  const NAME = "trigger:android-release-build";
+
+  it("keeps the name first and lets the status give way, with the full verdict for a screen reader", () => {
+    component = mount(BridgeJobs, {
+      target: host,
+      props: {
+        bridge: bridge({ name: NAME, verdict: "passed_with_warnings" }),
+        pipelineId: 5000,
+        expansion: createExpansionStore(),
+        onOpen: () => {},
+        now: T0,
+      },
+    });
+    flushSync();
+    const row = host.querySelector<HTMLElement>(`[data-bridge="${NAME}"]`)!;
+    const name = row.querySelector<HTMLElement>(".name")!;
+    const status = row.querySelector<HTMLElement>(".status")!;
+    // The name keeps at least 12ch; the status is the one that shrinks.
+    expect(name.classList).toContain("min-w-[12ch]");
+    expect(name.getAttribute("title")).toBe(NAME);
+    expect(status.classList).toContain("min-w-0");
+    expect(status.classList).toContain("truncate");
+    expect(status.classList).not.toContain("shrink-0");
+    // Both forms are there; app.css shows "warnings" only in a narrow window.
+    expect(status.querySelector(".bw-wide-only")?.textContent).toBe("passed, with warnings");
+    expect(status.querySelector(".bw-narrow-only")?.textContent).toBe("warnings");
+    // The full verdict is never lost.
+    expect(status.getAttribute("title")).toBe("passed, with warnings");
+    expect(row.querySelector('[data-slot="collapsible-trigger"]')?.getAttribute("aria-label")).toBe(
+      `${NAME}: passed, with warnings. Show jobs`,
+    );
+  });
+});
+
 describe("BridgeJobs, a dead bridge in words", () => {
   function render(view: BridgeView) {
     component = mount(BridgeJobs, {

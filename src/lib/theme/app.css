@@ -344,6 +344,22 @@ html[data-platform="linux"] {
   animation: bw-live-pulse 1.4s ease-in-out infinite;
 }
 
+/* A word with a short form for a narrow popover (BridgeJobs' verdict). A plain
+   max-width query: WebKitGTK 2.36 has neither range syntax (width < 400px),
+   which Tailwind's max-* variants emit, nor container queries. 400px sits
+   between the narrow (340) and default (440) popover widths. */
+.bw-narrow-only {
+  display: none;
+}
+@media (max-width: 399px) {
+  .bw-wide-only {
+    display: none;
+  }
+  .bw-narrow-only {
+    display: inline;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bw-live {
     animation: none;
