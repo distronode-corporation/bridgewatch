@@ -567,14 +567,70 @@ pub async fn set_own_token(
         return Err("the token is empty".into());
     }
     let state = state.inner().clone();
+    // ⛔ The server the token is bound to comes from the FILE, read here, and
+    // never from the webview: whoever names the base_url names where the
+    // token goes, and a script in the webview must not be the one to say.
+    let base_url = account_on_disk(&state.config_path, &account)?.base_url;
+    let account_name = account.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        token::set_own_token(&account, &Secret::new(pasted), &SystemTokenProvider)
+        token::set_own_token(
+            &account,
+            &base_url,
+            &Secret::new(pasted),
+            &SystemTokenProvider,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
-    state.request_reload();
+    // A refused account is retried in place, so no other watch loses its
+    // state; an account that was working gets its new token through a
+    // reload, as before (its client holds the old one).
+    if state.is_refused(&account_name) {
+        state.retry_refused.notify_one();
+    } else {
+        state.request_reload();
+    }
     Ok(())
+}
+
+/// The account named `account` as the configuration file on disk says it is,
+/// read leniently: an unknown key elsewhere in the file must not hide it.
+pub(crate) fn account_on_disk(
+    path: &std::path::Path,
+    account: &str,
+) -> Result<bridgewatch_core::config::Account, String> {
+    let raw = read_or_empty(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (config, _) = bridgewatch_core::config::parse_lenient(&raw, path).map_err(|e| {
+        format!(
+            "the configuration file does not load, so the token has no server to belong to: {e}"
+        )
+    })?;
+    config.accounts.get(account).cloned().ok_or_else(|| {
+        format!(
+            "there is no account {account:?} in the configuration file yet; save the account \
+             first, then its token"
+        )
+    })
+}
+
+/// What bridgewatch's own entry for an account holds (none, legacy, bound,
+/// or bound elsewhere), against the account's `base_url` as the file on disk
+/// says it. Never the token.
+///
+/// ⚠ Off the main thread: it reads the credential store.
+#[tauri::command]
+pub async fn own_token_status(
+    account: String,
+    state: Shared<'_>,
+) -> Result<token::OwnTokenStatus, String> {
+    let entry = account_on_disk(&state.config_path, &account)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        token::own_token_status(&account, &entry, &SystemTokenProvider)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 /// Remove bridgewatch's own credential-store entry for an account.
@@ -657,6 +713,30 @@ mod tests {
 
     const OWN: &str = "[accounts.gl]\nbase_url = \"https://gitlab.com\"\ntoken = { own = true }\n";
     const CMD: &str = "[accounts.gl]\nbase_url = \"https://gitlab.com\"\ntoken = { command = [\"sh\", \"-c\", \"x\"] }\n";
+
+    /// ⛔ `set_own_token` and `own_token_status` read the account from the
+    /// FILE: its base_url is where the token is bound, and an account the
+    /// file does not have yet gets no token at all.
+    #[test]
+    fn the_own_token_commands_read_the_account_from_the_file_on_disk() {
+        let dir = std::env::temp_dir().join(format!("bw-own-disk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[accounts.gl]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\
+             unknown_key = 1\n",
+        )
+        .unwrap();
+        let account = account_on_disk(&path, "gl").expect("read leniently");
+        assert_eq!(account.base_url, "https://gitlab.example.com");
+        let missing = account_on_disk(&path, "other").unwrap_err();
+        assert!(missing.contains("save the account first"), "{missing}");
+        let none = account_on_disk(&dir.join("absent.toml"), "gl").unwrap_err();
+        assert!(none.contains("no account \"gl\""), "{none}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_command_source_typed_as_text_is_parked_until_confirmed() {

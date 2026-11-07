@@ -35,6 +35,7 @@ import type {
   SignedIn,
   StartedSignIn,
 } from "./oauth";
+import type { OwnTokenStatus } from "./own-token";
 import type {
   DiagnosticView,
   Edit,
@@ -84,6 +85,11 @@ export const quit = () => invoke<void>("quit");
 export const setOwnToken = (account: string, token: string) =>
   invoke<void>("set_own_token", { account, token });
 export const clearOwnToken = (account: string) => invoke<void>("clear_own_token", { account });
+/**
+ * What the account's own entry holds, against its `base_url` as the FILE says
+ * it (the shell reads it; nothing is sent from here). Never the token.
+ */
+export const ownTokenStatus = (account: string) => invoke<OwnTokenStatus>("own_token_status", { account });
 
 /**
  * The end of one job's log. The job is named by its watch and its page URL;

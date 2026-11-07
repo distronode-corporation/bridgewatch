@@ -229,19 +229,32 @@ pub fn client_for(
         .filter(|s| !s.is_empty())
         .map(Secret::new);
     let name = conn.account.as_deref().unwrap_or(UNNAMED);
-    poll::client_for_account(
-        name,
-        &account_for(conn),
-        pasted,
-        store,
-        RequestRing::new(16),
-    )
-    .map_err(|e| match e {
-        PollerError::Token(_, e) => {
-            account_issue("token", format!("could not read the token: {e}"))
+    let account = account_for(conn);
+    // ⛔ A 1.x value is bound, on first use, to the base_url it is resolved
+    // against, and here that is the WEBVIEW's answer, not the file's. So the
+    // wizard never makes that first use: only the poller does, against the
+    // file. A bound entry is safe to resolve here, because `resolve` refuses
+    // it for any other server.
+    if pasted.is_none()
+        && matches!(conn.token, TokenSource::Own(true))
+        && let Ok(token::OwnTokenStatus::Legacy) =
+            token::own_token_status(name, &account, store.as_ref())
+    {
+        return Err(account_issue(
+            "token",
+            "the stored token was saved by bridgewatch 1.x and is not tied to a server yet: \
+             paste it again here, or let the app use it once on the account's current server"
+                .to_string(),
+        ));
+    }
+    poll::client_for_account(name, &account, pasted, store, RequestRing::new(16)).map_err(|e| {
+        match e {
+            PollerError::Token(_, e) => {
+                account_issue("token", format!("could not read the token: {e}"))
+            }
+            PollerError::SignIn(_, e) => account_issue("token", e.to_string()),
+            other => failure(FailureKind::Network, other.to_string()),
         }
-        PollerError::SignIn(_, e) => account_issue("token", e.to_string()),
-        other => failure(FailureKind::Network, other.to_string()),
     })
 }
 
@@ -486,21 +499,48 @@ pub async fn wizard_save(
     }
 
     // Stored BEFORE the write, so the reload the write triggers finds it.
+    //
+    // ⛔ And put back if the write then fails (an I/O error, or a file that
+    // changed since it was read): the new entry is bound to the NEW base_url,
+    // and a file still naming the old one would refuse it, locking the
+    // account out of a token that used to work.
+    let mut stored_over: Option<(String, Previous)> = None;
     if let (TokenSource::Own(true), Some(pasted)) = (&answers.token, secret.as_deref()) {
         let pasted = pasted.trim().to_string();
         if !pasted.is_empty() {
             let account = answers.account.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                token::set_own_token(&account, &Secret::new(pasted), &SystemTokenProvider)
+            // ⛔ Bound to the base_url being ADMITTED: the account as the text
+            // `admit` just checked, and the write below puts on disk, says it.
+            // The token is sent to that server and no other.
+            let base_url = admitted_base_url(&built.toml, &path, &answers.account)?;
+            let previous = tauri::async_runtime::spawn_blocking(move || {
+                let previous = previous_own(&account, &SystemTokenProvider);
+                token::set_own_token(
+                    &account,
+                    &base_url,
+                    &Secret::new(pasted),
+                    &SystemTokenProvider,
+                )
+                .map(|()| previous)
             })
             .await
             .map_err(|e| failure(FailureKind::Network, e.to_string()))?
             .map_err(|e| account_issue("token", format!("could not store the token: {e}")))?;
+            stored_over = Some((answers.account.clone(), previous));
         }
     }
 
     let validation = crate::commands::write_admitted(&app, &state, &base, &built.toml, validation);
     let written = validation.ok;
+    if !written && let Some((account, previous)) = stored_over {
+        let restored = tauri::async_runtime::spawn_blocking(move || {
+            restore_own(&account, previous, &SystemTokenProvider)
+        })
+        .await;
+        if !matches!(restored, Ok(Ok(()))) {
+            tracing::warn!("the file was not written, and the stored token could not be put back");
+        }
+    }
     let mut result = WizardSaveResult {
         validation,
         issues: Vec::new(),
@@ -522,6 +562,62 @@ pub async fn wizard_save(
         hide_wizard(&app);
     }
     Ok(result)
+}
+
+/// The `base_url` of `account` in the text being admitted, which is what a
+/// pasted token is bound to: never the webview's answer, which the core may
+/// have normalised on its way into the file.
+fn admitted_base_url(
+    toml: &str,
+    path: &std::path::Path,
+    account: &str,
+) -> Result<String, WizardFailure> {
+    bridgewatch_core::config::parse_lenient(toml, path)
+        .ok()
+        .and_then(|(c, _)| c.accounts.get(account).map(|a| a.base_url.clone()))
+        .ok_or_else(|| {
+            account_issue(
+                "token",
+                "could not store the token: the account is not in the file being saved".to_string(),
+            )
+        })
+}
+
+/// What an account's own entry held before the wizard stored over it.
+#[derive(Debug, PartialEq, Eq)]
+enum Previous {
+    /// This value, as the store returned it.
+    Value(String),
+    /// Nothing was stored.
+    Nothing,
+    /// It could not be read, so it cannot be put back either.
+    Unknown,
+}
+
+fn previous_own(account: &str, store: &dyn TokenProvider) -> Previous {
+    match store.keyring_get(
+        &SystemTokenProvider::own_service(account),
+        SystemTokenProvider::OWN_USER,
+    ) {
+        Ok(raw) => Previous::Value(raw),
+        Err(token::TokenError::NoEntry { .. }) => Previous::Nothing,
+        Err(_) => Previous::Unknown,
+    }
+}
+
+/// Put an own entry back as [`previous_own`] found it. An entry that could
+/// not be read is left as it is now: deleting it would lose more.
+fn restore_own(
+    account: &str,
+    previous: Previous,
+    store: &dyn TokenProvider,
+) -> Result<(), token::TokenError> {
+    let service = SystemTokenProvider::own_service(account);
+    match previous {
+        Previous::Value(raw) => store.keyring_set(&service, SystemTokenProvider::OWN_USER, &raw),
+        Previous::Nothing => store.keyring_delete(&service, SystemTokenProvider::OWN_USER),
+        Previous::Unknown => Ok(()),
+    }
 }
 
 /// "I'll edit config.toml": leave the wizard, writing nothing, and open
@@ -629,6 +725,139 @@ mod tests {
             s.gate(&conn("https://new.example", TokenSource::Own(true)), None)
                 .is_ok()
         );
+    }
+
+    /// ⛔ A pasted token is bound to the account as the text being written
+    /// says it, not to anything the webview sent alongside.
+    #[test]
+    fn a_pasted_token_is_bound_to_the_base_url_being_written() {
+        let answers = bridgewatch_core::wizard::WizardAnswers {
+            account: "lab".into(),
+            base_url: "https://GitLab.Example.com/".into(),
+            token: TokenSource::Own(true),
+            project: Some(bridgewatch_core::config::ProjectRef::Id(1)),
+            ..Default::default()
+        };
+        let built = preview(&answers, "").expect("builds");
+        let base = admitted_base_url(&built.toml, Path::new("x.toml"), "lab").unwrap();
+        assert_eq!(
+            bridgewatch_core::oauth::origin_of(&base).as_deref(),
+            Some("https://gitlab.example.com")
+        );
+        let missing = admitted_base_url(&built.toml, Path::new("x.toml"), "other").unwrap_err();
+        assert_eq!(missing.issues[0].field, "token");
+    }
+
+    /// A store holding one 1.x (bare) own value, under `bridgewatch:gl`.
+    #[derive(Default)]
+    struct OneLegacy(Mutex<Vec<String>>);
+    impl TokenProvider for OneLegacy {
+        fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+            if service == "bridgewatch:gl" && user == "token" {
+                return Ok("glpat-legacy".into());
+            }
+            Err(TokenError::NoEntry {
+                service: service.into(),
+                user: user.into(),
+            })
+        }
+        fn keyring_set(&self, service: &str, _: &str, _: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().push(service.into());
+            Ok(())
+        }
+        fn keyring_delete(&self, _: &str, _: &str) -> Result<(), TokenError> {
+            Ok(())
+        }
+        fn env(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn run(&self, _: &[String]) -> Result<String, TokenError> {
+            unreachable!()
+        }
+    }
+
+    /// ⛔ The wizard's connection carries the webview's base_url, so it never
+    /// binds a 1.x value: that would tie the token to whatever host the form
+    /// names. It asks for a paste instead, and writes nothing.
+    #[test]
+    fn the_wizard_never_binds_a_1x_value_to_the_forms_host() {
+        let store = Arc::new(OneLegacy::default());
+        let mut c = conn("https://evil.example", TokenSource::Own(true));
+        c.account = Some("gl".into());
+        let Err(f) = client_for(&c, store.clone()) else {
+            panic!("a 1.x value was used for the form's host");
+        };
+        assert_eq!(f.issues[0].field, "token");
+        assert!(f.message.contains("bridgewatch 1.x"), "{}", f.message);
+        assert!(store.0.lock().unwrap().is_empty(), "nothing was bound");
+
+        // A paste is what was asked for, and is used.
+        c.secret = Some("glpat-typed".into());
+        assert!(client_for(&c, store.clone()).is_ok());
+        assert!(store.0.lock().unwrap().is_empty());
+    }
+
+    /// A credential store in memory, for the save-then-restore test.
+    #[derive(Default)]
+    struct Memory(Mutex<std::collections::BTreeMap<String, String>>);
+    impl TokenProvider for Memory {
+        fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(service)
+                .cloned()
+                .ok_or_else(|| TokenError::NoEntry {
+                    service: service.into(),
+                    user: user.into(),
+                })
+        }
+        fn keyring_set(&self, service: &str, _: &str, secret: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().insert(service.into(), secret.into());
+            Ok(())
+        }
+        fn keyring_delete(&self, service: &str, _: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().remove(service);
+            Ok(())
+        }
+        fn env(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn run(&self, _: &[String]) -> Result<String, TokenError> {
+            unreachable!()
+        }
+    }
+
+    /// ⛔ A save whose file write fails puts the account's entry back: the
+    /// token bound to the new base_url would otherwise sit beside a file still
+    /// naming the old one, and the account would refuse a token that worked.
+    #[test]
+    fn a_failed_save_puts_the_previous_own_entry_back() {
+        let store = Memory::default();
+        let account = |base: &str| Account {
+            base_url: base.into(),
+            token: TokenSource::Own(true),
+            ..Account::default()
+        };
+        token::set_own_token("gl", "https://a.example", &Secret::new("glpat-A"), &store).unwrap();
+
+        let previous = previous_own("gl", &store);
+        token::set_own_token("gl", "https://b.example", &Secret::new("glpat-B"), &store).unwrap();
+        restore_own("gl", previous, &store).unwrap();
+        assert_eq!(
+            token::resolve("gl", &account("https://a.example"), &store)
+                .unwrap()
+                .expose(),
+            "glpat-A",
+            "the old token works on the old server again"
+        );
+
+        // Nothing before: nothing after.
+        let previous = previous_own("new", &store);
+        assert_eq!(previous, Previous::Nothing);
+        token::set_own_token("new", "https://b.example", &Secret::new("glpat-B"), &store).unwrap();
+        restore_own("new", previous, &store).unwrap();
+        assert!(!store.0.lock().unwrap().contains_key("bridgewatch:new"));
     }
 
     struct NoStore;

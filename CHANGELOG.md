@@ -13,6 +13,26 @@ body line with a bracket.
 
 ## [Unreleased]
 
+### Breaking
+
+- **Own tokens are bound to their server, and a changed `base_url` needs a new token.**
+  A token saved for an account (`token = { own = true }`, from Settings or the wizard) is
+  now stored with the server it was saved for and is sent to that server only. Before,
+  changing an account's `base_url` (by hand, or with `bridgewatch init --account`) sent
+  the stored token to the new host on the next poll. Now it is not sent: `check`, `watch`,
+  `wait`, `log`, `retry` and `play` exit 70 and say which server the token belongs to, and
+  in the app only that account's watches show the error.
+- **1.x entries bind on first use.** A token stored by bridgewatch 1.x is tied to the
+  server the account names the first time 2.0 uses it, before anything is sent. If that
+  write fails, nothing is sent. The CLI binds too.
+- **1.3 cannot read 2.0 entries, and refuses them without sending.** After a downgrade,
+  paste the token again in 1.3's Settings; 2.0 binds it again later.
+- **Sign-in is the default for new github.com and gitlab.com accounts** (see Changed).
+- **The `bridgewatch-core` API changes.** `token::set_own_token` takes the server's
+  `base_url`, `token::TokenError` has a new `BoundElsewhere` variant and `ClientError` a
+  new `Token` variant, and a stored own entry is a small document rather than the bare
+  token, so a script that reads the keychain item sees the document.
+
 ### Added
 
 - **`bridgewatch init --oauth` and `--oauth-client-id <id>`.** The second names an
@@ -102,6 +122,25 @@ body line with a bracket.
   shrink with the window.
 
 ### Fixed
+
+- **A token problem stops only its own account in the app.** One account whose token is
+  missing or bound to another server used to stop polling for every account, with the
+  tray icon on unknown and "cannot start polling" in the strip. Now that account's watches
+  carry the error and the others keep polling, as an account that is not signed in
+  always did. The refused account is tried again on its own, in place, at 5 seconds and
+  then at doubling intervals up to 5 minutes, and at once after a token is saved for it or
+  on **Refresh now**: a locked keychain or a token command that timed out heals without a
+  reload, and the other accounts keep their state throughout.
+- **`bridgewatch auth status` lists own-token accounts too**: bound to which server, saved
+  for another server, a 1.x value that binds on first use, or nothing stored. It exits 70
+  unless every account it lists is usable.
+- **A sign-in whose stored server, or whose account's `base_url`, is not an http(s) URL is
+  never used.** Two such addresses used to count as the same server.
+- **Settings says which server an own token is for.** The token field reads "Stored for
+  X" and, when the account has since moved, "Stored for X; paste one for Y".
+- **The setup wizard forgets a stored token when the instance changes**, as it does a
+  sign-in, and the confirmation for moving an account to another host says an own token
+  or a sign-in stays with the old host (it used to say the token would be sent).
 
 - **`bridgewatch init` never moves a token source to another host.** The derived account
   name is the host's first label, so gitlab.com and gitlab.acme.com are both `gitlab`,

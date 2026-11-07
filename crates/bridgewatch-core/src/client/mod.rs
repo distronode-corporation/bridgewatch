@@ -443,6 +443,17 @@ pub enum ClientError {
         /// out.
         never_signed_in: bool,
     },
+    /// The account's token could not be resolved when the poller was built
+    /// (a missing entry, a token bound to another server, a failing command).
+    /// Nothing is sent for that account; its watches show this until the
+    /// configuration or the token changes. The other accounts poll on.
+    #[error("account {account}: {message}")]
+    Token {
+        /// The `[accounts.*]` key.
+        account: String,
+        /// The token error, as it displays. Never a token.
+        message: String,
+    },
 }
 
 /// The sentence [`ClientError::SignInAgain`] displays: what happened and the

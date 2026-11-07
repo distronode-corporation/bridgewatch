@@ -332,6 +332,11 @@
                   aria-invalid={errors.token ? "true" : undefined}
                   aria-describedby="wizard-token-msg"
                 />
+                {#if draft.ownStoredFor && !draft.ownStored}
+                  <p class="text-muted-foreground m-0 text-xs" data-slot="own-moved">
+                    The stored token stays with {draft.ownStoredFor}; paste one for {baseUrlOf(draft)}.
+                  </p>
+                {/if}
               {:else if mode.value === "env"}
                 <Label for="wizard-env" class="sr-only">Environment variable name</Label>
                 <Input

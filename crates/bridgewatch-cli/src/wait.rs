@@ -299,7 +299,7 @@ fn refusal(plan: &Plan, error: &ClientError, text: Option<&str>) -> Option<Strin
     let status = match error {
         ClientError::Auth { status, .. } => format!(" (HTTP {status})"),
         ClientError::NotFound { .. } => " (HTTP 404)".to_string(),
-        ClientError::SignInAgain { .. } => String::new(),
+        ClientError::SignInAgain { .. } | ClientError::Token { .. } => String::new(),
         _ => return None,
     };
     let text = text.map_or_else(|| error.to_string(), str::to_string);

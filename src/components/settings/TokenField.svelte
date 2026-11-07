@@ -14,9 +14,10 @@
 
   import { Button } from "$lib/components/ui/button/index.js";
   import DeviceSignIn from "../DeviceSignIn.svelte";
-  import { setOwnToken, clearOwnToken, inTauri, oauthApi } from "../../lib/ipc";
+  import { setOwnToken, clearOwnToken, inTauri, oauthApi, ownTokenStatus } from "../../lib/ipc";
   import { messageOf } from "../../lib/format";
   import { mismatchText, type OAuthApi, type OAuthAvailability, type SignInStatus } from "../../lib/oauth";
+  import { ownTokenText, type OwnTokenStatus } from "../../lib/own-token";
   import { cliName, defaultBaseUrl, providerName } from "../../lib/providers";
   import type { Edit, Provider } from "../../lib/types";
   import { concretePath, entry as registryEntry } from "../../lib/settings/registry";
@@ -34,6 +35,8 @@
     baseUrl?: string;
     /** Sign-in commands: the shell's in the app, a fake in a test, none elsewhere. */
     oauth?: OAuthApi;
+    /** What the own entry holds: the shell's in the app, a fake in a test, none elsewhere. */
+    ownStatus?: (account: string) => Promise<OwnTokenStatus>;
   }
 
   let {
@@ -43,6 +46,7 @@
     provider = "gitlab",
     baseUrl = "",
     oauth = inTauri() ? oauthApi() : undefined,
+    ownStatus = inTauri() ? ownTokenStatus : undefined,
   }: Props = $props();
 
   /** The instance the account talks to: its `base_url`, or the provider's default when the file has none. */
@@ -122,6 +126,38 @@
   let status = $state<SignInStatus | null>(null);
   /** Why the stored sign-in could not be read, when it could not. */
   let statusError = $state("");
+
+  /** What the own entry holds, when the own option is shown. */
+  let stored = $state<OwnTokenStatus | null>(null);
+  let storedError = $state("");
+  let storedSeq = 0;
+
+  /**
+   * ⛔ Read again whenever the account's address changes, because that is what
+   * turns "Stored for X" into "Stored for X; paste one for Y". The shell compares
+   * against the FILE's base_url, so this re-reads after the file did.
+   */
+  async function loadStored() {
+    const api = ownStatus;
+    if (!api) return;
+    const seq = ++storedSeq;
+    try {
+      const answer = await api(account);
+      if (seq !== storedSeq) return;
+      stored = answer;
+      storedError = "";
+    } catch (error) {
+      if (seq !== storedSeq) return;
+      stored = null;
+      storedError = `Could not read the stored token: ${messageOf(error)}`;
+    }
+  }
+  $effect(() => {
+    void baseUrl;
+    void account;
+    if (kind === "own" && current.kind === "own") void untrack(() => loadStored());
+  });
+  const storedLine = $derived(stored ? ownTokenText(stored, instance) : null);
 
   /** Ask the shell whether sign-in can work here, whenever the instance or the typed client id changes. */
   let availabilitySeq = 0;
@@ -327,6 +363,7 @@
         // and must not sit in a DOM node for the life of the window.
         pasted = "";
         message = "Saved to the credential store.";
+        void loadStored();
       } catch (error) {
         message = messageOf(error);
       }
@@ -339,6 +376,7 @@
       try {
         await clearOwnToken(account);
         message = "Removed from the credential store. This account stops polling until a token is set again.";
+        void loadStored();
       } catch (error) {
         message = messageOf(error);
       }
@@ -473,8 +511,17 @@
     {:else}
       <p class={["hint m-0", HINT]}>
         Read from <code>bridgewatch:{account}</code> in the OS credential store. Paste a token below
-        to write it; it is never put in the configuration file.
+        to write it; it is never put in the configuration file. It is sent only to the server it was
+        saved for.
       </p>
+      {#if storedLine?.alert}
+        <!-- The core never sends a token saved for another server, so this is not shown as stored. -->
+        <p class="text-tone-red m-0 text-[13px]" data-slot="own-status" role="alert">{storedLine.text}</p>
+      {:else if storedLine}
+        <p class={["hint m-0", HINT]} data-slot="own-status">{storedLine.text}</p>
+      {:else if storedError}
+        <p class="text-tone-red m-0 text-[13px]" data-slot="own-status" role="alert">{storedError}</p>
+      {/if}
       <div class="pair flex gap-1.5">
         <input
           type="password"

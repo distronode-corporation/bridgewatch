@@ -927,3 +927,107 @@ fn an_account_no_watch_uses_is_never_resolved() {
         .expect_err("a used account with no credential still fails the build");
     assert!(err.to_string().contains("idle"), "{err}");
 }
+
+/// A provider with one own token, saved for gitlab.com, and nothing else.
+#[derive(Clone)]
+struct OwnSavedForGitlabCom;
+
+impl bridgewatch_core::token::TokenProvider for OwnSavedForGitlabCom {
+    fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        if service == "bridgewatch:moved" && user == "token" {
+            return Ok(bridgewatch_core::token::encode_bound(
+                &bridgewatch_core::token::Secret::new("glpat-A"),
+                "https://gitlab.com",
+            )
+            .unwrap());
+        }
+        Err(TokenError::NoEntry {
+            service: service.into(),
+            user: user.into(),
+        })
+    }
+    fn keyring_set(&self, _service: &str, _user: &str, _secret: &str) -> Result<(), TokenError> {
+        panic!("nothing is written while polling a bound entry")
+    }
+    fn keyring_delete(&self, _service: &str, _user: &str) -> Result<(), TokenError> {
+        Ok(())
+    }
+    fn env(&self, _name: &str) -> Option<String> {
+        None
+    }
+    fn run(&self, _argv: &[String]) -> Result<String, TokenError> {
+        Err(TokenError::Empty)
+    }
+}
+
+/// ⛔ D4. An own token bound to another server fails the CLI's poller (exit 70
+/// in `check`), and in the app's per-account poller fails only ITS watches,
+/// with the reason on them, while the other account goes on. Both accounts
+/// here answer from the store, so nothing reaches the network either way.
+#[tokio::test]
+async fn a_token_error_fails_only_its_own_account_in_the_apps_poller() {
+    let raw = r#"
+        [accounts.moved]
+        base_url = "https://gitlab.example.com"
+        token = { own = true }
+
+        [accounts.other]
+        token = { oauth = true }
+
+        [[watches]]
+        id = "broken"
+        account = "moved"
+        project = 1
+
+        [[watches]]
+        id = "fine"
+        account = "other"
+        project = 2
+        role = "secondary"
+        "#;
+    let config: bridgewatch_core::Config = toml::from_str(raw).expect("the table deserialises");
+
+    let err = bridgewatch_core::poll::Poller::from_config(&config, &OwnSavedForGitlabCom)
+        .map(|_| ())
+        .expect_err("the CLI's poller is all or nothing");
+    assert!(
+        matches!(
+            err,
+            bridgewatch_core::poll::PollerError::Token(_, TokenError::BoundElsewhere { .. })
+        ),
+        "{err}"
+    );
+
+    let mut poller =
+        bridgewatch_core::poll::Poller::from_config_per_account(&config, &OwnSavedForGitlabCom)
+            .expect("the app's poller builds around the broken account");
+    // Named, so the app can rebuild while it is: some causes pass on their own.
+    assert_eq!(poller.refused_accounts(), ["moved"]);
+    let tick = poller.tick().await;
+    let error_of = |id: &str| {
+        tick.snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.error.clone())
+            .unwrap_or_default()
+    };
+    let broken = error_of("broken");
+    assert!(
+        broken.starts_with(
+            "account moved: the stored token of account \"moved\" was saved for https://gitlab.com"
+        ),
+        "{broken}"
+    );
+    assert!(!broken.contains("glpat-A"), "{broken}");
+    // The other account was polled in its own right: its own error, not the
+    // broken one's, and not "cannot start polling".
+    let fine = error_of("fine");
+    assert!(fine.contains("is not signed in"), "{fine}");
+    assert!(!fine.contains("moved"), "{fine}");
+    assert!(
+        poller.ring().entries().iter().all(|r| r.status.is_none()),
+        "nothing answered, because nothing was sent: {:?}",
+        poller.ring().entries()
+    );
+}

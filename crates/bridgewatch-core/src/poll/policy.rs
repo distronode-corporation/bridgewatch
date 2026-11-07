@@ -160,6 +160,15 @@ impl PollPolicy {
         self.last_poll = Some(Stamp::now());
     }
 
+    /// Forget a backoff that no server asked for: the errors were the
+    /// poller's own refusals of a credential that has since resolved
+    /// ([`crate::poll::Poller::retry_refused`]). The next tick polls; the
+    /// time of the last poll is kept.
+    pub fn forget_refusals(&mut self) {
+        self.consecutive_errors = 0;
+        self.retry_after = None;
+    }
+
     /// Record a tick that failed.
     ///
     /// ⛔ **Every** class of error extends the backoff, not only the ones

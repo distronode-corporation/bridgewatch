@@ -258,8 +258,17 @@ let account = Account {
 let secret: Secret = token::resolve("gitlab", &account, &SystemTokenProvider)?;
 
 // The GUI's "paste a token" field writes bridgewatch's own entry, which
-// `token = { own = true }` reads back.
-token::set_own_token("gitlab", &Secret::new("glpat-…"), &SystemTokenProvider)?;
+// `token = { own = true }` reads back. It is bound to the origin of the
+// base_url given here, which must be the account's as the config file says:
+// `resolve` refuses it (`TokenError::BoundElsewhere`) for any other server.
+token::set_own_token(
+    "gitlab",
+    "https://gitlab.com",
+    &Secret::new("glpat-…"),
+    &SystemTokenProvider,
+)?;
+// What the entry holds (none, a 1.x value, bound, bound elsewhere), for a UI.
+let _status = token::own_token_status("gitlab", &account, &SystemTokenProvider)?;
 token::clear_own_token("gitlab", &SystemTokenProvider)?;
 # let _ = secret;
 # Ok(())
@@ -269,7 +278,20 @@ token::clear_own_token("gitlab", &SystemTokenProvider)?;
 `Secret`'s `Debug` and `Display` both print `<redacted>`; `expose()` is the only
 way to see it, and should be called as late as possible.
 
-Three things worth knowing before wiring a settings pane:
+Four things worth knowing before wiring a settings pane:
+
+- ⛔ **An own token stays with its server.** `set_own_token` stores
+  `bw-bound-v1:` + a tab + `{"version":1,"token":"…","origin":"https://host"}`,
+  the origin normalised by `oauth::origin_of`. `resolve` sends it only when that
+  origin is the account's `base_url` origin, and otherwise fails with
+  `TokenError::BoundElsewhere` before any request. A value without the prefix
+  (written by 1.x) is bound to the account's origin on first use: read, write
+  the bound form, then return it, and nothing if the write fails. The tab is what
+  makes 1.3 refuse a 2.0 entry locally (a control character) rather than send
+  the document as a header. `Poller::from_config_per_account` (the app's) fails
+  only the account whose token failed, and `Poller::retry_refused` tries those
+  accounts again in place, every watch's state kept; `Poller::from_config` (the
+  CLI's) fails the whole build.
 
 - ⛔ **An empty keyring user does not work through the `keyring` crate.** Measured
   against 4.2.0 on macOS, `Entry::new(service, "")` returns

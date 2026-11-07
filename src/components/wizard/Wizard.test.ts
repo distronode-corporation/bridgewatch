@@ -623,6 +623,88 @@ describe("re-running on an existing config", () => {
   });
 });
 
+describe("a stored own token after an instance change", () => {
+  /**
+   * ⛔ The shell binds an own token to the server it was saved for and never
+   * sends it elsewhere, so "leave empty to keep the stored token" is only true
+   * on that instance. Moving to another drops it, as a sign-in is dropped;
+   * moving back keeps it again.
+   */
+  it("is dropped when the instance changes, says why, and comes back with the instance", async () => {
+    const api = fakeApi();
+    await start(api, {
+      initial: {
+        account: "work",
+        base_url: "https://gitlab.example.com",
+        token: { own: true },
+        project: 42,
+        ref_name: "main",
+        watch_id: "web-main",
+      },
+    });
+    expect(q<HTMLInputElement>("#wizard-secret")?.placeholder).toBe("Leave empty to keep the stored token");
+    expect(q('[data-slot="own-moved"]')).toBeNull();
+
+    const url = q<HTMLInputElement>("#wizard-base-url")!;
+    url.value = "https://gitlab.other.example";
+    url.dispatchEvent(new Event("input", { bubbles: true }));
+    url.dispatchEvent(new Event("blur"));
+    await settle();
+    expect(q<HTMLInputElement>("#wizard-secret")?.placeholder).toBe("glpat-…");
+    expect(text('[data-slot="own-moved"]')).toBe(
+      "The stored token stays with https://gitlab.example.com; paste one for https://gitlab.other.example.",
+    );
+    await next();
+    expect(stepId()).toBe("account");
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+
+    url.value = "https://GitLab.example.com/";
+    url.dispatchEvent(new Event("input", { bubbles: true }));
+    url.dispatchEvent(new Event("blur"));
+    await settle();
+    expect(q('[data-slot="own-moved"]')).toBeNull();
+    await next();
+    expect(stepId()).toBe("project");
+  });
+});
+
+describe("a stored own token, the instance changed without a blur", () => {
+  /**
+   * ⛔ Seer round 4: the instance change ran on the URL field's blur only, and
+   * Enter in that field submits the form without one, so Next kept "leave
+   * empty to keep the stored token" for a host that token is not bound to.
+   */
+  it("Enter in the URL field still requires a paste, and so does Test connection", async () => {
+    const api = fakeApi();
+    await start(api, {
+      initial: {
+        account: "work",
+        base_url: "https://gitlab.example.com",
+        token: { own: true },
+        project: 42,
+        ref_name: "main",
+        watch_id: "web-main",
+      },
+    });
+    const url = q<HTMLInputElement>("#wizard-base-url")!;
+    url.focus();
+    url.value = "https://gitlab.other.example";
+    url.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+
+    await click('[data-action="test-connection"]');
+    expect(api.testConnection).not.toHaveBeenCalled();
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+
+    // Enter in a text field is the form's implicit submission.
+    url.form!.requestSubmit();
+    await settle();
+    expect(stepId()).toBe("account");
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+    expect(api.save).not.toHaveBeenCalled();
+  });
+});
+
 describe("adding a watch to a config that already has a primary", () => {
   it("says the new watch is secondary and why, and asks again with primary when the box is ticked", async () => {
     const api = fakeApi({
