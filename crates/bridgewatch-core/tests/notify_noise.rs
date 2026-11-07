@@ -258,6 +258,34 @@ fn a_deploy_on_a_green_watch_is_said_at_once() {
     assert_eq!(kinds(&out), ["deployed"]);
 }
 
+/// ⛔ A "fixed again" whose template fails to render is retried, and said
+/// ONCE when the template works again. Clearing the failing flag before the
+/// render made the retry see a watch that was no longer failing, so it was
+/// never said (Seer, #58).
+#[test]
+fn a_fixed_again_that_failed_to_render_is_said_once_it_renders() {
+    let mut w = watch();
+    let mut ledger = baselined(&w);
+    let red = row(60, "failed", "absent", false, &["lint"]);
+    notifications_for(&w, &view(&w, vec![red.clone()]), &mut ledger);
+    assert!(ledger.is_failing(&w.id));
+
+    let rows = vec![row(61, "deployed", "live", false, &[]), red];
+    let good = w.notify.title.clone();
+    w.notify.title = "{{ watch.id | no_such_filter }}".into();
+    let broken = notifications_for(&w, &view(&w, rows.clone()), &mut ledger);
+    assert!(broken.is_empty(), "nothing renders: {:?}", kinds(&broken));
+    assert!(ledger.is_failing(&w.id), "still owed a fixed again");
+
+    w.notify.title = good;
+    let fixed = notifications_for(&w, &view(&w, rows.clone()), &mut ledger);
+    assert_eq!(kinds(&fixed), ["recovered"], "{fixed:#?}");
+    assert!(!ledger.is_failing(&w.id));
+
+    let after = notifications_for(&w, &view(&w, rows), &mut ledger);
+    assert!(after.is_empty(), "{:?}", kinds(&after));
+}
+
 /// Turned off, a recovering push says what any green push says.
 #[test]
 fn recovered_off_says_the_ordinary_thing() {

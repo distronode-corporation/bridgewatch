@@ -5,7 +5,7 @@ pub mod cache;
 pub mod planner;
 pub mod policy;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 pub use cache::{CacheEntry, PipelineCache};
@@ -36,6 +36,10 @@ pub struct Tick {
     /// display; this is for a caller that has to tell a refused token or a
     /// missing project (which no retry will fix) from a timeout or a 503.
     pub list_errors: BTreeMap<String, ClientError>,
+    /// The watches whose list request was actually SENT this tick. Not one
+    /// sitting out a backoff, and not one whose account is unknown. Whether
+    /// it worked is [`Self::list_errors`].
+    pub polled: BTreeSet<String>,
 }
 
 /// What [`Poller::look_up_commit`] found for one commit on one watch.
@@ -274,6 +278,7 @@ impl Poller {
         let mut notifications = Vec::new();
         let mut errors = Vec::new();
         let mut list_errors = BTreeMap::new();
+        let mut polled_ids = BTreeSet::new();
 
         // What each watch does this tick, decided before anything is sent.
         enum Turn {
@@ -361,6 +366,7 @@ impl Poller {
                     let Some((mut view, list_error)) = polled.next() else {
                         continue;
                     };
+                    polled_ids.insert(state.watch.id.clone());
                     if let Some(e) = list_error {
                         list_errors.insert(state.watch.id.clone(), e);
                     }
@@ -435,6 +441,7 @@ impl Poller {
             notifications,
             next_interval,
             list_errors,
+            polled: polled_ids,
         }
     }
 

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use bridgewatch_core::client::ClientError;
 use bridgewatch_core::config::Config;
-use bridgewatch_core::poll::{CommitLookup, Poller};
+use bridgewatch_core::poll::{CommitLookup, Poller, Tick};
 use bridgewatch_core::verdict::{IconState, PipelineView, Snapshot};
 use clap::Args;
 
@@ -384,6 +384,18 @@ pub async fn run(config_args: &ConfigArgs, args: WaitArgs) -> Outcome {
     Ok(code)
 }
 
+/// Whether this tick may be followed by a direct lookup for `watch`: its list
+/// request was sent this tick and worked.
+///
+/// ⛔ Not "the view has no error". A view's error is also any OTHER pipeline's
+/// failed jobs, child or script, and one that keeps failing used to stop every
+/// lookup, so a skipped or absent commit was never answered (Seer, #58). And
+/// not "no list error" alone: a watch sitting out a backoff has none this tick,
+/// and a lookup then would be exactly the request the backoff is holding back.
+fn may_look_up(tick: &Tick, watch: &str) -> bool {
+    tick.polled.contains(watch) && !tick.list_errors.contains_key(watch)
+}
+
 /// Wait until the commit has an answer: its pipeline settles, it turns out to
 /// have none, a request is refused for good, time runs out, or `interrupt`.
 ///
@@ -423,7 +435,7 @@ where
         let mut row = find_row(&tick.snapshot, &plan.watch, &plan.sha).cloned();
         let mut lookup_error: Option<String> = None;
         let mut none_yet = false;
-        if row.is_none() && view.is_some_and(|v| v.error.is_none()) {
+        if row.is_none() && may_look_up(&tick, &plan.watch) {
             let looked = tokio::select! {
                 looked = poller.look_up_commit(&plan.watch, &plan.sha) => looked,
                 _ = &mut interrupt => return Ended::Interrupted(last),
@@ -517,9 +529,15 @@ mod tests {
 
     /// The same watch, with more of its keys (`poll = { .. }`).
     fn poller_with(script: &Arc<ScriptTransport>, extra: &str) -> Poller {
+        poller_full(script, "", extra)
+    }
+
+    /// The same, with more of the account's keys too.
+    fn poller_full(script: &Arc<ScriptTransport>, account: &str, extra: &str) -> Poller {
         let raw = r#"
 [accounts.gitlab]
 token = { env = "BRIDGEWATCH_TEST_TOKEN_NEVER_SET" }
+ACCOUNT
 
 [[watches]]
 id = "main-push"
@@ -528,7 +546,7 @@ project = 1
 ref = "main"
 show = { settled = 1 }
 "#;
-        let raw = format!("{raw}{extra}\n");
+        let raw = format!("{}{extra}\n", raw.replace("ACCOUNT", account));
         let config = parse_str(&raw, Path::new("wait.toml"))
             .expect("config")
             .config;
@@ -777,6 +795,82 @@ show = { settled = 1 }
         let ended = wait(&mut poller, &plan()).await;
         assert!(matches!(ended, Ended::Verdict(_)), "{ended:?}");
         assert_eq!(requests_to(&script, TICK), 2);
+    }
+
+    /// ⛔ Another pipeline whose jobs keep failing to load puts an error on
+    /// the watch's view on every tick. It must not stop the lookup: the
+    /// skipped answer and the grace are both still reached (Seer, #58).
+    ///
+    /// ⚠️ On the real clock with one-second intervals, as `a_503_is_retried`
+    /// is: a failed jobs request feeds the wall-clock backoff.
+    #[tokio::test]
+    async fn an_unrelated_error_does_not_stop_the_lookup() {
+        for (lookup, expected) in [
+            (list(&[pipeline(10, A, "skipped")]), "Skipped"),
+            ("[]".to_string(), "NoPipeline"),
+        ] {
+            let script = Arc::new(ScriptTransport::new());
+            always(&script, LOOKUP, 200, &lookup);
+            always(&script, TICK, 200, &list(&[pipeline(20, B, "running")]));
+            always(&script, "pipelines/20/jobs", 500, "");
+            always(&script, "pipelines/20/bridges", 200, "[]");
+            let mut poller = poller_full(
+                &script,
+                "rate_limit_backoff = { max_secs = 1 }",
+                "poll = { live_secs = 1, idle_secs = 1 }",
+            );
+            let plan = Plan {
+                timeout: Some(Duration::from_secs(15)),
+                grace: Duration::from_secs(2),
+                ..plan()
+            };
+            let ended = wait(&mut poller, &plan).await;
+            assert!(
+                format!("{ended:?}").starts_with(expected),
+                "{expected}: {ended:?}"
+            );
+            assert!(
+                requests_to(&script, "pipelines/20/jobs") > 0,
+                "the error was there"
+            );
+        }
+    }
+
+    /// ⛔ A tick on which the watch sat out its backoff sent no list request,
+    /// so it has no list error either; it must not be followed by a lookup,
+    /// which would be the very request the backoff holds back.
+    #[tokio::test]
+    async fn a_tick_sitting_out_a_backoff_is_not_followed_by_a_lookup() {
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, TICK, 503, "");
+        let mut poller = poller(&script);
+
+        let first = poller.tick().await;
+        let sat_out = poller.tick().await;
+        assert!(first.polled.contains("main-push"));
+        assert!(!sat_out.polled.contains("main-push"), "backing off");
+        assert!(!sat_out.list_errors.contains_key("main-push"));
+        assert!(!super::may_look_up(&sat_out, "main-push"));
+        assert_eq!(
+            requests_to(&script, TICK),
+            1,
+            "the second tick sent nothing"
+        );
+    }
+
+    /// A list error on the waited watch: polled, but no lookup. What follows
+    /// is unchanged: a refusal ends the wait (`a_401_or_404_..`), anything
+    /// else waits out the backoff (`a_503_is_retried`).
+    #[tokio::test]
+    async fn a_list_error_is_not_followed_by_a_lookup() {
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, TICK, 503, "");
+        let mut poller = poller(&script);
+
+        let tick = poller.tick().await;
+        assert!(tick.polled.contains("main-push"));
+        assert!(tick.list_errors.contains_key("main-push"));
+        assert!(!super::may_look_up(&tick, "main-push"));
     }
 
     #[test]

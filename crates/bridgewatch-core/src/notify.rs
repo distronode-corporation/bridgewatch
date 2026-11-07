@@ -469,7 +469,17 @@ pub fn notifications_for(
                     out.push(n);
                     said_something = true;
                 }
-                Err(e) => template_failed(watch, &key, &e),
+                Err(e) => {
+                    // ⛔ The failing flag was already cleared above, so an
+                    // unrendered "fixed again" would be retried on a watch
+                    // that no longer reads as failing, and never said
+                    // (Seer, #58). Put it back: the next tick sees the edge
+                    // again, and says it once the template renders.
+                    if kind == NotifyKind::Recovered {
+                        ledger.set_failing(&watch.id, true);
+                    }
+                    template_failed(watch, &key, &e);
+                }
             }
         }
 
