@@ -516,7 +516,9 @@ redirect listener.
   ```
 
   The npm package runs the same commands: `npx bridgewatch auth login --account gh`.
-  `auth status` never prints a token and exits 70 when an account is not signed in.
+  `auth status` never prints a token and exits 70 when an account is not signed in, or
+  when its stored sign-in was issued by another server or for another application than
+  the account now names (such a sign-in is never used).
 - **Which hosts.** The built-in applications cover github.com (the GitHub App
   [bridgewatch-ci](https://github.com/apps/bridgewatch-ci)) and gitlab.com only. GitHub
   Enterprise Server and self-managed GitLab need an OAuth application registered on that

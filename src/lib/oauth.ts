@@ -50,7 +50,15 @@ export interface SignedIn {
   expires_at: number | null;
 }
 
-/** `SignInStatus`: a stored sign-in, described. */
+/**
+ * `Fit`, when it is not `fits`: why the running configuration's account would
+ * not use a stored sign-in. Its tokens are never sent.
+ */
+export type SignInMismatch =
+  | { kind: "other_instance"; issued: string; expected: string }
+  | { kind: "other_application" };
+
+/** `SignInView`: a stored sign-in, described. */
 export interface SignInStatus {
   login: string | null;
   expires_at: number | null;
@@ -58,6 +66,15 @@ export interface SignInStatus {
   scopes: string[];
   obtained_at: number;
   can_refresh: boolean;
+  /** Absent or null: the sign-in is used (or there is no running account to check it against). */
+  mismatch?: SignInMismatch | null;
+}
+
+/** A mismatch as one sentence, for the Settings window. */
+export function mismatchText(mismatch: SignInMismatch): string {
+  return mismatch.kind === "other_instance"
+    ? `Signed in for ${mismatch.issued}, not ${mismatch.expected}, so the sign-in is not used. Sign in again.`
+    : "Signed in with another application than this account's client id, so the sign-in is not used. Sign in again.";
 }
 
 /** `SignInFailure`: what every rejected sign-in call rejects with. */

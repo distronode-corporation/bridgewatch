@@ -907,6 +907,19 @@ pub fn client_for_account(
         crate::client::ReqwestTransport::new(std::time::Duration::from_secs(account.timeout_secs))
             .map_err(PollerError::Client)?,
     );
+    client_for_account_on(name, account, token, store, transport, ring)
+}
+
+/// [`client_for_account`] over a transport the caller supplies: the network's
+/// in [`client_for_account`], a script in a test.
+pub fn client_for_account_on(
+    name: &str,
+    account: &crate::config::Account,
+    token: Option<crate::token::Secret>,
+    store: Arc<dyn crate::token::TokenProvider>,
+    transport: Arc<dyn crate::client::Transport>,
+    ring: RequestRing,
+) -> Result<Arc<dyn CiClient>, PollerError> {
     // ⛔ Through the factory, never by naming a client type: an account whose
     // provider has no client yet fails HERE, loudly, rather than being handed a
     // GitLab client pointed at somebody else's API.
@@ -928,10 +941,10 @@ pub fn client_for_account(
                 ring,
             )
         }
-        source => {
+        _ => {
             let token = match token {
                 Some(token) => token,
-                None => crate::token::resolve(source, name, store.as_ref())
+                None => crate::token::resolve(name, account, store.as_ref())
                     .map_err(|e| PollerError::Token(name.to_string(), e))?,
             };
             crate::client::client_for(account, &token, transport, ring)

@@ -41,7 +41,7 @@ pub use device::{
     DeviceAuthorization, Progress, SignedIn, complete_sign_in, refresh, start, wait_for_token,
 };
 pub use session::{Clock, OAuthSession, OAuthTransport, system_clock, transport_for};
-pub use store::{SignInStatus, TokenSet};
+pub use store::{Fit, SignInStatus, TokenSet};
 
 use serde::Serialize;
 
