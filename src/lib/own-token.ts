@@ -20,7 +20,7 @@ export function ownTokenText(status: OwnTokenStatus, instance: string): { text: 
       return { text: "No token is stored for this account yet.", alert: false };
     case "legacy":
       return {
-        text: `A token saved by bridgewatch 1.x is stored. It is tied to ${instance} the first time it is used.`,
+        text: `A token saved by bridgewatch 1.x is stored. It is tied to ${instance} the first time it is used, or before the account moves to another host.`,
         alert: false,
       };
     case "bound":

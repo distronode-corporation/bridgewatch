@@ -96,18 +96,29 @@ pub fn sensitive_changes(old: Option<&Config>, new: &Config) -> Vec<String> {
             // to the one that issued it, so neither travels. Saying it does
             // warned of the wrong thing and hid the real consequence: the
             // account sends nothing until it gets a token for the new host.
-            let consequence = match &account.token {
-                TokenSource::Own(_) => {
+            //
+            // ⛔ "Stays with the old host" is made true for a token bridgewatch
+            // 1.x stored, which is bound to no server until it is first used:
+            // the write ties it to the old host before the file changes, and
+            // is refused if it cannot (`commands::store_admitted`). That needs
+            // the account to have read its own entry on the old host; one that
+            // used another source there is told only what to do next.
+            let consequence = match (&before.token, &account.token) {
+                (TokenSource::Own(true), TokenSource::Own(_)) => {
                     "Its stored token stays with the old host and is not sent to the new one: \
                      save a token for the new host."
                 }
-                TokenSource::Oauth(_) => {
+                (_, TokenSource::Own(_)) => {
+                    "It uses its own stored token from now on: save a token for the new host."
+                }
+                (_, TokenSource::Oauth(_)) => {
                     "Its sign-in stays with the old host and is not sent to the new one: sign \
                      in again for the new host."
                 }
-                TokenSource::Keyring { .. } | TokenSource::Env(_) | TokenSource::Command(_) => {
-                    "Its token will be sent to the new host."
-                }
+                (
+                    _,
+                    TokenSource::Keyring { .. } | TokenSource::Env(_) | TokenSource::Command(_),
+                ) => "Its token will be sent to the new host.",
             };
             out.push(format!(
                 "Account \"{name}\" moves from {} to {}. {consequence}",
@@ -277,12 +288,27 @@ mod tests {
         );
         assert!(!own.contains("will be sent"), "{own}");
 
-        let oauth = moved(&OWN.replace("{ own = true }", "{ oauth = { client_id = \"x\" } }"));
+        let signed_in = moved(&OWN.replace("{ own = true }", "{ oauth = { client_id = \"x\" } }"));
         assert!(
-            oauth.contains("Its sign-in stays with the old host"),
-            "{oauth}"
+            signed_in.contains("Its sign-in stays with the old host"),
+            "{signed_in}"
         );
-        assert!(!oauth.contains("will be sent"), "{oauth}");
+        assert!(!signed_in.contains("will be sent"), "{signed_in}");
+
+        // An account that used another source on the old host had no own
+        // token there to keep, so nothing is said to stay behind.
+        let from_env = OWN.replace("{ own = true }", "{ env = \"GL\" }");
+        let to_own = from_env
+            .replace("https://gitlab.com", "https://gitlab.example.net")
+            .replace("{ env = \"GL\" }", "{ own = true }");
+        let switched = sensitive_changes(Some(&parse(&from_env)), &parse(&to_own)).join("\n");
+        assert!(
+            switched.contains(
+                "It uses its own stored token from now on: save a token for the new host."
+            ),
+            "{switched}"
+        );
+        assert!(!switched.contains("stays with"), "{switched}");
 
         let env = moved(&OWN.replace("{ own = true }", "{ env = \"GL\" }"));
         assert!(
