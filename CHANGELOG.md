@@ -13,6 +13,8 @@ body line with a bracket.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-07
+
 bridgewatch 2.0 signs in instead of asking for a token, keeps every stored token with the
 server it was saved for, and says more with less noise. A new github.com or gitlab.com
 account starts on **Sign in**, and one-click setup then offers your most recently active
@@ -788,7 +790,8 @@ per-workflow status dot other monitors already show.
   `glab:<host>:token` naming, which has not been checked against a live install.
 - Windows is not targeted.
 
-[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.0.0...v1.1.0

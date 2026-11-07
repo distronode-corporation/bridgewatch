@@ -24,7 +24,7 @@ Apache-2.0.
 
 *The 2.0 popover in the light theme, rendered from the app's frontend with sample data.*
 
-**Status:** 1.3.0, released 2026-11-06. Download it from the
+**Status:** 2.0.0, released 2026-11-07. Download it from the
 [Releases page](https://github.com/distronode-corporation/bridgewatch/releases/latest): a
 signed and notarised universal `.dmg` for macOS, a `.deb`, an `.rpm` and an
 `.AppImage` for Linux on x86_64 and arm64, and the CLI as tarballs, also on npm as
@@ -420,7 +420,7 @@ tarballs use Rust's target names. Every asset carries a GitHub build provenance
 attestation:
 
 ```
-gh attestation verify bridgewatch_1.3.0_amd64.deb --repo distronode-corporation/bridgewatch
+gh attestation verify bridgewatch_2.0.0_amd64.deb --repo distronode-corporation/bridgewatch
 ```
 
 Every release also carries the attestation as
@@ -461,10 +461,10 @@ The second and third commands should end with `source=Notarized Developer ID`.
 ### Linux: .deb
 
 ```
-sudo apt install ./bridgewatch_1.3.0_amd64.deb
+sudo apt install ./bridgewatch_2.0.0_amd64.deb
 ```
 
-On arm64, use `bridgewatch_1.3.0_arm64.deb`. The package depends on `libsecret-tools`,
+On arm64, use `bridgewatch_2.0.0_arm64.deb`. The package depends on `libsecret-tools`,
 because bridgewatch runs `secret-tool` to read a keyring item that has an empty user name,
 which is how glab stores its token and how gh stores its active account's (see
 [Tokens](#tokens)).
@@ -472,11 +472,11 @@ which is how glab stores its token and how gh stores its active account's (see
 ### Linux: .rpm
 
 ```
-sudo dnf install ./bridgewatch-1.3.0-1.x86_64.rpm      # Fedora
-sudo zypper install ./bridgewatch-1.3.0-1.x86_64.rpm   # openSUSE
+sudo dnf install ./bridgewatch-2.0.0-1.x86_64.rpm      # Fedora
+sudo zypper install ./bridgewatch-2.0.0-1.x86_64.rpm   # openSUSE
 ```
 
-On arm64, use `bridgewatch-1.3.0-1.aarch64.rpm`. The package requires the file
+On arm64, use `bridgewatch-2.0.0-1.aarch64.rpm`. The package requires the file
 `/usr/bin/secret-tool` rather than a package name, for the same reason as the `.deb`: the
 package that ships it is `libsecret` on Fedora but `secret-tool` on openSUSE, and
 a file dependency resolves to the right one on each. The package is not GPG-signed; the
@@ -485,11 +485,11 @@ attestation above is how to check where it came from.
 ### Linux: AppImage
 
 ```
-chmod +x bridgewatch_1.3.0_amd64.AppImage
-./bridgewatch_1.3.0_amd64.AppImage
+chmod +x bridgewatch_2.0.0_amd64.AppImage
+./bridgewatch_2.0.0_amd64.AppImage
 ```
 
-On arm64, use `bridgewatch_1.3.0_aarch64.AppImage`. An AppImage declares no dependencies.
+On arm64, use `bridgewatch_2.0.0_aarch64.AppImage`. An AppImage declares no dependencies.
 If you reuse glab's or gh's token, install `secret-tool` yourself (`sudo apt install
 libsecret-tools` on Debian and Ubuntu, `sudo dnf install libsecret` on Fedora). A token stored in
 bridgewatch's own keyring entry goes through the Secret Service over D-Bus and does not
