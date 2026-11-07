@@ -5,7 +5,7 @@
   import type { Edit } from "../../lib/types";
   import type { RegistryEntry } from "../../lib/settings/registry";
   import { tableEdits } from "../../lib/settings/values";
-  import { FIELD_LABEL, FIELD_ROW, HINT, INPUT, SELECT } from "./styles";
+  import { FIELD_LABEL, HINT, INPUT, ROW, ROW_TEXT, SELECT, WIDTH_FULL } from "./styles";
 
   interface Props {
     entry: RegistryEntry;
@@ -93,9 +93,15 @@
   }
 </script>
 
-<div class={["kv", FIELD_ROW]}>
-  <div class={["label", FIELD_LABEL]}>{entry.label}</div>
-  <div class="rows flex flex-col gap-1">
+<!-- A card row whose control is a table: the rows wrap below the label at the full width. -->
+<div class={["kv", ROW]}>
+  <div class={ROW_TEXT}>
+    <div class={["label", FIELD_LABEL]}>{entry.label}</div>
+    {#if entry.hint}
+      <div class={["hint", HINT]}>{entry.hint}</div>
+    {/if}
+  </div>
+  <div class={["rows flex flex-col gap-1", WIDTH_FULL]}>
     {#each draft as row, index (index)}
       <div class="row flex items-center gap-1">
         <input
@@ -147,8 +153,5 @@
       class="add self-start"
       onclick={() => (draft = [...draft, ["", values ? values[0] : ""]])}>Add row</Button
     >
-    {#if entry.hint}
-      <div class={["hint mt-1", HINT]}>{entry.hint}</div>
-    {/if}
   </div>
 </div>

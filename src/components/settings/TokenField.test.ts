@@ -738,3 +738,43 @@ describe("TokenField, the server an own token is stored for", () => {
     expect(line()?.getAttribute("role")).toBe("alert");
   });
 });
+
+describe("TokenField, the inset panel and one action row (L2)", () => {
+  it("puts the chosen method's details in the panel and every button in one row after it", () => {
+    const h = render("work", { keyring: { service: "glab:gitlab.com", user: "" } });
+    const panel = () => host.querySelector('[data-slot="token-panel"]')!;
+    const actions = () => host.querySelector('[data-slot="token-actions"]')!;
+    const labels = () => [...actions().querySelectorAll("button")].map((b) => b.textContent?.trim());
+    expect(panel().getAttribute("data-kind")).toBe("keyring");
+    expect(panel().querySelector('input[aria-label="Keyring service"]')).toBeTruthy();
+    expect(panel().querySelector("button")).toBe(null);
+    // The panel comes first, then the row, and the row is the only place with buttons.
+    expect(panel().compareDocumentPosition(actions()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(labels().at(-1)).toBe("Use this source");
+    h.pick("own");
+    expect(panel().getAttribute("data-kind")).toBe("own");
+    expect(panel().querySelector('input[type="password"]')).toBeTruthy();
+    expect(labels()).toEqual(["Save token", "Forget", "Use this source"]);
+    h.pick("env");
+    expect(labels()).toEqual(["Use this source"]);
+  });
+
+  it("shows P2's stored-for line inside the panel", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    const props = reactive({
+      account: "work",
+      value: { own: true },
+      baseUrl: "https://gitlab.example.com",
+      onedit: () => Promise.resolve(),
+      ownStatus: () => Promise.resolve({ kind: "bound" as const, origin: "https://gitlab.example.com" }),
+    }) as ComponentProps<typeof TokenField>;
+    component = mount(TokenField, { target: host, props });
+    flushSync();
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    flushSync();
+    const line = host.querySelector('[data-slot="own-status"]');
+    expect(line).toBeTruthy();
+    expect(line!.closest('[data-slot="token-panel"]')).toBeTruthy();
+  });
+});

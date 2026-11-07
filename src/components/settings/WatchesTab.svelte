@@ -3,10 +3,12 @@
 
   import { Button } from "$lib/components/ui/button/index.js";
   import { concretePath, entriesFor, providerOf } from "../../lib/settings/registry";
+  import { WATCH_GROUPS, watchGroup } from "../../lib/settings/panes";
   import { getAt } from "../../lib/settings/values";
   import type { Edit } from "../../lib/types";
   import Field from "./Field.svelte";
   import KeyValueField from "./KeyValueField.svelte";
+  import Section from "./Section.svelte";
 
   interface Props {
     config: unknown;
@@ -15,6 +17,7 @@
     onedit: (edits: Edit[]) => void | Promise<void>;
     onremove: (id: string) => void;
     onmove: (id: string, delta: number) => void;
+    /** The empty list's own Add watch: the header's is the same action. */
     onadd: () => void;
   }
 
@@ -34,6 +37,17 @@
 
   const fields = entriesFor("watches").filter((e) => !e.path.endsWith("jobs.*"));
   const jobsEntry = entriesFor("watches").find((e) => e.path.endsWith("jobs.*"))!;
+
+  /**
+   * The watch's keys in groups named after their config tables (Source, Rows,
+   * Polling, Child pipelines, Deploy, Jobs, Notifications): 24 flat fields read
+   * as one undifferentiated form. A key no group claims would vanish, so it
+   * goes to Source; `panes.test.ts` fails on it before it ever gets here.
+   */
+  const grouped = WATCH_GROUPS.map((group) => ({
+    group,
+    entries: fields.filter((e) => (watchGroup(e.path) ?? "Source") === group),
+  }));
 
   /**
    * The open panel, named by WATCH rather than by position.
@@ -67,8 +81,8 @@
 
 {#each watches as watch, index (String(watch.id ?? index))}
   {@const id = String(watch.id ?? "")}
-  <section class="watch border-border mb-2.5 overflow-hidden rounded-xl border">
-    <header class="bg-muted/60 flex items-center gap-2 px-2 py-1.5">
+  <section class="watch mb-4" aria-label={`Watch ${id || "(no id)"}`}>
+    <header class="bg-muted/60 flex items-center gap-2 rounded-xl px-2 py-1.5">
       <button
         class="disclosure text-muted-foreground hover:text-foreground rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         aria-expanded={open === id}
@@ -77,48 +91,69 @@
       >
         <ChevronRightIcon class={["size-3.5 transition-transform", open === id && "rotate-90"]} aria-hidden="true" />
       </button>
-      <strong class="text-[13px]">{id || "(no id)"}</strong>
-      <span class="role text-muted-foreground text-[11px]">{String(watch.role ?? "primary")}</span>
+      <strong class="text-ui-body min-w-0 truncate font-semibold">{id || "(no id)"}</strong>
+      <span class="role text-muted-foreground text-ui-badge">{String(watch.role ?? "primary")}</span>
       <span class="flex-1"></span>
-      <Button variant="ghost" size="icon-xs" title="move up" disabled={index === 0} onclick={() => onmove(id, -1)}
+      <Button variant="ghost" size="icon-xs" title="move up" aria-label="move up" disabled={index === 0} onclick={() => onmove(id, -1)}
         >↑</Button
       >
       <Button
         variant="ghost"
         size="icon-xs"
         title="move down"
+        aria-label="move down"
         disabled={index === watches.length - 1}
         onclick={() => onmove(id, 1)}>↓</Button
       >
-      <Button variant="ghost" size="icon-xs" class="text-tone-red" title="remove this watch" onclick={() => onremove(id)}
-        >✕</Button
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        class="text-tone-red"
+        title="remove this watch"
+        aria-label="remove this watch"
+        onclick={() => onremove(id)}>✕</Button
       >
     </header>
 
     {#if open === id}
-      <div class="body px-2 pt-3 pb-1">
-        {#each fields as entry (entry.path)}
-          {@const path = concretePath(entry.path, index)}
-          <Field
-            {entry}
-            {path}
-            value={getAt(config, path)}
-            options={entry.path === "watches.*.account" ? accounts : undefined}
-            provider={providerFor(watch)}
-            {onedit}
-          />
+      <!-- Source is open; every other group starts folded. -->
+      <div class="body mt-3 flex flex-col gap-3">
+        {#each grouped as { group, entries } (group)}
+          <Section title={group} collapsible open={group === "Source"}>
+            {#each entries as entry (entry.path)}
+              {@const path = concretePath(entry.path, index)}
+              <Field
+                {entry}
+                {path}
+                value={getAt(config, path)}
+                options={entry.path === "watches.*.account" ? accounts : undefined}
+                provider={providerFor(watch)}
+                {onedit}
+              />
+            {/each}
+            {#if group === "Jobs"}
+              <KeyValueField
+                entry={jobsEntry}
+                path={`watches.${index}.jobs`}
+                rows={jobRows(index)}
+                values={["gate", "warning", "blocking", "ignore"]}
+                keyPlaceholder="job name or re:pattern"
+                {onedit}
+              />
+            {/if}
+          </Section>
         {/each}
-        <KeyValueField
-          entry={jobsEntry}
-          path={`watches.${index}.jobs`}
-          rows={jobRows(index)}
-          values={["gate", "warning", "blocking", "ignore"]}
-          keyPlaceholder="job name or re:pattern"
-          {onedit}
-        />
       </div>
     {/if}
   </section>
 {/each}
 
-<Button variant="outline" size="sm" class="add mt-1" onclick={onadd}>Add watch</Button>
+<!-- ⛔ The empty pane holds something to Tab to. With only text in it, Tab
+     went from the header's Add watch past the pane to the footer, and the
+     sentence saying the list is empty was never reached (cubic, #65). -->
+{#if watches.length === 0}
+  <div class="empty flex flex-wrap items-center gap-2 px-1">
+    <p class="text-muted-foreground text-ui-meta m-0">No watches yet. Add one, or run the setup wizard.</p>
+    <Button variant="outline" size="sm" class="add-empty" onclick={onadd}>Add watch</Button>
+  </div>
+{/if}

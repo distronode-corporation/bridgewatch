@@ -13,7 +13,7 @@
 <AccordionPrimitive.Content
 	bind:ref
 	data-slot="accordion-content"
-	class="data-open:animate-accordion-down data-closed:animate-accordion-up px-4 text-sm overflow-hidden"
+	class="data-open:animate-accordion-down data-closed:animate-accordion-up px-4 text-[13px]/[18px] overflow-hidden"
 	{...restProps}
 >
 	<div

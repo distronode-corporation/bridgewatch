@@ -234,3 +234,30 @@ describe("AccountsTab, adding an account where sign-in is built in", () => {
     expect(h.edits[0].at(-1)).toEqual({ op: "set", path: "accounts.work.token.own", value: { boolean: true } });
   });
 });
+
+describe("AccountsTab, the card (L2)", () => {
+  const CONFIG = {
+    accounts: { "gitlab.com": { base_url: "https://gitlab.com", token: { own: true }, timeout_secs: 30 } },
+  };
+
+  it("orders each account's groups Sign-in, Server, Advanced, and folds Advanced", () => {
+    render(CONFIG);
+    const section = host.querySelector("section.account")!;
+    const groups = [...section.querySelectorAll<HTMLElement>(".settings-group")];
+    expect(groups.map((g) => g.dataset.group)).toEqual(["Sign-in", "Server", "Advanced"]);
+    expect(groups[0].querySelector(".token")).toBeTruthy();
+    expect(groups[1].textContent).toContain("Base URL");
+    const advanced = groups[2] as HTMLDetailsElement;
+    expect(advanced.tagName).toBe("DETAILS");
+    expect(advanced.open).toBe(false);
+    expect(advanced.textContent).toContain("Timeout (s)");
+  });
+
+  it("names the account and its provider in the heading", () => {
+    render({ accounts: { gh: { provider: "github", token: { own: true } } } });
+    const heading = host.querySelector("section.account h3")!;
+    expect(heading.textContent).toContain("gh");
+    expect(heading.textContent).toContain("GitHub");
+    expect(host.querySelector("section.account")!.getAttribute("aria-labelledby")).toBe(heading.id);
+  });
+});

@@ -2,7 +2,7 @@
   import type { Edit, Provider } from "../../lib/types";
   import { inapplicableNote, type RegistryEntry } from "../../lib/settings/registry";
   import { linesToList, set, stringList, unset } from "../../lib/settings/values";
-  import { CHECK, FIELD_LABEL, FIELD_ROW, HINT, INPUT, SELECT, TEXTAREA } from "./styles";
+  import { CHECK, FIELD_LABEL, HINT, INPUT, NUMBER_INPUT, ROW, ROW_TEXT, SHORT_SELECT, TEXTAREA, WIDTH_FULL } from "./styles";
 
   interface Props {
     entry: RegistryEntry;
@@ -132,33 +132,36 @@
   const asLines = $derived(Array.isArray(value) ? value.join("\n") : "");
 </script>
 
-<label class={["field", FIELD_ROW, inapplicable && "opacity-60"]} data-inapplicable={inapplicable ? "true" : undefined}>
-  <span class={["label", FIELD_LABEL]}>{entry.label}</span>
+<!-- One card row: the label and its hint on the left, a short control on the
+     right, a long one on its own line below at the full width. -->
+<label class={["field", ROW, inapplicable && "opacity-60"]} data-inapplicable={inapplicable ? "true" : undefined}>
+  <span class={ROW_TEXT}>
+    <span class={["label", FIELD_LABEL]}>{entry.label}</span>
+    {#if inapplicable}
+      <span class={["provider-note", HINT]} data-slot="provider-note">{inapplicable}</span>
+    {/if}
+    {#if entry.hint}
+      <span class={["hint", HINT]}>{entry.hint}</span>
+    {/if}
+  </span>
 
   {#if entry.control === "boolean"}
-    <input type="checkbox" class={["mt-1.5 justify-self-start", CHECK]} checked={value === true} onchange={commitBoolean} />
+    <input type="checkbox" class={["shrink-0", CHECK]} checked={value === true} onchange={commitBoolean} />
   {:else if entry.control === "number"}
-    <input type="number" class={INPUT} value={asText} onchange={commitNumber} />
+    <input type="number" class={NUMBER_INPUT} value={asText} onchange={commitNumber} />
   {:else if entry.control === "select"}
-    <select class={SELECT} value={asText} onchange={commitSelect}>
+    <select class={SHORT_SELECT} value={asText} title={asText} onchange={commitSelect}>
       {#each choices as choice (choice)}
         <option value={choice}>{choice === "" ? "(inherit)" : choice}</option>
       {/each}
     </select>
   {:else if entry.control === "list"}
-    <textarea class={TEXTAREA} rows="3" value={asLines} onchange={commitList}></textarea>
+    <textarea class={[TEXTAREA, WIDTH_FULL]} rows="3" value={asLines} onchange={commitList}></textarea>
   {:else if entry.control === "textarea"}
-    <textarea class={TEXTAREA} rows="8" value={asText} onchange={commitText}></textarea>
+    <textarea class={[TEXTAREA, WIDTH_FULL]} rows="8" value={asText} onchange={commitText}></textarea>
   {:else if entry.control === "project"}
-    <input type="text" class={INPUT} value={asText} onchange={commitProject} />
+    <input type="text" class={[INPUT, WIDTH_FULL]} value={asText} onchange={commitProject} />
   {:else}
-    <input type="text" class={INPUT} value={asText} onchange={commitText} />
-  {/if}
-
-  {#if inapplicable}
-    <span class={["provider-note col-start-2", HINT]} data-slot="provider-note">{inapplicable}</span>
-  {/if}
-  {#if entry.hint}
-    <span class={["hint col-start-2", HINT]}>{entry.hint}</span>
+    <input type="text" class={[INPUT, WIDTH_FULL]} value={asText} onchange={commitText} />
   {/if}
 </label>

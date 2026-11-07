@@ -60,6 +60,8 @@ const shell = {
   moveResult: OK,
   saves: [] as { text: string; base: string; confirm: string | null }[],
   saveQueue: [] as Validation[],
+  /** The `open-settings` listener SettingsApp registered, if any. */
+  openSettings: null as null | ((tab: string) => void),
   /** The `config-changed` listener SettingsApp registered, if any. */
   changed: null as null | (() => void),
   wizardOpened: 0,
@@ -81,7 +83,10 @@ vi.mock("./lib/ipc", () => ({
   readConfigText: () => Promise.resolve(shell.text),
   getStatus: () => Promise.resolve(shell.status),
   takeSettingsTab: () => Promise.resolve(shell.tab),
-  onOpenSettings: () => Promise.resolve(() => {}),
+  onOpenSettings: (handler: (tab: string) => void) => {
+    shell.openSettings = handler;
+    return Promise.resolve(() => {});
+  },
   applyConfigEdits: (edits: Edit[], confirm?: string) => {
     shell.edits.push(edits);
     shell.confirms.push(confirm ?? null);
@@ -121,6 +126,8 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(() => {
+  // The window restores the last pane used: every test starts from none.
+  localStorage.clear();
   shell.status = HEALTHY;
   shell.tab = null;
   shell.edits = [];
@@ -134,6 +141,7 @@ beforeEach(() => {
   shell.saves = [];
   shell.saveQueue = [];
   shell.changed = null;
+  shell.openSettings = null;
   shell.wizardOpened = 0;
   shell.openError = null;
 });
@@ -395,7 +403,7 @@ describe("SettingsApp, launch at login (H13)", () => {
 
   it("writes the key the shell routes to the OS login item", async () => {
     const h = await render();
-    await h.tab("UI");
+    await h.tab("General");
     const box = checkbox();
     expect(box.checked).toBe(false);
     box.click();
@@ -421,7 +429,7 @@ describe("SettingsApp, launch at login (H13)", () => {
       ],
     };
     const h = await render();
-    await h.tab("UI");
+    await h.tab("General");
     checkbox().click();
     await settle();
     await settle();
@@ -432,7 +440,7 @@ describe("SettingsApp, launch at login (H13)", () => {
   it("follows the OS state the shell reports", async () => {
     shell.config = { ...CONFIG, ui: { launch_at_login: true } };
     const h = await render();
-    await h.tab("UI");
+    await h.tab("General");
     expect(checkbox().checked).toBe(true);
   });
 });
@@ -573,4 +581,267 @@ describe("SettingsApp, a first launch with no file yet", () => {
     await render();
     expect(host.querySelector(".first-run")).toBeTruthy();
   });
+});
+
+describe("SettingsApp, the sidebar (L2)", () => {
+  const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
+  const selected = () => tabs().find((t) => t.getAttribute("aria-selected") === "true")?.textContent?.trim();
+  const title = () => host.querySelector("header h2")?.textContent?.trim();
+
+  it("lists five panes in a vertical tab list, Accounts first", async () => {
+    await render();
+    const list = host.querySelector('[role="tablist"]')!;
+    expect(list.getAttribute("aria-orientation")).toBe("vertical");
+    expect(tabs().map((t) => t.textContent?.trim())).toEqual(["Accounts", "Watches", "General", "Verdict", "Advanced"]);
+    expect(selected()).toBe("Accounts");
+    expect(title()).toBe("Accounts");
+    // Only the selected tab is in the Tab order, and the pane names it.
+    expect(tabs().map((t) => t.tabIndex)).toEqual([0, -1, -1, -1, -1]);
+    const panel = host.querySelector('[role="tabpanel"]')!;
+    expect(panel.getAttribute("aria-labelledby")).toBe(tabs()[0].id);
+    expect(tabs()[0].getAttribute("aria-controls")).toBe(panel.id);
+  });
+
+  it("moves with the arrow keys, Home and End, wrapping, and takes the focus along", async () => {
+    await render();
+    const key = async (k: string) => {
+      (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+      await settle();
+    };
+    tabs()[0].focus();
+    await key("ArrowDown");
+    expect(selected()).toBe("Watches");
+    expect(document.activeElement).toBe(tabs()[1]);
+    await key("End");
+    expect(selected()).toBe("Advanced");
+    await key("ArrowDown");
+    expect(selected()).toBe("Accounts");
+    await key("ArrowUp");
+    expect(selected()).toBe("Advanced");
+    await key("Home");
+    expect(selected()).toBe("Accounts");
+    expect(document.activeElement).toBe(tabs()[0]);
+    expect(title()).toBe("Accounts");
+  });
+
+  it("opens on the last pane used", async () => {
+    const h = await render();
+    await h.tab("Verdict");
+    void unmount(component!);
+    component = null;
+    host.remove();
+    await render();
+    expect(selected()).toBe("Verdict");
+    expect(host.textContent).toContain("Inline script");
+  });
+
+  it("opens on Accounts when the window's storage refuses", async () => {
+    const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    try {
+      const h = await render();
+      expect(selected()).toBe("Accounts");
+      // A refused write is not an error either: the pane still changes.
+      await h.tab("Watches");
+      expect(selected()).toBe("Watches");
+    } finally {
+      get.mockRestore();
+      set.mockRestore();
+    }
+  });
+
+  it("shows the shell's 'text' as Advanced with the editor, and does not remember it", async () => {
+    // The shell still names the old tabs: a broken file and the wizard's
+    // "I'll edit config.toml" both ask for "text".
+    shell.tab = "text";
+    await render();
+    expect(selected()).toBe("Advanced");
+    expect(host.querySelector("#edit-as-text textarea.editor")).toBeTruthy();
+    expect(localStorage.getItem("bridgewatch.settings.pane")).toBe(null);
+  });
+
+  it.each([
+    ["icon", "General"],
+    ["ui", "General"],
+    ["log", "Advanced"],
+    ["watches", "Watches"],
+  ])("maps the shell's old tab %s to %s", async (tab, pane) => {
+    shell.tab = tab;
+    await render();
+    expect(selected()).toBe(pane);
+  });
+
+  it("keeps the pane it has for a name it does not know", async () => {
+    shell.tab = "nonsense";
+    await render();
+    expect(selected()).toBe("Accounts");
+  });
+
+  it("puts General's two groups and Advanced's log and editor under their titles", async () => {
+    const h = await render();
+    await h.tab("General");
+    const groups = () => [...host.querySelectorAll(".pane .settings-group h3")].map((e) => e.textContent?.trim());
+    expect(groups()).toEqual(["Icon", "App"]);
+    expect(host.textContent).toContain("Launch at login");
+    expect(host.textContent).toContain("State glyphs");
+    await h.tab("Advanced");
+    expect(groups()).toEqual(["Log", "Edit as text"]);
+    expect(host.querySelector("textarea.editor")).toBeTruthy();
+  });
+
+  it("keeps the file path, Open file and Reload in the footer bar", async () => {
+    await render();
+    const footer = host.querySelector("footer")!;
+    expect(footer.querySelector(".path")?.textContent).toBe("/tmp/bridgewatch.toml");
+    expect([...footer.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual(["Open file", "Reload"]);
+  });
+
+  it("puts Add watch in the Watches pane's header, and only there", async () => {
+    const h = await render();
+    expect(host.querySelector("header")?.textContent).not.toContain("Add watch");
+    await h.tab("Watches");
+    expect(host.querySelector("header")?.textContent).toContain("Add watch");
+  });
+});
+
+describe("SettingsApp, a refused form edit on the Advanced pane (Seer, #65)", () => {
+  it("lists the reason under the pane, where it is seen, and not under the editor", async () => {
+    // ⛔ The editor lists diagnostics under its 340px box. A refused Log edit
+    // put its reason there, out of sight, while the notice said "see the
+    // errors below".
+    shell.result = {
+      ok: false,
+      diagnostics: [{ severity: "error", path: "log.level", message: "unknown variant `loud`", line: null, col: null }],
+    };
+    const h = await render();
+    await h.tab("Advanced");
+    const select = [...host.querySelectorAll<HTMLLabelElement>("label.field")]
+      .find((l) => l.textContent?.includes("Log level"))!
+      .querySelector("select")!;
+    select.value = "trace";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    await settle();
+    const outer = host.querySelector(".main > .diagnostics");
+    expect(outer?.textContent).toContain("unknown variant `loud`");
+    expect(host.querySelector("#edit-as-text")?.textContent).not.toContain("unknown variant `loud`");
+  });
+
+  it("still lists a broken file's diagnostics under the editor there, once", async () => {
+    shell.status = BROKEN;
+    shell.tab = "text";
+    await render();
+    expect(host.querySelector("#edit-as-text")?.textContent).toContain("expected `=` after a key");
+    expect(host.querySelector(".main > .diagnostics")).toBe(null);
+  });
+});
+
+describe("SettingsApp, keyboard and screen-reader wiring (cubic, #65)", () => {
+  const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
+
+  /** Every element Tab stops on, in document order (jsdom has no layout, so this is the DOM's order). */
+  const tabOrder = () =>
+    [...host.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href], [tabindex]")].filter(
+      (el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled,
+    );
+
+  it("never names a panel that does not exist, on any pane", async () => {
+    // ⛔ Only the shown pane is mounted. Every tab carried aria-controls, so
+    // four of them pointed at nothing.
+    const h = await render();
+    for (const label of ["Accounts", "Watches", "General", "Verdict", "Advanced"]) {
+      await h.tab(label);
+      const controls = tabs().filter((t) => t.hasAttribute("aria-controls"));
+      expect(controls.map((t) => t.textContent?.trim()), label).toEqual([label]);
+      for (const t of controls) {
+        const panel = document.getElementById(t.getAttribute("aria-controls")!);
+        expect(panel, label).toBeTruthy();
+        expect(panel!.getAttribute("role")).toBe("tabpanel");
+        expect(panel!.getAttribute("aria-labelledby")).toBe(t.id);
+      }
+    }
+  });
+
+  it("gives an empty Watches pane something to Tab to, after the header and before the footer", async () => {
+    // ⛔ With only text in the empty pane, Tab went from the header's Add watch
+    // straight to the footer: the pane, and what it says, were never reached.
+    shell.config = { ...CONFIG, watches: [] };
+    const h = await render();
+    await h.tab("Watches");
+    const order = tabOrder();
+    const panel = host.querySelector('[role="tabpanel"]')!;
+    const inPanel = order.filter((el) => panel.contains(el));
+    expect(inPanel.map((el) => el.textContent?.trim())).toEqual(["Add watch"]);
+    const at = (el: Element) => order.indexOf(el as HTMLElement);
+    const header = host.querySelector<HTMLElement>("header button.add")!;
+    const footer = host.querySelector<HTMLElement>("footer button")!;
+    expect(at(header)).toBeLessThan(at(inPanel[0]));
+    expect(at(inPanel[0])).toBeLessThan(at(footer));
+    expect(panel.textContent).toContain("No watches yet");
+    inPanel[0].click();
+    await settle();
+    expect(h.ask()?.textContent).toContain("New watch");
+  });
+});
+
+describe("SettingsApp, the scroll position across panes (Seer, #65)", () => {
+  /** jsdom has no layout, so the pane's scrollTop is a plain value the test sets and reads. */
+  function scrollable() {
+    const pane = host.querySelector<HTMLElement>(".pane")!;
+    let top = 0;
+    Object.defineProperty(pane, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => (top = v),
+    });
+    return pane;
+  }
+
+  it("opens a new pane at the top, not where the last one was scrolled to", async () => {
+    // ⛔ One scroll container shows every pane, so General opened part way
+    // down after Accounts had been scrolled.
+    const h = await render();
+    const pane = scrollable();
+    pane.scrollTop = 900;
+    await h.tab("General");
+    expect(pane.scrollTop).toBe(0);
+    // The same pane again is not a change: the place is kept.
+    pane.scrollTop = 120;
+    await h.tab("General");
+    expect(pane.scrollTop).toBe(120);
+    // The keyboard path resets too.
+    tabsOf()[2].focus();
+    tabsOf()[2].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await settle();
+    expect(pane.scrollTop).toBe(0);
+  });
+
+  it("still lands the shell's 'Edit as text' request at the editor", async () => {
+    const into = vi.fn();
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = into;
+    try {
+      await render();
+      const pane = scrollable();
+      pane.scrollTop = 900;
+      shell.openSettings!("text");
+      await settle();
+      await settle();
+      expect(into).toHaveBeenCalledTimes(1);
+      expect((into.mock.contexts[0] as Element).id).toBe("edit-as-text");
+      // Not reset over the editor's scroll.
+      expect(pane.scrollTop).toBe(900);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollIntoView", original);
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  function tabsOf() {
+    return [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
+  }
 });
