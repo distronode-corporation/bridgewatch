@@ -16,6 +16,7 @@
     quit,
     refreshNow,
     resizePopover,
+    resumeNotifications,
   } from "./lib/ipc";
   import { crashReportsAnswer, shouldAskAboutCrashReports } from "./lib/crash-reports";
   import { messageOf } from "./lib/format";
@@ -193,6 +194,26 @@
   });
 
   /**
+   * End a notification pause, then re-read the status so the strip goes at
+   * once. ⛔ One request at a time: two clicks before the re-render would
+   * otherwise send two.
+   */
+  let resuming = false;
+  async function resume() {
+    if (resuming) return;
+    resuming = true;
+    notice = "";
+    try {
+      await resumeNotifications();
+      status = await getStatus();
+    } catch (error) {
+      notice = `Could not resume notifications: ${messageOf(error)}`;
+    } finally {
+      resuming = false;
+    }
+  }
+
+  /**
    * Ask the shell to open something; say why when it could not.
    *
    * ⛔ These were `void` calls, so a rejection (no handler for the URL, a
@@ -228,4 +249,5 @@
   onsetup={() => openOrSay("the setup wizard", openWizard)}
   {askCrashReports}
   oncrashreports={(send) => void answerCrashReports(send)}
+  onresume={() => void resume()}
 />

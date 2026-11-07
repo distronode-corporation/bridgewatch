@@ -7,7 +7,7 @@ use bridgewatch_core::client::github;
 use bridgewatch_core::config::{Config, ProjectRef, Provider};
 use bridgewatch_core::poll::PollNow;
 use bridgewatch_core::verdict::WatchView;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_autostart::ManagerExt;
@@ -49,6 +49,10 @@ const TRAY_LABEL: &str = "bridgewatch";
 /// what the OS did, which on a failed `enable()` is a lie.
 static AUTOSTART_ITEM: OnceLock<CheckMenuItem<tauri::Wry>> = OnceLock::new();
 
+/// The "Pause notifications" submenu and its Resume item, kept for the same
+/// reason as [`AUTOSTART_ITEM`]: their text and state follow the pause.
+static PAUSE_ITEMS: OnceLock<(Submenu<tauri::Wry>, MenuItem<tauri::Wry>)> = OnceLock::new();
+
 const ID_SHOW: &str = "show";
 const ID_PIPELINES: &str = "pipelines";
 const ID_REFRESH: &str = "refresh";
@@ -58,6 +62,18 @@ const ID_OPEN_LOGS: &str = "open-logs";
 const ID_SETTINGS: &str = "settings";
 const ID_WIZARD: &str = "wizard";
 const ID_AUTOSTART: &str = "autostart";
+const ID_PAUSE_HOUR: &str = "pause-hour";
+const ID_PAUSE_UNTIL_RESUMED: &str = "pause-until-resumed";
+const ID_RESUME: &str = "resume-notifications";
+
+/// The submenu's label, paused or not.
+fn pause_label(paused: bool) -> &'static str {
+    if paused {
+        "Notifications paused"
+    } else {
+        "Pause notifications"
+    }
+}
 const ID_QUIT: &str = "quit";
 
 /// Where this process's tray image files go on Linux, or `None` elsewhere.
@@ -133,6 +149,21 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let pipelines =
         MenuItem::with_id(app, ID_PIPELINES, "Open pipelines page", true, None::<&str>)?;
     let refresh = MenuItem::with_id(app, ID_REFRESH, "Refresh now", true, None::<&str>)?;
+    let pause_hour = MenuItem::with_id(app, ID_PAUSE_HOUR, "For 1 hour", true, None::<&str>)?;
+    let pause_until =
+        MenuItem::with_id(app, ID_PAUSE_UNTIL_RESUMED, "Until resumed", true, None::<&str>)?;
+    let resume = MenuItem::with_id(app, ID_RESUME, "Resume", false, None::<&str>)?;
+    let pause = Submenu::with_items(
+        app,
+        pause_label(false),
+        true,
+        &[
+            &pause_hour,
+            &pause_until,
+            &PredefinedMenuItem::separator(app)?,
+            &resume,
+        ],
+    )?;
     let reload = MenuItem::with_id(app, ID_RELOAD, "Reload config", true, None::<&str>)?;
     let open_config =
         MenuItem::with_id(app, ID_OPEN_CONFIG, "Open config file", true, None::<&str>)?;
@@ -155,6 +186,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             &show,
             &pipelines,
             &refresh,
+            &pause,
             &PredefinedMenuItem::separator(app)?,
             &reload,
             &open_config,
@@ -216,7 +248,21 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 
     builder.build(app)?;
     let _ = AUTOSTART_ITEM.set(autostart);
+    let _ = PAUSE_ITEMS.set((pause, resume));
+    sync_pause(app);
     Ok(())
+}
+
+/// Reflect the notification pause in the menu: the submenu's label says
+/// whether notifications are paused, and Resume is offered only then.
+pub fn sync_pause(app: &AppHandle) {
+    let paused = app
+        .state::<Arc<AppState>>()
+        .with_quiet(|q| q.current(chrono::Utc::now()).is_some());
+    if let Some((submenu, resume)) = PAUSE_ITEMS.get() {
+        let _ = submenu.set_text(pause_label(paused));
+        let _ = resume.set_enabled(paused);
+    }
 }
 
 /// Reflect the OS's idea of the login item back into the menu's checkbox.
@@ -250,6 +296,14 @@ fn on_menu(app: &AppHandle, id: &str) {
         }
         ID_REFRESH => {
             app.state::<Arc<AppState>>().request_poll(PollNow::Manual);
+        }
+        ID_PAUSE_HOUR | ID_PAUSE_UNTIL_RESUMED | ID_RESUME => {
+            app.state::<Arc<AppState>>().with_quiet(|q| match id {
+                ID_PAUSE_HOUR => q.pause_for_an_hour(chrono::Utc::now()),
+                ID_PAUSE_UNTIL_RESUMED => q.pause_until_resumed(),
+                _ => q.resume(),
+            });
+            sync_pause(app);
         }
         ID_RELOAD => {
             crate::commands::reload_from_disk(app, true);

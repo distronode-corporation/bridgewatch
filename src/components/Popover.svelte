@@ -7,6 +7,7 @@
   import CrashReportsAsk from "./CrashReportsAsk.svelte";
   import DebugPane from "./DebugPane.svelte";
   import ErrorStrip from "./ErrorStrip.svelte";
+  import NotificationsPaused from "./NotificationsPaused.svelte";
   import { UpdatedAgo, createExpansionStore, type ExpansionStore } from "./jobs";
   import WatchSection from "./WatchSection.svelte";
 
@@ -38,6 +39,8 @@
     askCrashReports?: boolean;
     /** The crash-report answer: `true` is Send. */
     oncrashreports?: (send: boolean) => void;
+    /** End a notification pause (the paused strip's Resume). */
+    onresume?: () => void;
   }
 
   let {
@@ -54,6 +57,7 @@
     onsetup,
     askCrashReports = false,
     oncrashreports,
+    onresume,
   }: Props = $props();
 
   // Configuration order, primary first. The core already returns watches in
@@ -102,6 +106,8 @@
   {/if}
 
   <ErrorStrip errors={snapshot.errors} {status} {onfix} {onsetup} />
+
+  <NotificationsPaused paused={status?.notificationsPaused ?? null} {onresume} />
 
   {#if askCrashReports && oncrashreports}
     <CrashReportsAsk onanswer={oncrashreports} />

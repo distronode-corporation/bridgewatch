@@ -336,6 +336,13 @@ export const REGISTRY: RegistryEntry[] = [
     label: "Notify: gate opened",
   },
   {
+    path: "watches.*.notify.recovered",
+    tab: "watches",
+    control: "boolean",
+    label: "Notify: fixed again",
+    hint: "When a failing watch passes. It replaces that pipeline's other notifications.",
+  },
+  {
     path: "watches.*.notify.title",
     tab: "watches",
     control: "text",

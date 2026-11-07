@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  pausedLine,
   bridgeTone,
   bridgeWord,
   configErrorLines,
@@ -288,5 +289,18 @@ describe("messageOf", () => {
     expect(messageOf({ kind: "store" })).toBe("Something went wrong.");
     expect(messageOf(null)).toBe("Something went wrong.");
     expect(messageOf(undefined)).toBe("Something went wrong.");
+  });
+});
+
+describe("pausedLine", () => {
+  it("names the time a timed pause runs out, in the viewer's clock", () => {
+    const until = "2026-11-07T01:05:00Z";
+    const time = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(Date.parse(until));
+    expect(pausedLine(until, "en-US")).toBe(`Notifications paused until ${time}`);
+  });
+
+  it("says until you resume for an open-ended pause, or an unreadable instant", () => {
+    expect(pausedLine(null)).toBe("Notifications paused until you resume");
+    expect(pausedLine("not a date")).toBe("Notifications paused until you resume");
   });
 });

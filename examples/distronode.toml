@@ -40,7 +40,9 @@ blocking_failure = true
 finished = true
 started = false
 gate_opened = false
-title = "{{watch.id}} {{sha7}}: {{state}}"   # minijinja over the verdict view model
+recovered = true                       # "fixed again" when a failing watch passes
+# minijinja over the verdict view model; `kind` is "recovered" on a "fixed again"
+title = "{{watch.id}} {{sha7}}: {{state}}{% if kind == 'recovered' %}, fixed again{% endif %}"
 # `default`'s second argument is load-bearing: without it an empty failures list
 # is a defined empty string, not undefined, and a green pipeline notifies blank.
 body  = "{{failures | join(', ') | default('all green', true)}}"

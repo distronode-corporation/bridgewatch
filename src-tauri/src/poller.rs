@@ -152,7 +152,11 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             set_icon(&app, tick.snapshot.icon_state);
             state.record_tick(tick.next_interval);
             publish(&app, &state, tick.snapshot);
-            deliver(&app, &tick.notifications);
+            // A pause, or a burst folded into one: see `quiet`.
+            let outgoing = state.with_quiet(|q| q.outgoing(chrono::Utc::now(), tick.notifications));
+            deliver(&app, &outgoing);
+            // A timed pause that ran out says so in the menu by the next tick.
+            crate::tray::sync_pause(&app);
 
             tokio::select! {
                 _ = tokio::time::sleep(tick.next_interval) => {}

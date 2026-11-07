@@ -44,6 +44,13 @@ pub fn refresh_now(state: Shared<'_>) -> bool {
     state.request_poll(PollNow::Manual)
 }
 
+/// End a "Pause notifications" (the popover's Resume button).
+#[tauri::command]
+pub fn resume_notifications(app: AppHandle, state: Shared<'_>) {
+    state.with_quiet(|q| q.resume());
+    crate::tray::sync_pause(&app);
+}
+
 /// Called when the popover becomes visible. Returns whether a poll was started.
 #[tauri::command]
 pub fn popover_opened(state: Shared<'_>) -> bool {
