@@ -35,14 +35,14 @@
 
 <div class="flex flex-col gap-3">
   {#if loading}
-    <p class="text-muted-foreground text-sm" aria-live="polite">Building config.toml…</p>
+    <p class="text-muted-foreground" aria-live="polite">Building config.toml…</p>
   {:else if error}
     <Alert.Root variant="destructive" data-slot="preview-error">
       <Alert.Title>Could not build the config</Alert.Title>
       <Alert.Description>{error}</Alert.Description>
     </Alert.Root>
   {:else if preview}
-    <p class="text-muted-foreground text-sm">
+    <p class="text-muted-foreground">
       {preview.edited_existing
         ? "Your existing config.toml, with these changes. Everything else in it is kept."
         : "This is the config.toml Finish will write. You can edit it later in Settings or any editor."}

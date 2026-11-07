@@ -63,6 +63,35 @@ body line with a bracket.
   - In the wizard, the **Sign in** button sits directly under its option, before the
     alternatives. The section is called **Access**, and what a token must be allowed to do
     is said only while a token option is chosen.
+- **The popover has a layout system.** Spacing sits on a 4px grid assigned by role, and
+  the app uses four type sizes (15, 13, 12 and 11px) instead of seven. Small buttons are
+  13px.
+  - **The header is one line:** the state, a dot and how long ago the last poll was, with
+    **Refresh** and **Pipelines** as icon buttons. **Debug**, **Settings…** and **Quit**
+    moved to a footer.
+  - **Each pipeline row has two lines.** The first is the ref and its age, and the second
+    is the commit, what started it, the deploy job (now labelled "deploy job build") and
+    the time estimate. The verdict is said once: the row's state shows only where the
+    watch header doesn't already say it, and the deploy pill only where it adds
+    something, so "deployed deployed" is gone.
+  - **Bridge and job rows are in columns.** The name truncates, and the status and job
+    count line up on the right. The trigger job, child pipeline and workflow run links
+    are icons, each with the name a screen reader reads. The name keeps at least 12
+    characters: a long status gives way first, and in a narrow popover "passed, with
+    warnings" reads "warnings", with the full words in its tooltip and accessible name.
+    A dead bridge says why in its status ("no child", "never started").
+  - **Job tools are 12px words.** **log**, **retry** and **play** show on hover or
+    keyboard focus, and always on a failed job.
+  - **Watches are separated by space** instead of a tinted band and a rule.
+
+- **The setup wizard's layout.** The access methods are cards, and the chosen method's
+  controls (the sign-in button, the token field) sit inside its card instead of after
+  the whole list. They stay one radio group: the arrow keys move the choice, and Tab
+  goes from the chosen method into its field. The stepper labels only the current
+  step, so no label is cut short ("Acco…", "Proj…") at the narrowest window; every step
+  keeps its name for screen readers. Text is 13px throughout, with 15px step titles and
+  12px hints, and the column is at most 560px wide. Fields that had a fixed width now
+  shrink with the window.
 
 ### Fixed
 
@@ -104,6 +133,18 @@ body line with a bracket.
   a space can be pasted as it is.
 - **Settings: every tab label stays on one line.** At the narrowest window, **Edit as
   text** wrapped onto three lines.
+- **A sign-in is sent only to the server that issued it.** `bridgewatch fixture record`
+  read an account's stored sign-in and sent its access token to whatever `base_url` the
+  file named at the time, even a server the sign-in was never issued by, and sent it as
+  `PRIVATE-TOKEN`, which GitLab refuses for an OAuth token. It now records through the
+  same client the poller uses: the token goes as `Authorization: Bearer`, and a sign-in
+  issued by another server, or for another application, sends nothing and says to sign
+  in again.
+- **`auth status` and Settings no longer call an unusable sign-in "signed in".** A stored
+  sign-in issued by another server than the account's `base_url`, or for another
+  application than its client id, is never used to poll. `auth status` now prints
+  `signed in for <server>, not <server>; run bridgewatch auth login --account <name>` for
+  it and exits 70, and Settings says the sign-in is not used and offers to sign in again.
 
 ## [1.3.0] - 2026-11-06
 
