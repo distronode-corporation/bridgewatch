@@ -64,6 +64,7 @@ function fakeOAuth(availability: (clientId: string | null | undefined) => OAuthA
 function fakeApi(): { [K in keyof Required<WizardApi>]: Mock } {
   return {
     detectCliToken: vi.fn(async () => ({ status: "not_found", service: "gh:github.com" })),
+    ownTokenStatus: vi.fn(async () => ({ kind: "legacy" })),
     testConnection: vi.fn(async () => IDENTITY),
     listProjects: vi.fn(async () => ({ mode: "projects", truncated: false, projects: [] })),
     resolveProject: vi.fn(async () => ({ id: 1, path: "acme/web", project: "acme/web", default_branch: "main", web_url: null })),
