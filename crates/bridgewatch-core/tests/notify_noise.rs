@@ -369,6 +369,107 @@ fn a_cancelled_or_running_push_neither_breaks_nor_fixes() {
     assert!(ledger.is_failing(&w.id));
 }
 
+/// ⛔ A failing pipeline retried in place runs again under its own id. The
+/// green pipeline before the failure is not its fix: nothing is said while
+/// the retry runs, and "fixed again" is said ONCE, for the retry, when it
+/// passes (Seer, #58).
+#[test]
+fn a_retried_failing_pipeline_is_not_fixed_by_the_green_one_before_it() {
+    let w = watch();
+    let mut ledger = baselined(&w);
+    let green = row(70, "deployed", "live", false, &[]);
+    notifications_for(
+        &w,
+        &view(
+            &w,
+            vec![row(71, "failed", "absent", false, &["lint"]), green.clone()],
+        ),
+        &mut ledger,
+    );
+    assert!(ledger.is_failing(&w.id));
+
+    let retrying = vec![row(71, "running", "in_progress", true, &[]), green.clone()];
+    for tick in 1..=2 {
+        let out = notifications_for(&w, &view(&w, retrying.clone()), &mut ledger);
+        assert!(
+            !kinds(&out).contains(&"recovered"),
+            "tick {tick}: {:?}",
+            kinds(&out)
+        );
+        assert!(ledger.is_failing(&w.id), "tick {tick}: still failing");
+    }
+
+    let passed = vec![row(71, "deployed", "live", false, &[]), green];
+    let out = notifications_for(&w, &view(&w, passed.clone()), &mut ledger);
+    assert_eq!(kinds(&out), ["recovered"], "{out:#?}");
+    assert_eq!(out[0].pipeline_id, 71, "the retry fixed it");
+    assert!(notifications_for(&w, &view(&w, passed), &mut ledger).is_empty());
+}
+
+/// ⛔ A new push running over a red watch says nothing about recovery until
+/// it settles, even where the rows show an older green pipeline and no
+/// longer the red one.
+#[test]
+fn a_new_push_running_over_a_red_watch_is_silent_until_it_settles() {
+    let w = watch();
+    let mut ledger = baselined(&w);
+    notifications_for(
+        &w,
+        &view(&w, vec![row(81, "failed", "absent", false, &["lint"])]),
+        &mut ledger,
+    );
+    assert!(ledger.is_failing(&w.id));
+
+    let green = row(80, "deployed", "live", false, &[]);
+    let running = vec![row(82, "running", "in_progress", true, &[]), green.clone()];
+    let out = notifications_for(&w, &view(&w, running), &mut ledger);
+    assert!(!kinds(&out).contains(&"recovered"), "{:?}", kinds(&out));
+    assert!(ledger.is_failing(&w.id));
+
+    let settled = vec![row(82, "deployed", "live", false, &[]), green];
+    let out = notifications_for(&w, &view(&w, settled), &mut ledger);
+    assert_eq!(kinds(&out), ["recovered"], "{out:#?}");
+    assert_eq!(out[0].pipeline_id, 82);
+}
+
+/// ⛔ A failure that settles while a newer push is still running makes the
+/// watch failing, and that push passing says "fixed again" (Seer, #61).
+#[test]
+fn a_failure_that_settles_under_a_running_push_is_still_a_failure() {
+    let w = watch();
+    let mut ledger = baselined(&w);
+    notifications_for(
+        &w,
+        &view(&w, vec![row(90, "deployed", "live", false, &[])]),
+        &mut ledger,
+    );
+    assert!(!ledger.is_failing(&w.id));
+
+    let both_running = vec![
+        row(92, "running", "in_progress", true, &[]),
+        row(91, "running", "in_progress", true, &[]),
+        row(90, "deployed", "live", false, &[]),
+    ];
+    notifications_for(&w, &view(&w, both_running), &mut ledger);
+    assert!(!ledger.is_failing(&w.id));
+
+    let red_under_running = vec![
+        row(92, "running", "in_progress", true, &[]),
+        row(91, "failed", "absent", false, &["lint"]),
+    ];
+    notifications_for(&w, &view(&w, red_under_running), &mut ledger);
+    assert!(ledger.is_failing(&w.id), "91 failed, whatever 92 is doing");
+
+    let fixed = vec![
+        row(92, "deployed", "live", false, &[]),
+        row(91, "failed", "absent", false, &["lint"]),
+    ];
+    let out = notifications_for(&w, &view(&w, fixed.clone()), &mut ledger);
+    assert_eq!(kinds(&out), ["recovered"], "{out:#?}");
+    assert_eq!(out[0].pipeline_id, 92);
+    assert!(notifications_for(&w, &view(&w, fixed), &mut ledger).is_empty());
+}
+
 /// A green watch that stays green never says "fixed again".
 #[test]
 fn a_green_watch_is_never_fixed_again() {

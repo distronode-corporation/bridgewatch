@@ -344,15 +344,19 @@ fn is_passing_state(state: IconState) -> bool {
     matches!(state, IconState::Deployed | IconState::SucceededNoDeploy)
 }
 
-/// The newest pipeline (by id) that has settled to a pass or a fail.
+/// The newest pipeline (by id) that has settled to a pass or a fail, and
+/// whether a pipeline newer than it is still running.
 ///
 /// Running, parked, cancelled and unknown rows say nothing about whether the
 /// watch is red: a cancelled push neither breaks nor fixes it.
-fn newest_settled(view: &WatchView) -> Option<&PipelineView> {
-    view.rows
+fn newest_settled(view: &WatchView) -> Option<(&PipelineView, bool)> {
+    let settled = view
+        .rows
         .iter()
         .filter(|r| !r.live && (is_failing_state(r.state) || is_passing_state(r.state)))
-        .max_by_key(|r| r.id)
+        .max_by_key(|r| r.id)?;
+    let newer_running = view.rows.iter().any(|r| r.live && r.id > settled.id);
+    Some((settled, newer_running))
 }
 
 /// Build the notifications one watch's rows imply, recording each in the ledger.
@@ -392,11 +396,24 @@ pub fn notifications_for(
     // where the one before it had failed. Tracked whether or not it is asked
     // for, so switching `recovered` on later starts from the truth; announced
     // only after the baseline, so a launch never says it.
+    //
+    // ⛔ A pipeline still RUNNING above the newest settled one may make the
+    // watch failing, never clear it. A failing pipeline retried in place runs
+    // again under its own id, and the green one before it used to read as the
+    // fix: "fixed again" for a pipeline that fixed nothing, and the retry's real
+    // fix never said (Seer, #58). But a failure that settles while a newer push
+    // runs is still a failure, and that push passing is still a fix (Seer, #61).
     let recovered_row = match newest_settled(view) {
-        Some(row) => {
+        Some((row, false)) => {
             let was_failing = ledger.set_failing(&watch.id, is_failing_state(row.state));
             (was_failing && is_passing_state(row.state) && watch.notify.recovered && !baselining)
                 .then_some(row.id)
+        }
+        Some((row, true)) => {
+            if is_failing_state(row.state) {
+                ledger.set_failing(&watch.id, true);
+            }
+            None
         }
         None => None,
     };
