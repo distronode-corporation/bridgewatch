@@ -1051,14 +1051,24 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
         auth::AuthAction::Logout { account } => {
             auth::logout(&config, &account, &store, &mut std::io::stdout())
         }
-        auth::AuthAction::Status { account } => auth::status(
-            &config,
-            account.as_deref(),
-            &store,
-            &bridgewatch_core::oauth::BuiltinClients::shipped(),
-            now,
-            &mut std::io::stdout(),
-        ),
+        auth::AuthAction::Status { account } => {
+            // One request per bound own token, for its expiry (F3).
+            let transport_for = |a: &config::Account| {
+                ReqwestTransport::new(std::time::Duration::from_secs(a.timeout_secs))
+                    .map(|t| Arc::new(t) as Arc<dyn bridgewatch_core::client::Transport>)
+            };
+            let expiries =
+                auth::own_expiries(&config, account.as_deref(), &store, &transport_for).await;
+            auth::status(
+                &config,
+                account.as_deref(),
+                &store,
+                &bridgewatch_core::oauth::BuiltinClients::shipped(),
+                &expiries,
+                now,
+                &mut std::io::stdout(),
+            )
+        }
     }
 }
 

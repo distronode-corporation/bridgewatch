@@ -75,6 +75,7 @@ fn carries_a_credential(request: &HttpRequest) -> bool {
 
 fn redirect(status: u16, location: Option<&str>) -> HttpResponse {
     HttpResponse {
+        token_expiration: None,
         location: location.map(str::to_string),
         ..HttpResponse::plain(status, "")
     }

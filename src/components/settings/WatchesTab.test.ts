@@ -238,3 +238,30 @@ describe("WatchesTab, a long account name (cubic, #65)", () => {
     expect(select.title).toBe(long);
   });
 });
+
+describe("WatchesTab, only my pipelines (F3)", () => {
+  const source = () =>
+    [...host.querySelectorAll<HTMLDetailsElement>("section.watch .body details.settings-group")].find(
+      (g) => g.dataset.group === "Source",
+    )!;
+  const mine = () =>
+    [...source().querySelectorAll<HTMLLabelElement>("label.field")]
+      .find((l) => l.textContent?.includes("Only my pipelines"))!
+      .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+
+  it("is a checkbox in the open Source group, off by default, and writes watches.N.mine", async () => {
+    const h = render();
+    expect(source().open).toBe(true);
+    expect(mine().checked).toBe(false);
+    mine().click();
+    await Promise.resolve();
+    flushSync();
+    expect(h.edits).toEqual([[{ op: "set", path: "watches.0.mine", value: { boolean: true } }]]);
+  });
+
+  it("shows a watch that has it on as ticked", () => {
+    render([{ ...WATCHES[0], mine: true } as (typeof WATCHES)[0], ...WATCHES.slice(1)]);
+    expect(mine().checked).toBe(true);
+  });
+});
+

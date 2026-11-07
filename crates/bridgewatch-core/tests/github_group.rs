@@ -134,6 +134,7 @@ impl Transport for Routed {
             etag: None,
             link: reply.link,
             oauth_scopes: None,
+            token_expiration: None,
             location: None,
             truncated: false,
         })
@@ -2095,6 +2096,7 @@ async fn a_gitlab_client_ignores_expect_entirely() {
                 etag: None,
                 link: None,
                 oauth_scopes: None,
+                token_expiration: None,
                 location: None,
                 truncated: false,
             })

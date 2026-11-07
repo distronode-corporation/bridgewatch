@@ -38,6 +38,9 @@ pub enum NotifyKind {
     /// produced by [`notifications_for`], and never recorded in the ledger:
     /// each folded notification was recorded under its own key.
     Batch,
+    /// An account's token or sign-in is about to stop working, or has: see
+    /// [`token_notifications`]. Never produced by [`notifications_for`].
+    Token,
 }
 
 impl NotifyKind {
@@ -51,6 +54,7 @@ impl NotifyKind {
             NotifyKind::GateOpened => "gate_opened",
             NotifyKind::Recovered => "recovered",
             NotifyKind::Batch => "batch",
+            NotifyKind::Token => "token",
         }
     }
 }
@@ -95,6 +99,10 @@ pub struct NotifyLedger {
     /// existed reads as "nothing failing", which can cost one "fixed again".
     #[serde(default)]
     pub failing: BTreeSet<String>,
+    /// Token-health warnings already delivered (F3), apart from `seen` so the
+    /// pipeline-keyed trimming never drops one: `<account>|<state>|...`.
+    #[serde(default)]
+    pub tokens: BTreeSet<String>,
     /// The pipeline ids each primary watch last had on screen, which trimming
     /// never touches. Rebuilt by every tick, so never written to disk.
     #[serde(skip)]
@@ -747,4 +755,101 @@ pub fn batch(notifications: Vec<Notification>) -> Vec<Notification> {
         url,
         key: String::new(),
     }]
+}
+
+/// The token-health notifications of one tick: each warning ONCE.
+///
+/// `health` is every account with something to say at `now` (Unix seconds,
+/// the clock [`crate::health::assess`] read); `healthy` the accounts
+/// whose credential was accepted with nothing to say, whose "revoked" and
+/// "invalid" records are forgotten so a later refusal is said again.
+///
+/// The keys (in [`NotifyLedger::tokens`]):
+///
+/// - `expiring`: `<account>|expiring|<hours>|<expires_at>`, at 72 and 24 h. A
+///   credential first seen inside 24 h records the 72 h key unsaid, so it is
+///   one warning, not two at once.
+/// - `expired`: `<account>|expired|<expires_at or ->`, and both warnings'
+///   keys unsaid.
+/// - `revoked` and `invalid`: `<account>|revoked`, `<account>|invalid`.
+///
+/// A new expiry (a token replaced) is a new key, and warns again.
+pub fn token_notifications(
+    health: &[crate::health::TokenHealth],
+    healthy: &[String],
+    ledger: &mut NotifyLedger,
+    now: i64,
+) -> Vec<Notification> {
+    use crate::health::{ExpiryOf, HealthState, WARN_HOURS};
+    for account in healthy {
+        for state in [HealthState::Revoked, HealthState::Invalid] {
+            if ledger
+                .tokens
+                .remove(&format!("{account}|{}", state.as_str()))
+            {
+                ledger.dirty = true;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for h in health {
+        let at = h
+            .expires_at
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "-".into());
+        let warning = |hours: u32| format!("{}|expiring|{hours}|{at}", h.account);
+        let (key, unsaid): (String, Vec<String>) = match h.state {
+            HealthState::Expiring => {
+                let hours = h.warn_hours.unwrap_or(WARN_HOURS[0]);
+                let wider = WARN_HOURS
+                    .iter()
+                    .filter(|w| **w > hours)
+                    .map(|w| warning(*w))
+                    .collect();
+                (warning(hours), wider)
+            }
+            HealthState::Expired => (
+                format!("{}|expired|{at}", h.account),
+                WARN_HOURS.iter().map(|w| warning(*w)).collect(),
+            ),
+            HealthState::Revoked | HealthState::Invalid => {
+                (format!("{}|{}", h.account, h.state.as_str()), Vec::new())
+            }
+        };
+        for k in unsaid {
+            if ledger.tokens.insert(k) {
+                ledger.dirty = true;
+            }
+        }
+        if !ledger.tokens.insert(key.clone()) {
+            continue;
+        }
+        ledger.dirty = true;
+        let what = match h.of {
+            ExpiryOf::Token => "token",
+            ExpiryOf::SignIn => "sign-in",
+        };
+        let title = match (h.state, h.expires_at) {
+            (HealthState::Expiring, Some(at)) => format!(
+                "{}: the {what} expires in {}",
+                h.account,
+                crate::health::span(at.saturating_sub(now).max(0).unsigned_abs())
+            ),
+            (HealthState::Expiring | HealthState::Expired, _) => {
+                format!("{}: the {what} has expired", h.account)
+            }
+            (HealthState::Revoked, _) => format!("{}: the {what} was revoked", h.account),
+            (HealthState::Invalid, _) => format!("{}: the {what} is not accepted", h.account),
+        };
+        out.push(Notification {
+            watch: String::new(),
+            kind: NotifyKind::Token,
+            pipeline_id: 0,
+            title,
+            body: h.message.clone(),
+            url: None,
+            key,
+        });
+    }
+    out
 }

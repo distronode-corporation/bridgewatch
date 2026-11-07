@@ -373,9 +373,8 @@ impl GitHubClient {
     ///
     /// ⚠️ Nothing here is invented. There is no token id (the user's own id
     /// stands in, so the field can be filled at all), no token name, no
-    /// `active` flag, and no expiry: GitHub does send an expiry header on some
-    /// credentials, but reporting it would need a second header field and the
-    /// wizard does not draw it yet.
+    /// `active` flag, and no expiry here: the expiry header GitHub sends is
+    /// read on every response by token health instead ([`crate::health`]).
     pub async fn token_self(&self) -> Result<TokenInfo, ClientError> {
         let (user, meta) = self.get_json::<wire::User>("/user").await?;
         let Some(raw) = meta.oauth_scopes else {
@@ -737,6 +736,9 @@ fn list_path(repo: &str, query: &ListQuery) -> String {
     if let Some(sha) = &query.sha {
         parts.push(format!("head_sha={}", urlencoding::encode(sha)));
     }
+    if let Some(user) = &query.user {
+        parts.push(format!("actor={}", urlencoding::encode(user)));
+    }
     // Drops the `pull_requests` array, which is never read and was 45
     // entries on one sampled run.
     parts.push("exclude_pull_requests=true".to_string());
@@ -929,6 +931,20 @@ impl CiClient for GitHubClient {
 
     async fn token_self(&self) -> Result<TokenInfo, ClientError> {
         GitHubClient::token_self(self).await
+    }
+
+    async fn owner(&self) -> Result<String, ClientError> {
+        self.conn
+            .owner(|| async { self.current_user().await.map(|u| u.username) })
+            .await
+    }
+
+    fn credential(&self) -> crate::health::Observed {
+        self.conn.probe().get()
+    }
+
+    async fn read_token_expiry(&self) -> Result<(), ClientError> {
+        self.current_user().await.map(|_| ())
     }
 
     async fn list_projects(

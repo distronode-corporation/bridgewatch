@@ -74,6 +74,10 @@ pub struct ListQuery {
     /// when they are not among the rows a watch shows. Both providers match
     /// the full sha only; [`super::CiClient::commit_sha`] expands a short one.
     pub sha: Option<String>,
+    /// Only what this user started, by login: GitLab's `username`, GitHub's
+    /// `actor`. Set by the poller for a watch with `mine = true`, from
+    /// [`super::CiClient::owner`].
+    pub user: Option<String>,
 }
 
 impl ListQuery {
@@ -88,6 +92,7 @@ impl ListQuery {
             commit_group: None,
             expect: Vec::new(),
             sha: None,
+            user: None,
         }
     }
 
@@ -103,6 +108,7 @@ impl ListQuery {
             commit_group: None,
             expect: Vec::new(),
             sha: None,
+            user: None,
         }
     }
 
@@ -136,10 +142,23 @@ impl ListQuery {
         self
     }
 
+    /// The same query, narrowed to what `login` started. A `None` or blank
+    /// login is no restriction.
+    pub fn for_user(mut self, login: Option<&str>) -> Self {
+        self.user = login
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string);
+        self
+    }
+
     fn to_query(&self) -> String {
         let mut parts = Vec::new();
         if let Some(r) = &self.ref_name {
             parts.push(format!("ref={}", urlencoding::encode(r)));
+        }
+        if let Some(user) = &self.user {
+            parts.push(format!("username={}", urlencoding::encode(user)));
         }
         if let Some(sha) = &self.sha {
             parts.push(format!("sha={}", urlencoding::encode(sha)));
@@ -278,10 +297,33 @@ impl GitLabClient {
     /// `GET /personal_access_tokens/self`: the token's own name, scopes and
     /// expiry. Older instances and non-PAT credentials (OAuth, job tokens)
     /// answer 401/403/404, which the wizard treats as "kind unknown".
+    ///
+    /// Its `expires_at` is also recorded as the credential's expiry
+    /// ([`crate::health`]): a token without one does not expire.
     pub async fn token_self(&self) -> Result<TokenInfo, ClientError> {
-        self.get_json::<wire::TokenInfo>("/personal_access_tokens/self")
+        let info: TokenInfo = self
+            .get_json::<wire::TokenInfo>("/personal_access_tokens/self")
+            .await?
+            .into();
+        match info
+            .expires_at
+            .as_deref()
+            .and_then(crate::health::parse_gitlab_date)
+        {
+            Some(at) => self.conn.probe().expires(crate::health::Expiry {
+                at,
+                of: crate::health::ExpiryOf::Token,
+            }),
+            None => self.conn.probe().never_expires(),
+        }
+        Ok(info)
+    }
+
+    /// [`super::CiClient::owner`]: asked once, then remembered.
+    pub async fn owner(&self) -> Result<String, ClientError> {
+        self.conn
+            .owner(|| async { self.current_user().await.map(|u| u.username) })
             .await
-            .map(Into::into)
     }
 
     /// `GET /projects?membership=true`, most recently active first, following
@@ -535,6 +577,18 @@ impl CiClient for GitLabClient {
 
     async fn token_self(&self) -> Result<TokenInfo, ClientError> {
         GitLabClient::token_self(self).await
+    }
+
+    async fn owner(&self) -> Result<String, ClientError> {
+        GitLabClient::owner(self).await
+    }
+
+    fn credential(&self) -> crate::health::Observed {
+        self.conn.probe().get()
+    }
+
+    async fn read_token_expiry(&self) -> Result<(), ClientError> {
+        GitLabClient::token_self(self).await.map(|_| ())
     }
 
     async fn list_projects(

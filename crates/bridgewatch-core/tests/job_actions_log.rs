@@ -89,6 +89,7 @@ fn a_log_tails_request_lines_carry_neither_the_token_nor_the_signature() {
     t.reply_with(
         "/actions/jobs/7/logs",
         HttpResponse {
+            token_expiration: None,
             location: Some("https://results.blob.example/log.txt?sig=SIGNATURE-SECRET".into()),
             ..HttpResponse::plain(302, "")
         },

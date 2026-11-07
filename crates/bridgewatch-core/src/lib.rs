@@ -23,6 +23,7 @@
 //! - [`poll`]: what to fetch, how often, and what to keep.
 //! - [`notify`]: what is worth interrupting somebody over.
 //! - [`eta`]: how long a deploy usually takes, learned from the watch's history.
+//! - [`health`]: whether an account's token is about to stop working, or has.
 //! - [`wizard`]: the first-run setup wizard's steps, with no UI in them.
 //!
 //! # Getting a snapshot
@@ -48,6 +49,7 @@ pub mod actions;
 pub mod client;
 pub mod config;
 pub mod eta;
+pub mod health;
 pub mod model;
 pub mod notify;
 pub mod oauth;

@@ -163,6 +163,7 @@ impl Transport for Scripted {
             etag: reply.etag,
             link: reply.link,
             oauth_scopes: reply.oauth_scopes,
+            token_expiration: None,
             location: None,
             truncated: false,
         })
