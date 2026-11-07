@@ -363,7 +363,20 @@
   const shownIdentity = $derived(testKey === connKey ? identity : null);
   const shownTestError = $derived(testKey === connKey ? testError : null);
 
+  /**
+   * ⛔ What a changed instance drops, applied again before anything is judged.
+   * `instanceChanged` runs on the URL field's blur, and Enter in that field
+   * submits the form without one: Next then accepted "leave empty to keep the
+   * stored token" for a host that token is not bound to. Every path that
+   * validates the account step (Next, Enter, Test connection) calls this first.
+   */
+  function settleInstance() {
+    followOwnToken(draft);
+    forgetSignInIfMoved();
+  }
+
   async function testConnection() {
+    settleInstance();
     const stepErrors = validateStep("account", draft);
     errors = stepErrors;
     if (Object.keys(stepErrors).length > 0) return focusInvalid();
@@ -640,6 +653,7 @@
     advancing = true;
     try {
       const id = step.id;
+      if (id === "account") settleInstance();
       if (id === "project" && draft.projectInput.trim() && !inputMatchesProject()) {
         if (!(await resolve())) return void focusInvalid();
       }

@@ -668,6 +668,43 @@ describe("a stored own token after an instance change", () => {
   });
 });
 
+describe("a stored own token, the instance changed without a blur", () => {
+  /**
+   * ⛔ Seer round 4: the instance change ran on the URL field's blur only, and
+   * Enter in that field submits the form without one, so Next kept "leave
+   * empty to keep the stored token" for a host that token is not bound to.
+   */
+  it("Enter in the URL field still requires a paste, and so does Test connection", async () => {
+    const api = fakeApi();
+    await start(api, {
+      initial: {
+        account: "work",
+        base_url: "https://gitlab.example.com",
+        token: { own: true },
+        project: 42,
+        ref_name: "main",
+        watch_id: "web-main",
+      },
+    });
+    const url = q<HTMLInputElement>("#wizard-base-url")!;
+    url.focus();
+    url.value = "https://gitlab.other.example";
+    url.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+
+    await click('[data-action="test-connection"]');
+    expect(api.testConnection).not.toHaveBeenCalled();
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+
+    // Enter in a text field is the form's implicit submission.
+    url.form!.requestSubmit();
+    await settle();
+    expect(stepId()).toBe("account");
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+    expect(api.save).not.toHaveBeenCalled();
+  });
+});
+
 describe("adding a watch to a config that already has a primary", () => {
   it("says the new watch is secondary and why, and asks again with primary when the box is ticked", async () => {
     const api = fakeApi({
