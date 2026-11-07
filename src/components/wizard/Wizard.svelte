@@ -55,6 +55,7 @@
     tokenSourceOf,
     validateStep,
     type Draft,
+    type SignInStart,
     type StepErrors,
   } from "./model";
 
@@ -110,8 +111,32 @@
   // --- step 1: sign in with GitHub / GitLab ---------------------------------
   let availability = $state<OAuthAvailability | null>(null);
   let availabilitySeq = 0;
-  /** The instance the sign-in on this page was made against. */
-  let signedInBase: string | null = null;
+  /**
+   * The instance and the client id ("" = the built-in application) that the
+   * sign-in on this page, or the one a re-run found stored, was made with.
+   */
+  let signedInBase: string | null = untrack(() => (draft.oauthStored ? baseUrlOf(draft) : null));
+  let signedInClientId: string | null = untrack(() => (draft.oauthStored ? draft.oauthClientId.trim() : null));
+
+  /**
+   * ⛔ A sign-in, fresh or stored, belongs to the instance and the application
+   * it was made with. Once the form names another, it is forgotten and Finish
+   * asks for a new one: the file would otherwise name an instance or an
+   * application its stored tokens never came from, and the first poll would
+   * say "sign in again". Returns whether it forgot one.
+   *
+   * A renamed ACCOUNT is not forgotten: the sign-in stays stored under
+   * `draft.oauthAccount`, and Finish moves it to the saved name.
+   */
+  function forgetSignInIfMoved(): boolean {
+    if (signedInBase === null) return false;
+    if (signedInBase === baseUrlOf(draft) && signedInClientId === draft.oauthClientId.trim()) return false;
+    draft.oauthLogin = null;
+    draft.oauthStored = false;
+    signedInBase = null;
+    signedInClientId = null;
+    return true;
+  }
 
   async function refreshAvailability() {
     if (!oauth) return;
@@ -121,19 +146,77 @@
       const answer = await oauth.availability(provider, baseUrlOf(draft), draft.oauthClientId.trim() || null);
       if (seq !== availabilitySeq) return;
       availability = answer;
-      // Recommended means chosen, on a fresh start where nothing else has been.
-      if (answer.builtin && freshStart && draft.tokenMode === "paste" && !draft.secret) draft.tokenMode = "oauth";
+      preselect();
     } catch {
-      if (seq === availabilitySeq) availability = null;
+      if (seq === availabilitySeq) {
+        availability = null;
+        preselect();
+      }
     }
   }
 
-  function signedIn(signed: SignedIn) {
+  // --- step 1: which token source a fresh start preselects -----------------
+  /** The user picked a token source themselves: nothing here changes it after that. */
+  let modeChosen = false;
+
+  /**
+   * Whether the token source is still the wizard's to choose: a fresh start,
+   * one of the three it preselects, and nothing the user did since (a pick, a
+   * pasted token, a typed client id, a finished sign-in).
+   */
+  function mayPreselect(): boolean {
+    if (!freshStart || modeChosen) return false;
+    if (draft.secret || draft.oauthClientId.trim() || draft.oauthLogin) return false;
+    return draft.tokenMode === "paste" || draft.tokenMode === "oauth" || draft.tokenMode === "cli";
+  }
+
+  /**
+   * Preselect the token source from what is known so far: "Sign in" where this
+   * host has a built-in application, else the provider CLI's token when
+   * detection found one, else a pasted token.
+   *
+   * ⛔ Run after EITHER answer arrives, availability or CLI detection, and
+   * decided from both, never from the one that just landed. Each used to
+   * switch the mode on its own when it found the form still on "paste", so a
+   * found gh token beat "Sign in" whenever detection answered first, and the
+   * same fresh start ended on a different radio from one launch to the next.
+   */
+  function preselect() {
+    if (!mayPreselect()) return;
+    if (availability?.builtin) {
+      draft.tokenMode = "oauth";
+    } else if (cli?.status === "found" && cliBase === baseUrlOf(draft)) {
+      draft.cliSource = cli.source;
+      draft.tokenMode = "cli";
+    } else {
+      draft.tokenMode = "paste";
+    }
+  }
+
+  function modePicked() {
+    modeChosen = true;
+  }
+
+  function signedIn(signed: SignedIn, started: SignInStart) {
     draft.oauthLogin = signed.login ?? "(unknown)";
-    draft.oauthAccount = draft.account.trim();
+    // ⛔ The name it was stored under, which is not always the one the form
+    // shows by now (a rename while the code was pending): Finish moves it from
+    // here to the saved name.
+    draft.oauthAccount = started.account;
     draft.oauthStored = false;
-    signedInBase = baseUrlOf(draft);
+    modeChosen = true;
+    signedInBase = started.base;
+    signedInClientId = started.clientId;
     delete errors.token;
+    // It finished for what it STARTED with; if the form moved on while the
+    // code was pending, it does not count.
+    if (forgetSignInIfMoved())
+      errors.token = "The instance or client id changed while you were signing in. Sign in again.";
+  }
+
+  function clientIdChanged() {
+    forgetSignInIfMoved();
+    void refreshAvailability();
   }
 
   // --- confirmation dialog -------------------------------------------------
@@ -185,6 +268,8 @@
 
   // --- step 1: CLI token detection (glab or gh) and test connection -------
   let cli = $state<CliTokenDetection | null>(null);
+  /** The instance `cli` answers for: a token is only ever used on the instance it was found for. */
+  let cliBase: string | null = null;
   let detectedSource: Draft["cliSource"] = null;
   let detectSeq = 0;
   // `draft` is a deep $state proxy, so compare sources by value, never by identity.
@@ -203,34 +288,53 @@
     }
     if (seq !== detectSeq) return;
     cli = result;
+    cliBase = base;
     if (result.status === "found") {
-      const adopt = draft.tokenMode === "cli" || (freshStart && draft.tokenMode === "paste" && !draft.secret);
+      const adopt = draft.tokenMode === "cli" || mayPreselect();
       if (adopt || sameSource(draft.cliSource, detectedSource)) draft.cliSource = result.source;
       detectedSource = result.source;
-      if (adopt) draft.tokenMode = "cli";
-    } else if (draft.cliSource !== null && sameSource(draft.cliSource, detectedSource)) {
-      draft.cliSource = null;
+    } else {
+      if (draft.cliSource !== null && sameSource(draft.cliSource, detectedSource)) draft.cliSource = null;
       detectedSource = null;
-      if (draft.tokenMode === "cli") draft.tokenMode = "paste";
+      // ⛔ Also when an instance change cleared the source before this answer
+      // came, and whatever `modeChosen` says: the CLI option is hidden with
+      // no source, and a hidden radio must never stay selected.
+      if (draft.tokenMode === "cli" && draft.cliSource === null) leaveCli();
     }
+    preselect();
+  }
+
+  /** The CLI's token is gone: sign in where this instance offers it, else paste one. */
+  function leaveCli() {
+    draft.tokenMode = oauth && availability?.available ? "oauth" : "paste";
   }
 
   function instanceChanged() {
     if (!draft.accountEdited) draft.account = suggestAccountName(baseUrlOf(draft), draft.provider);
-    // A sign-in belongs to the instance it was made on.
-    if (signedInBase !== null && signedInBase !== baseUrlOf(draft)) {
-      draft.oauthLogin = null;
-      signedInBase = null;
+    // ⛔ The last instance's CLI token answers nothing about this one. Kept until
+    // the new detection answered, it was preselected (and sent by Test
+    // connection) against the new host whenever availability answered first.
+    if (cliBase !== null && cliBase !== baseUrlOf(draft)) {
+      if (sameSource(draft.cliSource, detectedSource)) draft.cliSource = null;
+      cli = null;
+      cliBase = null;
+      detectedSource = null;
     }
+    // A sign-in, fresh or stored, belongs to the instance it was made on.
+    forgetSignInIfMoved();
     void detect();
     void refreshAvailability();
   }
 
   function providerChanged(provider: Provider) {
     if (draft.provider === provider) return;
+    const before = draft.tokenMode;
     switchProvider(draft, provider);
+    // A pick the switch undid (a CLI token, a sign-in) is no pick any more.
+    if (draft.tokenMode !== before) modeChosen = false;
     // The last provider's detection answers nothing about this one.
     cli = null;
+    cliBase = null;
     detectedSource = null;
     listing = null;
     listingKey = null;
@@ -238,6 +342,7 @@
     suggestionsKey = null;
     delete errors.project;
     signedInBase = null;
+    signedInClientId = null;
     availability = null;
     void detect();
     void refreshAvailability();
@@ -581,7 +686,8 @@
           {oauth}
           {availability}
           onSignedIn={signedIn}
-          onClientIdChange={() => void refreshAvailability()}
+          onClientIdChange={clientIdChanged}
+          onModePick={modePicked}
         />
       {:else if step.id === "project"}
         <ProjectStep
