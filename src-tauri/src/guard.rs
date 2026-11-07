@@ -6,7 +6,9 @@
 //!
 //! - a `command` token source, which runs a program on the next reload;
 //! - a new host for an account that already has a credential, which sends that
-//!   credential there on the next tick;
+//!   credential there on the next tick (a keyring entry, an environment
+//!   variable, a command; an own token and a sign-in are bound to their server
+//!   and stay behind, which the question says instead);
 //! - an account (new or changed) whose token source is a credential that lives
 //!   outside this file (a keyring entry, an environment variable) on a host no
 //!   account used before, which is the same exfiltration by addition;
@@ -89,9 +91,26 @@ pub fn sensitive_changes(old: Option<&Config>, new: &Config) -> Vec<String> {
         if let Some(before) = before
             && origin(&before.base_url) != now
         {
+            // ⛔ Only true where the credential does not know its server. An
+            // own token is bound to the origin it was saved for and a sign-in
+            // to the one that issued it, so neither travels. Saying it does
+            // warned of the wrong thing and hid the real consequence: the
+            // account sends nothing until it gets a token for the new host.
+            let consequence = match &account.token {
+                TokenSource::Own(_) => {
+                    "Its stored token stays with the old host and is not sent to the new one: \
+                     save a token for the new host."
+                }
+                TokenSource::Oauth(_) => {
+                    "Its sign-in stays with the old host and is not sent to the new one: sign \
+                     in again for the new host."
+                }
+                TokenSource::Keyring { .. } | TokenSource::Env(_) | TokenSource::Command(_) => {
+                    "Its token will be sent to the new host."
+                }
+            };
             out.push(format!(
-                "Account \"{name}\" moves from {} to {}. Its token will be sent to the new \
-                 host.",
+                "Account \"{name}\" moves from {} to {}. {consequence}",
                 before.base_url.trim_end_matches('/'),
                 account.base_url.trim_end_matches('/')
             ));
@@ -237,6 +256,39 @@ mod tests {
         let changes = sensitive_changes(Some(&parse(OWN)), &parse(&moved));
         assert_eq!(changes.len(), 1, "{changes:?}");
         assert!(changes[0].contains("gitlab.example.net"));
+    }
+
+    /// ⛔ An own token and a sign-in are bound to their server, so a move
+    /// leaves them behind; only a credential that does not know its server
+    /// (keyring, env, command) is said to travel.
+    #[test]
+    fn a_host_move_says_where_the_credential_goes_by_its_source() {
+        let moved = |raw: &str| {
+            let to = raw.replace("https://gitlab.com", "https://gitlab.example.net");
+            sensitive_changes(Some(&parse(raw)), &parse(&to)).join("\n")
+        };
+        let own = moved(OWN);
+        assert!(
+            own.contains(
+                "Its stored token stays with the old host and is not sent to the new one: save \
+                 a token for the new host."
+            ),
+            "{own}"
+        );
+        assert!(!own.contains("will be sent"), "{own}");
+
+        let oauth = moved(&OWN.replace("{ own = true }", "{ oauth = { client_id = \"x\" } }"));
+        assert!(
+            oauth.contains("Its sign-in stays with the old host"),
+            "{oauth}"
+        );
+        assert!(!oauth.contains("will be sent"), "{oauth}");
+
+        let env = moved(&OWN.replace("{ own = true }", "{ env = \"GL\" }"));
+        assert!(
+            env.contains("Its token will be sent to the new host."),
+            "{env}"
+        );
     }
 
     #[test]

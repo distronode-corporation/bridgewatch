@@ -76,6 +76,7 @@ vi.mock("./lib/ipc", () => ({
       Promise.resolve({ available: false, builtin: false, needs_client_id: false, host: "gitlab.com", install_url: null }),
     status: () => Promise.resolve(null),
   }),
+  ownTokenStatus: () => Promise.resolve({ kind: "none" }),
   getConfigJson: () => Promise.resolve({ config: shell.config, job_order: [[], []] }),
   readConfigText: () => Promise.resolve(shell.text),
   getStatus: () => Promise.resolve(shell.status),

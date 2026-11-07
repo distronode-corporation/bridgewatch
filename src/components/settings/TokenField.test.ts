@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { reactive } from "../../lib/__tests__/props.svelte";
 import type { OAuthApi, SignInStatus } from "../../lib/oauth";
+import type { OwnTokenStatus } from "../../lib/own-token";
 import type { Edit } from "../../lib/types";
 import { formatCommand, parseCommand } from "../wizard/model";
 import TokenField from "./TokenField.svelte";
@@ -649,5 +650,91 @@ describe("TokenField, sign in", () => {
     await press("button.apply");
     expect(edits[0]).toContainEqual({ op: "unset", path: "accounts.gh.token.oauth" });
     expect(edits[0]).toContainEqual({ op: "set", path: "accounts.gh.token.env", value: { string: "GH" } });
+  });
+});
+
+describe("TokenField, the server an own token is stored for", () => {
+  /** `own_token_status`, scripted per call. */
+  function renderOwn(answers: OwnTokenStatus[], baseUrl = "https://gitlab.example.com") {
+    host = document.createElement("div");
+    document.body.append(host);
+    const ownStatus = vi.fn(async (_account: string) => answers.shift() ?? { kind: "none" as const });
+    const props = reactive({
+      account: "work",
+      value: { own: true },
+      onedit: () => Promise.resolve(),
+      baseUrl,
+      ownStatus,
+    }) as ComponentProps<typeof TokenField>;
+    component = mount(TokenField, { target: host, props });
+    flushSync();
+    return { props, ownStatus };
+  }
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) {
+      await Promise.resolve();
+      flushSync();
+    }
+  };
+  const line = () => host.querySelector('[data-slot="own-status"]');
+
+  it("says which server the stored token is for", async () => {
+    const h = renderOwn([{ kind: "bound", origin: "https://gitlab.example.com" }]);
+    await settle();
+    expect(h.ownStatus).toHaveBeenCalledWith("work");
+    expect(line()?.textContent).toBe("Stored for https://gitlab.example.com.");
+    expect(line()?.getAttribute("role")).toBeNull();
+  });
+
+  it("says 'stored for X; paste one for Y' once the account points elsewhere, and asks again when it moves", async () => {
+    const h = renderOwn([
+      { kind: "bound", origin: "https://gitlab.example.com" },
+      { kind: "mismatch", stored: "https://gitlab.example.com", expected: "https://gitlab.other.example" },
+    ]);
+    await settle();
+    expect(line()?.textContent).toBe("Stored for https://gitlab.example.com.");
+
+    // The file was saved with another base_url: the parent re-renders with it.
+    h.props.baseUrl = "https://gitlab.other.example";
+    flushSync();
+    await settle();
+    expect(h.ownStatus).toHaveBeenCalledTimes(2);
+    expect(line()?.textContent).toBe(
+      "Stored for https://gitlab.example.com; paste one for https://gitlab.other.example. The stored token is not sent there.",
+    );
+    expect(line()?.getAttribute("role")).toBe("alert");
+  });
+
+  it("names a 1.x value and nothing stored, and reads again after a save", async () => {
+    const h = renderOwn([{ kind: "legacy" }, { kind: "bound", origin: "https://gitlab.example.com" }]);
+    await settle();
+    expect(line()?.textContent).toBe(
+      "A token saved by bridgewatch 1.x is stored. It is tied to https://gitlab.example.com the first time it is used.",
+    );
+    const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
+    input.value = "glpat-new";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save token")!.click();
+    await settle();
+    expect(store.setOwnToken).toHaveBeenCalledWith("work", "glpat-new");
+    expect(h.ownStatus).toHaveBeenCalledTimes(2);
+    expect(line()?.textContent).toBe("Stored for https://gitlab.example.com.");
+  });
+
+  it("says a failed read is a failed read, not 'nothing stored'", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    const props = reactive({
+      account: "work",
+      value: { own: true },
+      onedit: () => Promise.resolve(),
+      ownStatus: () => Promise.reject(new Error("the keychain is locked")),
+    }) as ComponentProps<typeof TokenField>;
+    component = mount(TokenField, { target: host, props });
+    flushSync();
+    await settle();
+    expect(line()?.textContent).toBe("Could not read the stored token: the keychain is locked");
+    expect(line()?.getAttribute("role")).toBe("alert");
   });
 });

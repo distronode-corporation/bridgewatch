@@ -173,6 +173,11 @@ export interface Draft {
   secret: string;
   /** Re-running on a config that already uses bridgewatch's own keyring entry: an empty paste keeps it. */
   ownStored: boolean;
+  /**
+   * The instance that stored token belongs to (the file's base_url when the wizard opened).
+   * ⛔ The token is bound to it: on any other instance an empty paste keeps nothing.
+   */
+  ownStoredFor: string | null;
   envVar: string;
   commandText: string;
   /** Sign in: a client id of the user's own; empty is the host's built-in application. */
@@ -219,6 +224,7 @@ export function emptyDraft(provider: Provider = "gitlab"): Draft {
     cliSource: null,
     secret: "",
     ownStored: false,
+    ownStoredFor: null,
     envVar: "",
     commandText: "",
     oauthClientId: "",
@@ -264,6 +270,9 @@ export function switchProvider(draft: Draft, provider: Provider): void {
   draft.oauthLogin = null;
   draft.oauthAccount = null;
   draft.oauthStored = false;
+  // A stored token belongs to the instance, and so to the provider, it was saved for.
+  draft.ownStored = false;
+  draft.ownStoredFor = null;
   if (!draft.accountEdited) draft.account = provider;
   draft.project = null;
   draft.projectInput = "";
@@ -314,6 +323,7 @@ export function draftFromAnswers(answers: Partial<WizardAnswers>): Draft {
     } else {
       draft.tokenMode = "paste";
       draft.ownStored = token.own;
+      draft.ownStoredFor = token.own ? baseUrlOf(draft) : null;
     }
   }
   if (answers.project !== undefined && answers.project !== null) {
@@ -343,6 +353,28 @@ export function draftFromAnswers(answers: Partial<WizardAnswers>): Draft {
   }
   if (answers.live_secs) draft.liveSecs = answers.live_secs;
   return draft;
+}
+
+/**
+ * Keep the stored token only while the form names the instance it was saved for.
+ *
+ * ⛔ The shell binds an own token to its server and never sends it anywhere else,
+ * so "leave empty to keep the stored token" on another instance would save an
+ * account that polls nothing. Called on every instance change; coming back to
+ * the original instance keeps it again. A display rule only: the core decides.
+ */
+export function followOwnToken(draft: Draft): void {
+  if (draft.ownStoredFor === null) return;
+  draft.ownStored = sameInstance(draft.ownStoredFor, baseUrlOf(draft));
+}
+
+/** Whether two instance URLs name one origin, for the form's wording. */
+function sameInstance(a: string, b: string): boolean {
+  try {
+    return new URL(a.trim()).origin === new URL(b.trim()).origin;
+  } catch {
+    return false;
+  }
 }
 
 export function baseUrlOf(draft: Draft): string {

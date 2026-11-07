@@ -18,7 +18,7 @@ use std::time::Duration;
 use bridgewatch_core::client::Transport;
 use bridgewatch_core::config::{Account, Config, OAuthSource, TokenSource};
 use bridgewatch_core::oauth::{self, BuiltinClients, OAuthError, Progress, store};
-use bridgewatch_core::token::TokenProvider;
+use bridgewatch_core::token::{self, OwnTokenStatus, TokenProvider};
 use clap::Subcommand;
 
 use crate::{Failure, Outcome, exit};
@@ -41,8 +41,11 @@ pub enum AuthAction {
         account: String,
     },
     /// Show who each signing-in account is signed in as, until when and with
-    /// what scopes. Never a token. Exits 70 when one is not signed in, or is
-    /// signed in for another server or application than it names now.
+    /// what scopes, and which server each own token (token = { own = true })
+    /// is bound to. Never a token. Exits 70 unless every account listed is
+    /// usable: one is not signed in, is signed in for another server or
+    /// application than it names now, has no own token stored, or has one
+    /// saved for another server.
     Status {
         /// Only this account.
         #[arg(long)]
@@ -190,12 +193,26 @@ pub fn logout(
     Ok(exit::OK)
 }
 
+/// Whether `auth status` has anything to say about an account: it signs in,
+/// or it reads bridgewatch's own entry.
+fn listed(account: &Account) -> bool {
+    matches!(
+        account.token,
+        TokenSource::Oauth(_) | TokenSource::Own(true)
+    )
+}
+
 /// `auth status`.
 ///
 /// ⛔ A stored sign-in is "signed in" only when the poller would use it:
 /// [`oauth::TokenSet::fits`], the session's own rule. One issued by another
 /// instance, or for another application, is never sent, and saying "signed in"
 /// for it sent people looking everywhere but the sign-in.
+///
+/// ⛔ The same for an own token: [`token::own_token_status`] is the binding
+/// `token::resolve` enforces, so a token saved for another server reads as
+/// what it is, and is not counted as usable. A 1.x value is usable (it binds
+/// on first use) and is said to be unbound; reading it here binds nothing.
 pub fn status(
     config: &Config,
     only: Option<&str>,
@@ -206,20 +223,24 @@ pub fn status(
 ) -> Outcome {
     let names: Vec<String> = match only {
         Some(name) => {
-            oauth_source(name, account(config, name)?)?;
+            let account = account(config, name)?;
+            if !listed(account) {
+                oauth_source(name, account)?;
+            }
             vec![name.to_string()]
         }
         None => config
             .accounts
             .iter()
-            .filter(|(_, a)| matches!(a.token, TokenSource::Oauth(_)))
+            .filter(|(_, a)| listed(a))
             .map(|(k, _)| k.clone())
             .collect(),
     };
     if names.is_empty() {
         writeln!(
             out,
-            "No account signs in. An account does when its token source is token = {{ oauth = true }}."
+            "No account signs in or keeps its own token. An account does when its token source \
+             is token = {{ oauth = true }} or token = {{ own = true }}."
         )?;
         return Ok(exit::OK);
     }
@@ -227,7 +248,13 @@ pub fn status(
     for name in &names {
         let account = &config.accounts[name];
         let host = oauth::Endpoints::for_account(account).host;
-        // Only signing-in accounts are listed (above).
+        if let TokenSource::Own(true) = account.token {
+            let (usable, line) = own_line(name, account, store_provider);
+            all_signed_in &= usable;
+            writeln!(out, "{name} ({host}): {line}")?;
+            continue;
+        }
+        // Only signing-in and own accounts are listed (above).
         let TokenSource::Oauth(source) = &account.token else {
             continue;
         };
@@ -293,6 +320,39 @@ pub fn status(
         }
     }
     Ok(if all_signed_in { exit::OK } else { exit::ERROR })
+}
+
+/// One own-token account's `auth status` line, after the name and host, and
+/// whether the poller would send its token.
+fn own_line(name: &str, account: &Account, store_provider: &dyn TokenProvider) -> (bool, String) {
+    match token::own_token_status(name, account, store_provider) {
+        Ok(OwnTokenStatus::Bound { origin }) => (true, format!("own token, bound to {origin}")),
+        Ok(OwnTokenStatus::Legacy) => (
+            true,
+            format!(
+                "own token stored by bridgewatch 1.x, not yet tied to a server; it is bound to \
+                 {} the first time it is used",
+                oauth::origin_of(&account.base_url)
+                    .unwrap_or_else(|| "the account's server".to_string())
+            ),
+        ),
+        Ok(OwnTokenStatus::Mismatch { stored, expected }) => {
+            let expected =
+                expected.unwrap_or_else(|| "an address that is not an http(s) URL".into());
+            (
+                false,
+                format!(
+                    "own token saved for {stored}, not {expected}, so it is not sent; save a \
+                     token for {expected} in Settings, or put base_url back"
+                ),
+            )
+        }
+        Ok(OwnTokenStatus::None) => (
+            false,
+            "no own token stored; save one in Settings (Accounts, Token source)".to_string(),
+        ),
+        Err(e) => (false, e.to_string()),
+    }
 }
 
 /// A duration in words: `7h 12m`, `14m`, `45s`.
@@ -706,6 +766,74 @@ pub(crate) mod tests {
         assert!(
             text.contains("gl (gitlab.example.com): signed in as @alice"),
             "{text}"
+        );
+    }
+
+    /// ⛔ `auth status` lists own-token accounts too, by the binding the
+    /// poller enforces: bound, a 1.x value that binds on first use, saved for
+    /// another server, or nothing. Exit 70 unless every one is usable, and a
+    /// status binds nothing.
+    #[test]
+    fn status_lists_own_tokens_by_the_server_they_are_bound_to() {
+        let config = config(
+            "[accounts.bound]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\n\
+             [accounts.legacy]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\n\
+             [accounts.moved]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\n\
+             [accounts.none]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\n\
+             [accounts.env]\ntoken = { env = \"GL\" }\n",
+        );
+        let store = Memory::default();
+        let secret = bridgewatch_core::token::Secret::new("glpat-SECRET");
+        token::set_own_token("bound", "https://gitlab.example.com", &secret, &store).unwrap();
+        token::set_own_token("moved", "https://gitlab.com", &secret, &store).unwrap();
+        store
+            .keyring_set("bridgewatch:legacy", "token", "glpat-SECRET")
+            .unwrap();
+
+        let mut out = Vec::new();
+        let code = status(&config, None, &store, &BUILTIN, 0, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::ERROR, "{text}");
+        assert_eq!(
+            text,
+            "bound (gitlab.example.com): own token, bound to https://gitlab.example.com\n\
+             legacy (gitlab.example.com): own token stored by bridgewatch 1.x, not yet tied to \
+             a server; it is bound to https://gitlab.example.com the first time it is used\n\
+             moved (gitlab.example.com): own token saved for https://gitlab.com, not \
+             https://gitlab.example.com, so it is not sent; save a token for \
+             https://gitlab.example.com in Settings, or put base_url back\n\
+             none (gitlab.example.com): no own token stored; save one in Settings (Accounts, \
+             Token source)\n"
+        );
+        assert!(!text.contains("glpat-SECRET"), "{text}");
+        assert_eq!(
+            store.keyring_get("bridgewatch:legacy", "token").unwrap(),
+            "glpat-SECRET",
+            "a status binds nothing"
+        );
+
+        // Every one usable (bound, or 1.x binding on first use): exit 0.
+        let mut out = Vec::new();
+        assert_eq!(
+            status(&config, Some("bound"), &store, &BUILTIN, 0, &mut out).unwrap(),
+            exit::OK
+        );
+        let mut out = Vec::new();
+        assert_eq!(
+            status(&config, Some("legacy"), &store, &BUILTIN, 0, &mut out).unwrap(),
+            exit::OK
+        );
+        let mut out = Vec::new();
+        assert_eq!(
+            status(&config, Some("moved"), &store, &BUILTIN, 0, &mut out).unwrap(),
+            exit::ERROR
+        );
+        // An env account still has nothing to show.
+        assert_eq!(
+            status(&config, Some("env"), &store, &BUILTIN, 0, &mut Vec::new())
+                .unwrap_err()
+                .code,
+            exit::CONFIG
         );
     }
 

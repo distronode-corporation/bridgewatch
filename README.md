@@ -518,7 +518,9 @@ redirect listener.
   The npm package runs the same commands: `npx bridgewatch auth login --account gh`.
   `auth status` never prints a token and exits 70 when an account is not signed in, or
   when its stored sign-in was issued by another server or for another application than
-  the account now names (such a sign-in is never used).
+  the account now names (such a sign-in is never used). It lists own-token accounts too,
+  with the server each token is bound to (see
+  [Tokens stay with their server](#tokens-stay-with-their-server)).
 - **Which hosts.** The built-in applications cover github.com (the GitHub App
   [bridgewatch-ci](https://github.com/apps/bridgewatch-ci)) and gitlab.com only. GitHub
   Enterprise Server and self-managed GitLab need an OAuth application registered on that
@@ -754,11 +756,58 @@ token = { command = ["pass", "gitlab/pat"] }                            # a prog
 | Source | Notes |
 | --- | --- |
 | `keyring` | Any OS keyring item, addressed by service and user. Use it to reuse glab's or gh's login. |
-| `own` | bridgewatch's own keyring item, service `bridgewatch:<account>`, written when you paste a token into Settings or the wizard. This is the default when an account has no `token` key. |
+| `own` | bridgewatch's own keyring item, service `bridgewatch:<account>`, written when you paste a token into Settings or the wizard. It is bound to the server it was saved for (see below). This is the default when an account has no `token` key. |
 | `env` | Read from the process environment, so it works when bridgewatch is started from a shell or a service unit that sets the variable. |
 | `command` | Runs the program (no shell) with stdin closed and a 10 s timeout, and uses the first line of its stdout. Writing one from Settings or the wizard needs an explicit confirmation, see below. |
 
 A token source table names exactly one source; a table naming two is refused.
+
+### Tokens stay with their server
+
+A token you paste into Settings or the wizard is stored with the server it was saved for:
+the scheme, host and port of the account's `base_url` at that moment
+(`https://GitLab.com:443/` and `https://gitlab.com` are the same server). It is sent to
+that server and nowhere else, the same rule a sign-in follows.
+
+If the account's `base_url` changes afterwards, by hand, by `bridgewatch init --account`,
+or by anything else that edits the file, the stored token is **not sent** to the new
+address. `check`, `watch`, `wait`, `log`, `retry` and `play` exit 70 with:
+
+```
+the stored token of account "gl" was saved for https://a.example, and the account now
+points at https://b.example, so it is not sent. Save a token for https://b.example in
+Settings, or put base_url back
+```
+
+In the app only that account's watches show the error; the other accounts keep polling.
+Settings shows "Stored for https://a.example; paste one for https://b.example" on the
+account's token field. `bridgewatch auth status` lists every own-token account with the
+server its token is bound to. `config validate` stays offline and reads no credential, so
+it cannot see a binding.
+
+A `keyring`, `env` or `command` source is not bound: bridgewatch does not own those
+credentials, and moving such an account to another host still asks for confirmation in
+the app, because its token would go there.
+
+### Upgrading from 1.x
+
+bridgewatch 1.x stored the bare token. 2.0 binds such a value the first time it uses it,
+to the server the account names at that moment: it reads the value, writes it back bound,
+and only then sends it. If the write fails, nothing is sent. The app and the CLI both do
+this; on macOS, the CLI rewriting an item the app created may ask once for keychain
+access. The setup wizard never binds one, because the address it would bind to is the
+one typed into the form: re-run on a 1.x value the app has not used yet, it asks for the
+token again.
+
+- If you changed an account's `base_url` under 1.x, 1.x had already sent the token to the
+  new address, and 2.0 binds it there. Paste the token again if that is not the server it
+  belongs to.
+- bridgewatch 1.3 cannot read an entry 2.0 has written. It refuses it ("cannot go in an
+  HTTP header") without sending anything. To go back to 1.3, paste the token again in its
+  Settings; 2.0 binds that value again on its next use.
+- Scripts that read the keychain item directly now get a small document,
+  `bw-bound-v1:` followed by a tab and JSON with the token and the server, instead of the
+  bare token.
 
 ### Reusing glab's login
 

@@ -118,7 +118,11 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
         // `setup`: the core's README asks for resolution to happen in response
         // to a user action having started the app, never on a timer with
         // nobody watching.
-        let mut poller = match Poller::from_config(&config, &SystemTokenProvider) {
+        // ⛔ Per account (D4): one account whose token is missing or bound to
+        // another server fails ITS watches, with the reason on them, and the
+        // others keep polling. Only a poller that cannot be built at all
+        // (a transport, the configuration) lands in the arm below.
+        let mut poller = match Poller::from_config_per_account(&config, &SystemTokenProvider) {
             Ok(p) => {
                 failed_builds = 0;
                 state.set_clients(p.clients().clone());

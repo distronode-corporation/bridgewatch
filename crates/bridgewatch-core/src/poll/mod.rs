@@ -192,6 +192,30 @@ impl Poller {
     where
         P: crate::token::TokenProvider + Clone + 'static,
     {
+        Self::build(config, provider, false)
+    }
+
+    /// [`Poller::from_config`], where an account whose token cannot be
+    /// resolved fails only its own watches: the app's poller.
+    ///
+    /// ⛔ D4. One account's token error used to stop the whole poller: the
+    /// icon went to unknown, every account stopped, and the strip read
+    /// "cannot start polling". Now that account gets a client whose every
+    /// request is refused with [`ClientError::Token`] before anything is
+    /// sent, so its watches carry the error and the others keep polling, as
+    /// an account that is not signed in always has. The CLI keeps
+    /// [`Poller::from_config`], where the same error is exit 70.
+    pub fn from_config_per_account<P>(config: &Config, provider: &P) -> Result<Self, PollerError>
+    where
+        P: crate::token::TokenProvider + Clone + 'static,
+    {
+        Self::build(config, provider, true)
+    }
+
+    fn build<P>(config: &Config, provider: &P, per_account: bool) -> Result<Self, PollerError>
+    where
+        P: crate::token::TokenProvider + Clone + 'static,
+    {
         let ring = RequestRing::new(config.log.keep_requests);
         let mut clients = BTreeMap::new();
         let store: Arc<dyn crate::token::TokenProvider> = Arc::new(provider.clone());
@@ -208,7 +232,19 @@ impl Poller {
             .iter()
             .filter(|(name, _)| used.contains(name.as_str()))
         {
-            let client = client_for_account(name, account, None, store.clone(), ring.clone())?;
+            let client = match client_for_account(name, account, None, store.clone(), ring.clone())
+            {
+                Ok(client) => client,
+                Err(PollerError::Token(_, e)) if per_account => {
+                    tracing::warn!(account = %name, error = %e, "the account's token is not usable");
+                    refused_client(name, account, e.to_string(), ring.clone())?
+                }
+                Err(PollerError::SignIn(_, e)) if per_account => {
+                    tracing::warn!(account = %name, error = %e, "the account cannot sign in");
+                    refused_client(name, account, e.to_string(), ring.clone())?
+                }
+                Err(e) => return Err(e),
+            };
             clients.insert(name.clone(), client);
         }
         Self::with_clients(config, clients, ring).map_err(PollerError::Config)
@@ -1062,6 +1098,43 @@ pub fn client_for_account_on(
         }
     }
     .map_err(PollerError::Client)
+}
+
+/// A client for an account whose credential failed: every request is
+/// refused with [`ClientError::Token`], and none leaves the machine.
+fn refused_client(
+    name: &str,
+    account: &crate::config::Account,
+    message: String,
+    ring: RequestRing,
+) -> Result<Arc<dyn CiClient>, PollerError> {
+    let transport = Arc::new(RefusedTransport {
+        account: name.to_string(),
+        message,
+    });
+    crate::client::client_for(account, &crate::token::Secret::new(""), transport, ring)
+        .map_err(PollerError::Client)
+}
+
+/// The transport behind [`refused_client`]: it answers every request with the
+/// same error, without sending it.
+#[derive(Debug)]
+struct RefusedTransport {
+    account: String,
+    message: String,
+}
+
+#[async_trait::async_trait]
+impl crate::client::Transport for RefusedTransport {
+    async fn execute(
+        &self,
+        _request: crate::client::HttpRequest,
+    ) -> Result<crate::client::HttpResponse, ClientError> {
+        Err(ClientError::Token {
+            account: self.account.clone(),
+            message: self.message.clone(),
+        })
+    }
 }
 
 /// Build the list query for a watch.

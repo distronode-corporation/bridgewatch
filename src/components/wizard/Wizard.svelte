@@ -43,6 +43,7 @@
     STEPS,
     answersOf,
     baseUrlOf,
+    followOwnToken,
     draftFromAnswers,
     emptyDraft,
     formatCommand,
@@ -320,8 +321,10 @@
       cliBase = null;
       detectedSource = null;
     }
-    // A sign-in, fresh or stored, belongs to the instance it was made on.
+    // A sign-in, fresh or stored, belongs to the instance it was made on, and
+    // so does a stored token.
     forgetSignInIfMoved();
+    followOwnToken(draft);
     void detect();
     void refreshAvailability();
   }

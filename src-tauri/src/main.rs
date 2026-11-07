@@ -130,6 +130,7 @@ fn main() {
             commands::quit,
             commands::set_own_token,
             commands::clear_own_token,
+            commands::own_token_status,
             jobs::job_log_tail,
             jobs::job_action,
             wizard::wizard_detect_cli_token,
