@@ -50,7 +50,9 @@ mod exit {
     /// `check`/`watch`: still in flight, parked at a gate, or cancelled.
     pub const PENDING: i32 = 3;
     /// `check`/`watch`: no verdict. Nothing matched, or a request failed with
-    /// nothing cached to fall back on; the errors are printed.
+    /// nothing cached to fall back on; the errors are printed. `wait`: the
+    /// commit's pipeline was skipped, it has none after the grace, or a
+    /// request was refused for good (401, 403, 404).
     pub const UNKNOWN: i32 = 4;
     /// The command line is wrong: clap's own errors, a `--watch` or
     /// `--account` naming nothing configured, or a `fixture scrub` directory
@@ -75,7 +77,7 @@ Exit codes:
   1   check/watch/wait: failed; fixture scrub --check: a fixture would change; retry/play: answered no
   2   check/watch/wait: deployed_with_failure
   3   check/watch: running, parked_gate or canceled; wait: parked_gate or canceled, or interrupted
-  4   check/watch: unknown (nothing matched, or a request failed; errors on stderr)
+  4   check/watch: unknown (nothing matched, or a request failed; errors on stderr); wait: skipped, no pipeline after --no-pipeline-grace, or a refused request (401, 403, 404)
   64  usage error: bad arguments, a --watch, --account or job URL that names nothing configured, a fixture scrub directory with no recordings, or retry/play with no terminal and no --yes
   70  any other error (token, fixture, recording, I/O, or a log or job request that failed)
   78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true

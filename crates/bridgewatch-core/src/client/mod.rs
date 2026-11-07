@@ -59,6 +59,22 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
     /// One pipeline by id.
     async fn get_pipeline(&self, project: &ProjectRef, id: u64) -> Result<Pipeline, ClientError>;
 
+    /// The full sha of a commit given by any unambiguous prefix, or `None`
+    /// when the project has no such commit (yet: a push may still be on its
+    /// way). `bridgewatch wait` needs it because both providers match a
+    /// pipeline's `sha` in full only.
+    ///
+    /// The default refuses, so a client that has not been taught it says so.
+    async fn commit_sha(
+        &self,
+        _project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        Err(ClientError::Unsupported {
+            message: format!("looking up commit {sha} is not supported for this provider"),
+        })
+    }
+
     /// Every job of a pipeline, all pages.
     async fn pipeline_jobs(&self, project: &ProjectRef, id: u64) -> Result<Vec<Job>, ClientError>;
 

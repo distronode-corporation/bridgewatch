@@ -1067,11 +1067,21 @@ the same core, rules and intervals as `check` and `watch` and stops at the newes
 for that commit once nothing in it is in flight: a row that already reads `failed` while
 other jobs run is not final yet, because a deploy can still follow. A pipeline parked at
 a manual gate is final (exit 3), since nothing moves until somebody presses it. A commit
-with no pipeline yet is waited for. `--timeout <dur>` (`90s`, `10m`, `1h30m`, or seconds)
-gives up with exit 124, the code `timeout(1)` uses. stdout carries only the answer: one
-line, or with `--json` one object, `{"watch", "sha", "state", "exit", "timed_out",
-"pipeline"}`, where `pipeline` is the row as `check --json` prints it (or `null`). Progress
-goes to stderr, once per change. It is read-only, so a token with read scope is enough,
+that is not among the watch's rows (they keep only the newest settled pipelines, and
+never a skipped one) is looked up directly by its sha. If its pipeline was skipped, `wait`
+exits 4 with "pipeline for <sha7> was skipped". If its pipeline is older than the rows, it
+is judged like any row and exits with that verdict's code. A commit with no pipeline yet is
+waited for, since a fresh push often has none for a minute or two. If there is still none
+after `--no-pipeline-grace` (10 minutes by default), it exits 4 with "no pipeline for <sha7>
+after 10m". A request that no retry will fix ends the wait at once with exit 4, the code
+`check` gives the same answer: a 401 or 403 (a token that is refused or lacks the scope),
+a 404 (no such project, or one the token cannot see), or a sign-in that has to be redone.
+The message names the account and the status. A 429, a 5xx or a dropped connection is
+retried on the usual backoff. `--timeout <dur>` (`90s`, `10m`, `1h30m`, or seconds) gives
+up with exit 124, the code `timeout(1)` uses. stdout carries only the answer: one line, or
+with `--json` one object, `{"watch", "sha", "state", "exit", "timed_out", "reason",
+"pipeline"}`, where `reason` says why there is no verdict (or is `null`) and `pipeline` is
+the row as `check --json` prints it (or `null`). Progress goes to stderr, once per change. It is read-only, so a token with read scope is enough,
 it reads only that watch's account's token, and it keeps no notification ledger.
 
 ```
@@ -1128,7 +1138,7 @@ because a secondary watch must not be able to outvote a primary one.
   1   check/watch/wait: failed; fixture scrub --check: a fixture would change; retry/play: answered no
   2   check/watch/wait: deployed_with_failure
   3   check/watch: running, parked_gate or canceled; wait: parked_gate or canceled, or interrupted
-  4   check/watch: unknown (nothing matched, or a request failed; errors on stderr)
+  4   check/watch: unknown (nothing matched, or a request failed; errors on stderr); wait: skipped, no pipeline after --no-pipeline-grace, or a refused request (401, 403, 404)
   64  usage error: bad arguments, a --watch, --account or job URL that names nothing configured, a fixture scrub directory with no recordings, or retry/play with no terminal and no --yes
   70  any other error (token, fixture, recording, I/O, or a log or job request that failed)
   78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true

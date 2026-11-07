@@ -9,9 +9,12 @@
 
 use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::time::Duration;
 
+use bridgewatch_core::client::ClientError;
 use bridgewatch_core::config::Config;
+use bridgewatch_core::poll::{CommitLookup, Poller};
 use bridgewatch_core::verdict::{IconState, PipelineView, Snapshot};
 use clap::Args;
 
@@ -31,6 +34,10 @@ pub struct WaitArgs {
     /// seconds. Without it, wait for as long as it takes.
     #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
     pub timeout: Option<Duration>,
+    /// Give up, exiting 4, when the commit still has no pipeline after this
+    /// long. A fresh push often has none for its first seconds or minutes.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration, default_value = "10m")]
+    pub no_pipeline_grace: Duration,
     /// Print the final verdict as one JSON object instead of a line of text.
     #[arg(long)]
     pub json: bool,
@@ -184,6 +191,7 @@ fn report(
     row: Option<&PipelineView>,
     code: i32,
     timed_out: bool,
+    reason: Option<&str>,
 ) -> String {
     serde_json::json!({
         "watch": watch,
@@ -191,9 +199,92 @@ fn report(
         "state": row.map(|r| r.state.as_str()),
         "exit": code,
         "timed_out": timed_out,
+        // Why there is no verdict: skipped, no pipeline, a refused request.
+        "reason": reason,
         "pipeline": row,
     })
     .to_string()
+}
+
+/// `1h30m`, `10m`, `90s`: a duration as `--timeout` takes one.
+fn human(d: Duration) -> String {
+    let secs = d.as_secs();
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    let mut out = String::new();
+    if h > 0 {
+        out.push_str(&format!("{h}h"));
+    }
+    if m > 0 {
+        out.push_str(&format!("{m}m"));
+    }
+    if s > 0 || out.is_empty() {
+        out.push_str(&format!("{s}s"));
+    }
+    out
+}
+
+/// What one wait is for.
+struct Plan {
+    watch: String,
+    /// The watch's account, named in a refusal.
+    account: String,
+    sha: String,
+    timeout: Option<Duration>,
+    grace: Duration,
+}
+
+impl Plan {
+    fn sha7(&self) -> &str {
+        &self.sha[..self.sha.len().min(7)]
+    }
+}
+
+/// How a wait ended.
+#[derive(Debug)]
+enum Ended {
+    /// The commit's pipeline settled.
+    Verdict(Box<PipelineView>),
+    /// Its pipeline was skipped: it ran nothing, so there is no verdict.
+    Skipped,
+    /// Still no pipeline after the grace.
+    NoPipeline,
+    /// A request was refused in a way no retry fixes: the token (401, 403, a
+    /// sign-in that has to be redone) or the project (404).
+    Refused(String),
+    /// `--timeout` ran out; the last row seen, if any.
+    TimedOut(Option<PipelineView>),
+    /// Ctrl-C; the last row seen, if any.
+    Interrupted(Option<PipelineView>),
+}
+
+impl Ended {
+    /// The exit code. ⛔ A refusal is what `check` exits with for the same
+    /// answer: the watch reads `unknown`, so 4. 70 is a token that does not
+    /// RESOLVE, before anything is sent, and `wait` inherits that one from
+    /// building the poller exactly as `check` does.
+    fn code(&self) -> i32 {
+        match self {
+            Ended::Verdict(row) => super::code_for(row.state),
+            Ended::Skipped | Ended::NoPipeline | Ended::Refused(_) => exit::UNKNOWN,
+            Ended::TimedOut(_) => exit::TIMEOUT,
+            Ended::Interrupted(Some(_)) => exit::PENDING,
+            Ended::Interrupted(None) => exit::UNKNOWN,
+        }
+    }
+}
+
+/// An answer no retry will change: the token is refused or has to be signed
+/// in again, or the project is not there. A 429, a 5xx or a dropped
+/// connection is not one, and keeps the poller's backoff.
+fn refusal(plan: &Plan, error: &ClientError, text: Option<&str>) -> Option<String> {
+    let status = match error {
+        ClientError::Auth { status, .. } => format!(" (HTTP {status})"),
+        ClientError::NotFound { .. } => " (HTTP 404)".to_string(),
+        ClientError::SignInAgain { .. } => String::new(),
+        _ => return None,
+    };
+    let text = text.map_or_else(|| error.to_string(), str::to_string);
+    Some(format!("account {}: {text}{status}", plan.account))
 }
 
 fn line(watch: &str, row: &PipelineView) -> String {
@@ -219,107 +310,482 @@ pub async fn run(config_args: &ConfigArgs, args: WaitArgs) -> Outcome {
     };
     // Only the one watch is polled, so only its account's token is read.
     config.watches.retain(|w| w.id == watch);
+    let account = config
+        .watches
+        .first()
+        .map(|w| w.account.clone())
+        .unwrap_or_default();
 
     let mut poller = build_poller(&config, args.fixture.as_ref())?;
-    let deadline = args.timeout.map(|t| tokio::time::Instant::now() + t);
-    let mut last: Option<PipelineView> = None;
-    let mut said = String::new();
+    let plan = Plan {
+        watch,
+        account,
+        sha,
+        timeout: args.timeout,
+        grace: args.no_pipeline_grace,
+    };
 
     // ⛔ One Ctrl-C listener for the whole run, installed before the first
     // tick, as `watch` does and for the same reasons (see there).
     let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
-    let interrupted_code = |last: &Option<PipelineView>| {
-        if last.is_some() {
-            exit::PENDING
-        } else {
-            exit::UNKNOWN
-        }
-    };
     if std::future::poll_fn(|cx| std::task::Poll::Ready(interrupt.as_mut().poll(cx)))
         .await
         .is_ready()
     {
-        return Ok(interrupted_code(&last));
+        return Ok(Ended::Interrupted(None).code());
     }
+    let ended = wait_for(&mut poller, &plan, interrupt).await;
+    let code = ended.code();
+    let (row, reason) = match &ended {
+        Ended::Verdict(row) => {
+            if args.json {
+                println!(
+                    "{}",
+                    report(&plan.watch, &plan.sha, Some(row), code, false, None)
+                );
+            } else {
+                println!("{}", line(&plan.watch, row));
+            }
+            return Ok(code);
+        }
+        Ended::Interrupted(_) => return Ok(code),
+        Ended::Skipped => (None, format!("pipeline for {} was skipped", plan.sha7())),
+        Ended::NoPipeline => (
+            None,
+            format!(
+                "no pipeline for {} after {}",
+                plan.sha7(),
+                human(plan.grace)
+            ),
+        ),
+        Ended::Refused(why) => (None, why.clone()),
+        Ended::TimedOut(last) => (
+            last.as_ref(),
+            format!(
+                "timed out after {}s waiting for {} on {} (last seen: {})",
+                plan.timeout.map(|t| t.as_secs()).unwrap_or_default(),
+                plan.sha,
+                plan.watch,
+                last.as_ref()
+                    .map(|r| r.state.as_str())
+                    .unwrap_or("no pipeline")
+            ),
+        ),
+    };
+    if args.json {
+        let timed_out = matches!(ended, Ended::TimedOut(_));
+        println!(
+            "{}",
+            report(&plan.watch, &plan.sha, row, code, timed_out, Some(&reason))
+        );
+    }
+    eprintln!("{reason}");
+    Ok(code)
+}
+
+/// Wait until the commit has an answer: its pipeline settles, it turns out to
+/// have none, a request is refused for good, time runs out, or `interrupt`.
+///
+/// ⛔ A commit missing from the watch's rows is looked up DIRECTLY, never
+/// inferred from what the rows hold: the rows keep only the newest settled
+/// pipelines and never a skipped one, and an old commit can still get a new
+/// pipeline (a re-run, a manual one). The lookup only runs on a tick whose
+/// list request for this watch worked, so it never jumps a backoff.
+async fn wait_for<F>(poller: &mut Poller, plan: &Plan, mut interrupt: Pin<&mut F>) -> Ended
+where
+    F: Future,
+{
+    let started = tokio::time::Instant::now();
     let expired = async {
-        match deadline {
-            Some(at) => tokio::time::sleep_until(at).await,
+        match plan.timeout {
+            Some(t) => tokio::time::sleep_until(started + t).await,
             None => std::future::pending().await,
         }
     };
     tokio::pin!(expired);
+    let mut last: Option<PipelineView> = None;
+    let mut said = String::new();
 
     loop {
         let tick = tokio::select! {
             tick = poller.tick() => tick,
-            _ = &mut interrupt => return Ok(interrupted_code(&last)),
-            _ = &mut expired => break,
+            _ = &mut interrupt => return Ended::Interrupted(last),
+            _ = &mut expired => return Ended::TimedOut(last),
         };
-
-        let row = find_row(&tick.snapshot, &watch, &sha);
-        if let Some(row) = row
-            && settled(row)
+        let view = tick.snapshot.watches.iter().find(|w| w.id == plan.watch);
+        if let Some(e) = tick.list_errors.get(&plan.watch)
+            && let Some(why) = refusal(plan, e, view.and_then(|v| v.error.as_deref()))
         {
-            let code = super::code_for(row.state);
-            if args.json {
-                println!("{}", report(&watch, &sha, Some(row), code, false));
-            } else {
-                println!("{}", line(&watch, row));
+            return Ended::Refused(why);
+        }
+
+        let mut row = find_row(&tick.snapshot, &plan.watch, &plan.sha).cloned();
+        let mut lookup_error: Option<String> = None;
+        let mut none_yet = false;
+        if row.is_none() && view.is_some_and(|v| v.error.is_none()) {
+            let looked = tokio::select! {
+                looked = poller.look_up_commit(&plan.watch, &plan.sha) => looked,
+                _ = &mut interrupt => return Ended::Interrupted(last),
+                _ = &mut expired => return Ended::TimedOut(last),
+            };
+            match looked {
+                Ok(CommitLookup::Found(found)) => row = Some(*found),
+                Ok(CommitLookup::Skipped(_)) => return Ended::Skipped,
+                Ok(CommitLookup::NotFound) => none_yet = true,
+                Err(e) => match refusal(plan, &e, None) {
+                    Some(why) => return Ended::Refused(why),
+                    None => lookup_error = Some(e.to_string()),
+                },
             }
-            return Ok(code);
+        }
+
+        if let Some(r) = &row {
+            // A watch whose every match was skipped still shows the newest one,
+            // as `canceled`; for a wait it is the same answer as the lookup's.
+            if r.status == "skipped" {
+                return Ended::Skipped;
+            }
+            if settled(r) {
+                return Ended::Verdict(Box::new(r.clone()));
+            }
+        } else if none_yet && last.is_none() && started.elapsed() >= plan.grace {
+            return Ended::NoPipeline;
         }
 
         // Progress goes to stderr, once per change, so stdout carries only
         // the answer.
-        let now = match row {
-            Some(r) => format!("waiting: {}", line(&watch, r)),
-            None => {
-                let error = tick
-                    .snapshot
-                    .watches
-                    .iter()
-                    .find(|w| w.id == watch)
-                    .and_then(|w| w.error.clone());
-                match error {
-                    Some(e) => format!("waiting: {watch}: {e}"),
-                    None => format!("waiting: no pipeline for {sha} on {watch} yet"),
-                }
-            }
+        let now = match (&row, view.and_then(|v| v.error.as_deref()), lookup_error) {
+            (Some(r), _, _) => format!("waiting: {}", line(&plan.watch, r)),
+            (None, Some(e), _) => format!("waiting: {}: {e}", plan.watch),
+            (None, None, Some(e)) => format!("waiting: {}: {e}", plan.watch),
+            (None, None, None) => format!(
+                "waiting: no pipeline for {} on {} yet",
+                plan.sha, plan.watch
+            ),
         };
         if now != said {
             eprintln!("{now}");
             said = now;
         }
-        last = row.cloned();
+        if row.is_some() {
+            last = row;
+        }
 
         tokio::select! {
             _ = tokio::time::sleep(tick.next_interval) => {}
-            _ = &mut interrupt => return Ok(interrupted_code(&last)),
-            _ = &mut expired => break,
+            _ = &mut interrupt => return Ended::Interrupted(last),
+            _ = &mut expired => return Ended::TimedOut(last),
         }
     }
-
-    let waited = args.timeout.map(|t| t.as_secs()).unwrap_or_default();
-    if args.json {
-        println!(
-            "{}",
-            report(&watch, &sha, last.as_ref(), exit::TIMEOUT, true)
-        );
-    }
-    eprintln!(
-        "timed out after {waited}s waiting for {sha} on {watch} (last seen: {})",
-        last.as_ref()
-            .map(|r| r.state.as_str())
-            .unwrap_or("no pipeline")
-    );
-    Ok(exit::TIMEOUT)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{normalise_sha, parse_duration};
+    use super::{Ended, Plan, human, normalise_sha, parse_duration, wait_for};
+    use std::collections::BTreeMap;
+    use std::path::Path;
+    use std::sync::Arc;
     use std::time::Duration;
+
+    use bridgewatch_core::client::script::ScriptTransport;
+    use bridgewatch_core::client::{RequestRing, client_for};
+    use bridgewatch_core::config::parse_str;
+    use bridgewatch_core::poll::Poller;
+    use bridgewatch_core::token::Secret;
+
+    // -----------------------------------------------------------------------
+    // The wait loop, against a scripted GitLab on a paused clock
+    // -----------------------------------------------------------------------
+
+    /// The commit being waited on, and two later ones on the same ref.
+    const A: &str = "aaaaaaa0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const B: &str = "bbbbbbb0bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const C: &str = "ccccccc0cccccccccccccccccccccccccccccccc";
+
+    /// The list request a tick sends, and the direct lookup `wait` sends.
+    /// ⚠️ Neither is a substring of the other: the lookup's `sha=` sits
+    /// between `ref` and `order_by`.
+    const TICK: &str = "pipelines?ref=main&order_by";
+    const LOOKUP: &str = "pipelines?ref=main&sha=";
+
+    /// One watch that shows only its newest settled pipeline, so an older
+    /// commit is out of its rows as soon as anything newer settles.
+    fn poller(script: &Arc<ScriptTransport>) -> Poller {
+        poller_with(script, "")
+    }
+
+    /// The same watch, with more of its keys (`poll = { .. }`).
+    fn poller_with(script: &Arc<ScriptTransport>, extra: &str) -> Poller {
+        let raw = r#"
+[accounts.gitlab]
+token = { env = "BRIDGEWATCH_TEST_TOKEN_NEVER_SET" }
+
+[[watches]]
+id = "main-push"
+account = "gitlab"
+project = 1
+ref = "main"
+show = { settled = 1 }
+"#;
+        let raw = format!("{raw}{extra}\n");
+        let config = parse_str(&raw, Path::new("wait.toml"))
+            .expect("config")
+            .config;
+        let ring = RequestRing::default();
+        let client = client_for(
+            &config.accounts["gitlab"],
+            &Secret::new("t"),
+            script.clone(),
+            ring.clone(),
+        )
+        .expect("client");
+        Poller::with_clients(
+            &config,
+            BTreeMap::from([("gitlab".to_string(), client)]),
+            ring,
+        )
+        .expect("poller")
+    }
+
+    fn plan() -> Plan {
+        Plan {
+            watch: "main-push".into(),
+            account: "gitlab".into(),
+            sha: A.into(),
+            // An hour, so a wait that never answers fails as `TimedOut`
+            // rather than hanging the test run.
+            timeout: Some(Duration::from_secs(3600)),
+            grace: Duration::from_secs(600),
+        }
+    }
+
+    /// One GitLab pipeline row.
+    fn pipeline(id: u64, sha: &str, status: &str) -> String {
+        format!(
+            r#"{{"id":{id},"iid":{id},"project_id":1,"sha":"{sha}","ref":"main",
+                 "status":"{status}","source":"push",
+                 "web_url":"https://gitlab.com/p/-/pipelines/{id}",
+                 "created_at":"2026-11-07T00:00:00Z","updated_at":"2026-11-07T00:10:00Z"}}"#
+        )
+    }
+
+    fn list(rows: &[String]) -> String {
+        format!("[{}]", rows.join(","))
+    }
+
+    /// The same answer, many times: a wait polls until it has its answer.
+    fn always(script: &ScriptTransport, contains: &str, status: u16, body: &str) {
+        for _ in 0..200 {
+            script.reply(contains, status, body);
+        }
+    }
+
+    /// A pipeline with no jobs and no bridges: judged from its own status.
+    fn empty_detail(script: &ScriptTransport, id: u64) {
+        always(script, &format!("pipelines/{id}/jobs"), 200, "[]");
+        always(script, &format!("pipelines/{id}/bridges"), 200, "[]");
+    }
+
+    async fn wait(poller: &mut Poller, plan: &Plan) -> Ended {
+        let never = std::future::pending::<()>();
+        tokio::pin!(never);
+        wait_for(poller, plan, never).await
+    }
+
+    fn requests_to(script: &ScriptTransport, contains: &str) -> usize {
+        script
+            .requests()
+            .iter()
+            .filter(|r| r.url.contains(contains))
+            .count()
+    }
+
+    /// ⛔ A skipped pipeline is never one of a watch's rows. Looked up
+    /// directly, it is an answer at once: there will be no verdict.
+    #[tokio::test(start_paused = true)]
+    async fn a_skipped_pipeline_is_an_answer_not_a_wait() {
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, LOOKUP, 200, &list(&[pipeline(10, A, "skipped")]));
+        always(&script, TICK, 200, &list(&[pipeline(20, B, "success")]));
+        empty_detail(&script, 20);
+        let mut poller = poller(&script);
+
+        let ended = wait(&mut poller, &plan()).await;
+        assert!(matches!(ended, Ended::Skipped), "{ended:?}");
+        assert_eq!(ended.code(), crate::exit::UNKNOWN);
+    }
+
+    /// ⛔ A commit whose pipeline has dropped out of the rows is judged from
+    /// that pipeline, with the code `check` gives its state. Never from its age.
+    #[tokio::test(start_paused = true)]
+    async fn a_commit_out_of_the_rows_is_judged_from_its_own_pipeline() {
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, LOOKUP, 200, &list(&[pipeline(10, A, "failed")]));
+        always(
+            &script,
+            TICK,
+            200,
+            &list(&[
+                pipeline(30, C, "success"),
+                pipeline(20, B, "success"),
+                pipeline(10, A, "failed"),
+            ]),
+        );
+        for id in [10, 20, 30] {
+            empty_detail(&script, id);
+        }
+        let mut poller = poller(&script);
+
+        let ended = wait(&mut poller, &plan()).await;
+        let Ended::Verdict(row) = &ended else {
+            panic!("{ended:?}");
+        };
+        assert_eq!(row.id, 10, "the commit's own pipeline, not the newest");
+        assert_eq!(row.status, "failed");
+        assert_eq!(ended.code(), crate::code_for(row.state));
+        assert_eq!(ended.code(), crate::exit::FAILED);
+    }
+
+    /// An abbreviated sha is expanded through the provider before the lookup,
+    /// because GitLab's `sha` (and GitHub's `head_sha`) match a full sha only.
+    #[tokio::test(start_paused = true)]
+    async fn an_abbreviated_sha_is_expanded_before_it_is_looked_up() {
+        let script = Arc::new(ScriptTransport::new());
+        always(
+            &script,
+            "repository/commits/aaaaaaa0",
+            200,
+            &format!(r#"{{"id":"{A}"}}"#),
+        );
+        always(
+            &script,
+            &format!("sha={A}"),
+            200,
+            &list(&[pipeline(10, A, "failed")]),
+        );
+        always(
+            &script,
+            TICK,
+            200,
+            &list(&[pipeline(20, B, "success"), pipeline(10, A, "failed")]),
+        );
+        for id in [10, 20] {
+            empty_detail(&script, id);
+        }
+        let mut poller = poller(&script);
+
+        let plan = Plan {
+            sha: "aaaaaaa0".into(),
+            ..plan()
+        };
+        let ended = wait(&mut poller, &plan).await;
+        let Ended::Verdict(row) = &ended else {
+            panic!("{ended:?}");
+        };
+        assert_eq!(row.id, 10);
+    }
+
+    /// A fresh push has no pipeline for a while. Waited for, not given up on.
+    #[tokio::test(start_paused = true)]
+    async fn a_pipeline_not_created_yet_is_waited_for() {
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, LOOKUP, 200, "[]");
+        script.reply(TICK, 200, "[]");
+        script.reply(TICK, 200, "[]");
+        always(&script, TICK, 200, &list(&[pipeline(10, A, "success")]));
+        empty_detail(&script, 10);
+        let mut poller = poller(&script);
+
+        let ended = wait(&mut poller, &plan()).await;
+        let Ended::Verdict(row) = &ended else {
+            panic!("{ended:?}");
+        };
+        assert_eq!(row.id, 10);
+        assert_eq!(ended.code(), crate::exit::OK);
+        assert_eq!(
+            requests_to(&script, LOOKUP),
+            2,
+            "looked up while it had none"
+        );
+    }
+
+    /// ⛔ ...but not forever: still none after the grace is an answer, `unknown`.
+    #[tokio::test(start_paused = true)]
+    async fn a_pipeline_never_created_ends_after_the_grace() {
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, LOOKUP, 200, "[]");
+        always(&script, TICK, 200, "[]");
+        let mut poller = poller(&script);
+
+        let started = tokio::time::Instant::now();
+        let ended = wait(&mut poller, &plan()).await;
+        assert!(matches!(ended, Ended::NoPipeline), "{ended:?}");
+        assert_eq!(ended.code(), crate::exit::UNKNOWN);
+        let waited = started.elapsed();
+        assert!(
+            waited >= Duration::from_secs(600),
+            "not before the grace: {waited:?}"
+        );
+        assert!(
+            waited < Duration::from_secs(700),
+            "but soon after it: {waited:?}"
+        );
+    }
+
+    /// ⛔ A refused token or a missing project is an answer at once, with the
+    /// code `check` exits with for the same tick, and one request sent.
+    #[tokio::test(start_paused = true)]
+    async fn a_401_or_404_ends_at_once_with_checks_code() {
+        for (status, body) in [
+            (401, r#"{"message":"401 Unauthorized"}"#),
+            (404, r#"{"message":"404 Project Not Found"}"#),
+        ] {
+            let script = Arc::new(ScriptTransport::new());
+            always(&script, TICK, status, body);
+            let mut check = poller(&script);
+            let check_code = crate::exit_code(&check.tick().await.snapshot);
+
+            let script = Arc::new(ScriptTransport::new());
+            always(&script, TICK, status, body);
+            let mut poller = poller(&script);
+            let ended = wait(&mut poller, &plan()).await;
+            let Ended::Refused(why) = &ended else {
+                panic!("{status}: {ended:?}");
+            };
+            assert!(why.starts_with("account gitlab: "), "{why}");
+            assert!(why.ends_with(&format!("(HTTP {status})")), "{why}");
+            assert_eq!(ended.code(), check_code, "{status}");
+            assert_eq!(ended.code(), crate::exit::UNKNOWN, "{status}");
+            assert_eq!(script.requests().len(), 1, "{status}: no retry");
+        }
+    }
+
+    /// A 503 is weather: retried on the poller's backoff, then answered.
+    ///
+    /// ⚠️ On the real clock, with a one-second interval: the backoff gate
+    /// reads the wall clock (it must survive a laptop's sleep), so a paused
+    /// tokio clock would spin through deferred ticks until real time caught up.
+    #[tokio::test]
+    async fn a_503_is_retried() {
+        let script = Arc::new(ScriptTransport::new());
+        script.reply(TICK, 503, "");
+        always(&script, TICK, 200, &list(&[pipeline(10, A, "success")]));
+        empty_detail(&script, 10);
+        let mut poller = poller_with(&script, "poll = { live_secs = 1, idle_secs = 1 }");
+
+        let ended = wait(&mut poller, &plan()).await;
+        assert!(matches!(ended, Ended::Verdict(_)), "{ended:?}");
+        assert_eq!(requests_to(&script, TICK), 2);
+    }
+
+    #[test]
+    fn a_grace_reads_as_it_was_written() {
+        assert_eq!(human(Duration::from_secs(600)), "10m");
+        assert_eq!(human(Duration::from_secs(5400)), "1h30m");
+        assert_eq!(human(Duration::from_secs(90)), "1m30s");
+        assert_eq!(human(Duration::from_secs(5)), "5s");
+    }
 
     #[test]
     fn durations_parse_as_a_person_writes_them() {
