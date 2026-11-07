@@ -373,9 +373,8 @@ impl GitHubClient {
     ///
     /// ⚠️ Nothing here is invented. There is no token id (the user's own id
     /// stands in, so the field can be filled at all), no token name, no
-    /// `active` flag, and no expiry: GitHub does send an expiry header on some
-    /// credentials, but reporting it would need a second header field and the
-    /// wizard does not draw it yet.
+    /// `active` flag, and no expiry here: the expiry header GitHub sends is
+    /// read on every response by token health instead ([`crate::health`]).
     pub async fn token_self(&self) -> Result<TokenInfo, ClientError> {
         let (user, meta) = self.get_json::<wire::User>("/user").await?;
         let Some(raw) = meta.oauth_scopes else {
@@ -554,6 +553,11 @@ impl GitHubClient {
             parts.push(format!("event={}", urlencoding::encode(event)));
         }
         parts.push(format!("head_sha={}", urlencoding::encode(&row.sha)));
+        // Held to the same actor as the list that made the row, or a `mine`
+        // group would gain other people's runs as bridges (cubic, #66).
+        if let Some(user) = &query.user {
+            parts.push(format!("actor={}", urlencoding::encode(user)));
+        }
         parts.push("exclude_pull_requests=true".to_string());
         parts.push("per_page=100".to_string());
         parts.push("page=1".to_string());
@@ -736,6 +740,9 @@ fn list_path(repo: &str, query: &ListQuery) -> String {
     }
     if let Some(sha) = &query.sha {
         parts.push(format!("head_sha={}", urlencoding::encode(sha)));
+    }
+    if let Some(user) = &query.user {
+        parts.push(format!("actor={}", urlencoding::encode(user)));
     }
     // Drops the `pull_requests` array, which is never read and was 45
     // entries on one sampled run.
@@ -929,6 +936,20 @@ impl CiClient for GitHubClient {
 
     async fn token_self(&self) -> Result<TokenInfo, ClientError> {
         GitHubClient::token_self(self).await
+    }
+
+    async fn owner(&self) -> Result<String, ClientError> {
+        self.conn
+            .owner(|| async { self.current_user().await.map(|u| u.username) })
+            .await
+    }
+
+    fn credential(&self) -> crate::health::Observed {
+        self.conn.probe().get()
+    }
+
+    async fn read_token_expiry(&self) -> Result<(), ClientError> {
+        self.current_user().await.map(|_| ())
     }
 
     async fn list_projects(

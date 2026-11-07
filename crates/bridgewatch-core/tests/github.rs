@@ -148,6 +148,7 @@ impl Transport for Scripted {
             etag: Some("W/\"a-weak-validator\"".to_string()),
             link: reply.link,
             oauth_scopes: reply.oauth_scopes,
+            token_expiration: None,
             location: None,
             truncated: false,
         })

@@ -11,6 +11,7 @@
   import DebugPane from "./DebugPane.svelte";
   import ErrorStrip from "./ErrorStrip.svelte";
   import NotificationsPaused from "./NotificationsPaused.svelte";
+  import TokenHealthStrip from "./TokenHealthStrip.svelte";
   import { UpdatedAgo, createExpansionStore, type ExpansionStore } from "./jobs";
   import WatchSection from "./WatchSection.svelte";
 
@@ -127,6 +128,8 @@
   {/if}
 
   <ErrorStrip errors={snapshot.errors} {status} {onfix} {onsetup} />
+
+  <TokenHealthStrip tokens={snapshot.tokens ?? []} {onsettings} />
 
   <NotificationsPaused paused={status?.notificationsPaused ?? null} {onresume} />
 

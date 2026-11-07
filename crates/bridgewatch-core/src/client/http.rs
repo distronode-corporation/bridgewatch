@@ -143,6 +143,12 @@ pub struct HttpResponse {
     /// "there is nothing here to tell you" against "this token was granted no
     /// scopes", so this is `Option<String>` and never defaulted to `""`.
     pub oauth_scopes: Option<String>,
+    /// `github-authentication-token-expiration`, exactly as received: when
+    /// the GitHub token that sent the request stops working (a personal
+    /// access token with an expiry). Read by token health
+    /// ([`crate::health`]); absent on GitLab and on a token that does not
+    /// expire.
+    pub token_expiration: Option<String>,
     /// `location`, exactly as received. Read only by a job log's one explicit
     /// redirect follow ([`super::log::follow`]); every other 3xx is refused as
     /// it always was.
@@ -168,6 +174,7 @@ impl HttpResponse {
             etag: None,
             link: None,
             oauth_scopes: None,
+            token_expiration: None,
             location: None,
             truncated: false,
         }
@@ -180,6 +187,20 @@ impl HttpResponse {
 pub trait Transport: Send + Sync + std::fmt::Debug {
     /// Execute one request.
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ClientError>;
+
+    /// What a sign-in's transport knows of its sign-in, without asking
+    /// anybody: `None` for every transport that does not sign in. A wrapper
+    /// passes its inner transport's answer on.
+    fn sign_in(&self) -> Option<crate::health::SignInNote> {
+        None
+    }
+
+    /// Who is signed in, reading the stored sign-in when it has not been
+    /// read yet. No request. `None` when this is not a sign-in, or the
+    /// sign-in does not say.
+    async fn signed_in_login(&self) -> Option<String> {
+        None
+    }
 }
 
 /// One completed request, as shown in the debug pane.
@@ -433,6 +454,12 @@ pub(crate) struct Conn {
     ring: RequestRing,
     /// At most [`MAX_IN_FLIGHT`] of this account's requests at a time.
     in_flight: InFlight,
+    /// Which provider answers, for reading a refusal.
+    provider: crate::config::Provider,
+    /// What every request has shown of the credential: [`crate::health`].
+    probe: crate::health::CredentialProbe,
+    /// Who the credential belongs to, once asked: see [`Self::owner`].
+    owner: Arc<tokio::sync::OnceCell<String>>,
 }
 
 impl std::fmt::Debug for Conn {
@@ -463,6 +490,83 @@ impl Conn {
             transport,
             ring,
             in_flight: InFlight::new(),
+            provider: account.provider,
+            probe: crate::health::CredentialProbe::default(),
+            owner: Arc::new(tokio::sync::OnceCell::new()),
+        }
+    }
+
+    /// What the requests sent so far have shown of the credential.
+    pub(crate) fn probe(&self) -> &crate::health::CredentialProbe {
+        &self.probe
+    }
+
+    /// The login the credential belongs to, asked ONCE per client: the
+    /// sign-in's own (no request), else `ask` (one `GET /user`). A failed
+    /// `ask` is not remembered, so the next caller asks again.
+    pub(crate) async fn owner<F, Fut>(&self, ask: F) -> Result<String, ClientError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<String, ClientError>>,
+    {
+        self.owner
+            .get_or_try_init(|| async {
+                if let Some(login) = self.transport.signed_in_login().await {
+                    return Ok(login);
+                }
+                ask().await
+            })
+            .await
+            .cloned()
+    }
+
+    /// Record what one answer says about the credential.
+    ///
+    /// ⛔ A sign-in's own end is the expiry that counts there
+    /// ([`crate::health::SignInNote::ends_at`]): its refresh token's expiry,
+    /// or for a sign-in without a refresh token its access token's. GitHub's
+    /// expiry header is NOT read on one: a GitHub App's
+    /// access token states its eight hours on every response, renews itself,
+    /// and would read as "expires within 24 h" all day.
+    fn observe(&self, result: &Result<HttpResponse, ClientError>) {
+        use crate::health::{Expiry, ExpiryOf, Refusal};
+        let sign_in = self.transport.sign_in();
+        self.probe.sign_in(sign_in.is_some());
+        if let Some(note) = &sign_in {
+            match note.ends_at {
+                Some(at) => self.probe.expires(Expiry {
+                    at,
+                    of: ExpiryOf::SignIn,
+                }),
+                None => self.probe.never_expires(),
+            }
+        }
+        // The header first, on a refusal too: a token first seen after its
+        // stated end is then "expired", not "invalid" (cubic, #66).
+        if sign_in.is_none()
+            && let Ok(r) = result
+            && let Some(at) = r
+                .token_expiration
+                .as_deref()
+                .and_then(crate::health::parse_github_expiration)
+            && (at - chrono::Utc::now().timestamp()).abs() > crate::health::HEADER_NOW_SLACK_SECS
+        {
+            self.probe.expires(Expiry {
+                at,
+                of: ExpiryOf::Token,
+            });
+        }
+        match result {
+            Ok(r) if (200..300).contains(&r.status) || r.status == 304 => self.probe.accepted(),
+            Ok(r) if r.status == 401 => self.probe.refused(match self.provider {
+                crate::config::Provider::Gitlab => crate::health::gitlab_refusal(&r.body),
+                crate::config::Provider::Github => Refusal::Invalid,
+            }),
+            Err(ClientError::SignInAgain {
+                never_signed_in: false,
+                ..
+            }) => self.probe.refused(Refusal::SignInEnded),
+            _ => {}
         }
     }
 
@@ -511,10 +615,15 @@ impl Conn {
     ) -> Result<HttpResponse, ClientError> {
         let method = request.method;
         let path = request.path.clone();
+        // A signed storage URL carries no credential, so says nothing of it.
+        let anonymous = request.anonymous;
         // Before the clock starts: `ms` is the request, not the queue.
         let _slot = self.in_flight.acquire().await;
         let started = std::time::Instant::now();
         let result = self.transport.execute(request).await;
+        if !anonymous {
+            self.observe(&result);
+        }
         let ms = started.elapsed().as_millis() as u64;
         match result {
             Ok(response) => {
@@ -666,6 +775,8 @@ impl Transport for ReqwestTransport {
         // different answer from a fine-grained token that sends no header at
         // all. See the field's documentation.
         let oauth_scopes = header("x-oauth-scopes");
+        let token_expiration =
+            header("github-authentication-token-expiration").filter(|s| !s.is_empty());
         let location = header("location").filter(|s| !s.is_empty());
 
         let (body, truncated) = match request.tail_bytes {
@@ -709,6 +820,7 @@ impl Transport for ReqwestTransport {
             etag,
             link,
             oauth_scopes,
+            token_expiration,
             location,
             truncated,
         })

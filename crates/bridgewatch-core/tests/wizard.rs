@@ -97,6 +97,7 @@ impl Transport for Routed {
             etag: None,
             link: None,
             oauth_scopes: self.oauth_scopes.lock().unwrap().clone(),
+            token_expiration: None,
             location: None,
             truncated: false,
         })

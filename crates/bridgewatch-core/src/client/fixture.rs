@@ -166,6 +166,7 @@ impl Transport for FixtureTransport {
             // Nor does it have a credential, so it cannot say what one was
             // granted: a fixture must not let `token_self` look answered.
             oauth_scopes: None,
+            token_expiration: None,
             location: None,
             truncated: false,
         })

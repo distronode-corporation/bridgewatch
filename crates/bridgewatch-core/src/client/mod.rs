@@ -155,6 +155,34 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
     /// them. A failure here is an answer ("kind unknown"), not an outage.
     async fn token_self(&self) -> Result<TokenInfo, ClientError>;
 
+    /// The login this client's credential belongs to: the signed-in user, or
+    /// the owner of the token. What a `mine = true` watch filters on (F3).
+    ///
+    /// ⛔ A successful answer is remembered per client (GitLab and GitHub keep
+    /// it on their connection), so a `mine` watch costs one `GET /user` for
+    /// the life of the poller, and none when the sign-in already names the
+    /// user. A failed lookup is not remembered: it is asked again on a later
+    /// tick (the poller asks once per account per tick). The default asks
+    /// every time, for a client that keeps nothing.
+    async fn owner(&self) -> Result<String, ClientError> {
+        self.current_user().await.map(|u| u.username)
+    }
+
+    /// What the requests this client has sent show of its credential: a
+    /// stated expiry, and the last refusal. No request. See [`crate::health`].
+    fn credential(&self) -> crate::health::Observed {
+        crate::health::Observed::default()
+    }
+
+    /// Ask for the credential's expiry where the provider states it only on
+    /// request: GitLab's `GET /personal_access_tokens/self`, and GitHub's
+    /// `GET /user` (whose answer carries the expiry header). The answer lands
+    /// in [`Self::credential`]. The poller asks this of a GitLab token once;
+    /// a GitHub poll carries the header on every response anyway.
+    async fn read_token_expiry(&self) -> Result<(), ClientError> {
+        Ok(())
+    }
+
     /// Projects this token can pick from, and whether the listing was cut
     /// short.
     async fn list_projects(

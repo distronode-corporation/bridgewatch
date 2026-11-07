@@ -791,6 +791,24 @@ token = { command = ["pass", "gitlab/pat"] }                            # a prog
 
 A token source table names exactly one source; a table naming two is refused.
 
+### Token health
+
+bridgewatch tells four things apart, per account: a token that **expires** soon, one that
+**has expired**, one that was **revoked**, and one the server does not accept (**invalid**).
+Each shows in a strip at the top of the popover for as long as it is true, and is one
+notification, never repeated. An expiry warns twice: 72 hours before, and 24 hours before. An
+expiry that is first seen inside 24 hours gets only the 24-hour warning.
+
+| Credential | Where the expiry comes from | What it costs |
+| --- | --- | --- |
+| GitLab personal, project or group access token | `expires_at` from `GET /personal_access_tokens/self` (00:00 UTC on that date) | one request per token each time a poller starts (the app starting or reloading its configuration, or a CLI command such as `check`, `watch` or `wait`), asked again only after a rate limit, a server error or a network failure (DNS, TLS, a timeout or a reset connection), and only on a tick where that account polls; plus one expiry lookup per bound own token on every `bridgewatch auth status` run |
+| GitHub personal access token with an expiry | the `github-authentication-token-expiration` response header | nothing: it is on every response |
+| A sign-in | the refresh token's expiry, stored with the sign-in; for a sign-in that cannot renew itself, the access token's | nothing |
+
+GitLab's 401 says whether a token was revoked or has expired. GitHub's says only "Bad
+credentials", so a GitHub token reads as expired when it is refused past a known expiry,
+and as invalid otherwise. `bridgewatch auth status` shows each own token's expiry.
+
 ### Tokens stay with their server
 
 A token you paste into Settings or the wizard is stored with the server it was saved for:
@@ -936,6 +954,7 @@ Accounts of both providers can sit in one file:
 | `group` | GitHub only. `run` (one workflow run is one row) or `commit` (every run of one push is one row, each run a bridge) [`run`]. See [GitHub Actions](#github-actions). |
 | `fan_out_secs` | GitHub only, with `group = "commit"`. Runs of one commit, event and branch created within this many seconds of the group's newest run are one row [90]. |
 | `expect` | GitHub only, with `group = "commit"`. Workflow file names every group must hold; one with no run is a dead bridge once the group has settled and its window has passed. See [`expect`](#expect-a-workflow-that-never-started) [`[]`]. |
+| `mine` | Only the pipelines or runs you started: the signed-in user, or the token's owner. GitLab is asked with `username=`, GitHub with `actor=`; who you are is asked once [false]. |
 | `role` | `primary` (drives the icon, may notify) or `secondary` (rows only) [`primary`]. |
 | `show.max_rows` | Most rows this watch shows [5]. |
 | `show.settled` | Settled pipelines kept below the unsettled ones [1]. A `skipped` pipeline ran nothing, is not listed and does not count. |
