@@ -632,8 +632,10 @@ line**, and clicking it opens the failed job's page (`notify.click`, default
   failure"), from the jobs list bridgewatch already fetches. It costs nothing.
 - **GitHub:** the first `failure` annotation of the job's check run, as `file:line:
   message` (a compiler error, a failing assertion), else GitHub's own "Process completed
-  with exit code N". Only a failed run is asked, only for its first failed job, and only
-  once per job: one request per failed run, none for a passing one, none on later polls.
+  with exit code N". Only a failed run is asked, only for its first blocking failure
+  (after `[watches.jobs]`), and only once per job: one request per failed run, none for a
+  passing one, none on later polls. A rate limit or a server error is asked again on the
+  next poll.
   A fine-grained token needs the **Checks: read** permission for it; without it the line
   is left out and everything else works.
 

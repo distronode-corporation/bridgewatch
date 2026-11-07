@@ -70,8 +70,8 @@ body line with a bracket.
   ("script failure"), or on GitHub the first failure annotation of the job's check run
   (`src/parser.rs:142: assertion failed`). It is the second line of a failure
   notification (`{{failure_line}}` in templates), and it is shown under the failed job in
-  the popover. On GitHub it costs one request per failed run, for its first failed job,
-  and nothing for a passing run or on later polls. A fine-grained token needs Checks: read
+  the popover. On GitHub it costs one request per failed run, for its first blocking
+  failure under `[watches.jobs]`, and nothing for a passing run or on later polls. A fine-grained token needs Checks: read
   for it; without it the line is left out and nothing else changes.
 - **Copy failure as Markdown** on a failed job in the popover: the job, where it ran, the
   first failing line in a code block, and the link.

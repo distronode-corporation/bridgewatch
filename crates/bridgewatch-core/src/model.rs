@@ -116,8 +116,8 @@ pub struct Job {
     pub failure_reason: Option<String>,
     /// GitHub's first failure annotation of the job's check run (the
     /// `file:line` and message a failing step reported), when it was fetched.
-    /// Only a failed run's first failed job is ever asked; see
-    /// `GitHubClient::pipeline_jobs`.
+    /// Only a failed pipeline's first blocking failure is ever asked about;
+    /// see `GitHubClient::failure_annotation` and the poller's `annotate`.
     ///
     /// ⚠️ Skipped when absent, so a GitLab recording, which never has one,
     /// writes exactly the bytes it wrote before this field existed.

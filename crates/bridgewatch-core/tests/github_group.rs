@@ -105,7 +105,7 @@ impl Transport for Routed {
         self.seen.lock().unwrap().push(path.clone());
         let reply = {
             let mut routes = self.routes.lock().unwrap();
-            // A failed run's first failed job has its annotations asked for
+            // A failed run's first blocking failure has its annotations asked for
             // (F2). Unless a test routes them, they are an empty list: what
             // the group tests pin is the runs and the jobs, and an empty list
             // changes no verdict. Still recorded in `seen`.
@@ -426,7 +426,7 @@ async fn a_push_that_fans_out_into_three_workflows_is_one_row_that_deployed_with
     assert!(!row.live);
 
     // One list, and one /jobs per run. Nothing for the group itself, and one
-    // annotations call for the failed run's first failed job (F2).
+    // annotations call for the failed run's first blocking failure (F2).
     let mut seen = transport.seen();
     seen.sort();
     let mut want = vec![

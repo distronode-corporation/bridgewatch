@@ -622,9 +622,6 @@ async fn jobs_paginate_by_following_the_link_header() {
             "<https://api.github.com/repositories/1374862400/actions/runs/4001/jobs?page=1>; rel=\"prev\", \
              <https://api.github.com/repositories/1374862400/actions/runs/4001/jobs?page=1>; rel=\"first\"",
         ),
-        // The failed job on page 2 is the run's first failed job, so its
-        // annotations are asked for once every page is in.
-        Reply::ok("[]"),
     ]);
     let (client, _) = github_client(transport.clone());
 
@@ -633,15 +630,11 @@ async fn jobs_paginate_by_following_the_link_header() {
     assert_eq!(jobs.len(), 2, "both pages");
     assert_eq!(jobs[1].name, "publish");
     let paths = transport.paths();
-    assert_eq!(paths.len(), 3);
+    assert_eq!(paths.len(), 2);
     assert_eq!(
         paths[1],
         "/repositories/1374862400/actions/runs/4001/jobs?filter=latest&per_page=100&page=2",
         "the rewritten URL is used exactly as it was given: {paths:?}"
-    );
-    assert_eq!(
-        paths[2],
-        "/repos/acme-corp/monorepo/check-runs/9002/annotations?per_page=50"
     );
 }
 
@@ -1474,5 +1467,100 @@ async fn an_unreadable_annotation_list_costs_the_line_and_never_the_verdict() {
             .parent_jobs
             .iter()
             .any(|j| j.failure.is_some())
+    );
+}
+
+/// A completed version of the annotation fixtures: the run and every job
+/// settled, so the poller's cache would never ask about the run again.
+fn settled(body: &str) -> String {
+    body.replace("\"in_progress\"", "\"completed\"")
+        .replace("\"conclusion\": null", "\"conclusion\": \"success\"")
+}
+
+/// ⛔ Seer, #64: a rate limit on the annotations of a SETTLED run used to be
+/// swallowed, the detail cached as complete, and the run never asked about
+/// again, so its first failing line was missing for good. The answer that says
+/// "later" now stores the detail as incomplete: the next tick fetches the run
+/// again and gets the line. No error is shown for it.
+#[tokio::test]
+async fn a_settled_runs_annotations_that_were_rate_limited_are_asked_for_again() {
+    let transport = Scripted::new(vec![
+        Reply::ok(&settled(&gh_fixture("gh-runs.json"))),
+        Reply::ok(&settled(&gh_fixture("gh-jobs.json"))),
+        Reply::status(429).retry_after(1),
+        Reply::ok(&settled(&gh_fixture("gh-runs.json"))),
+        Reply::ok(&settled(&gh_fixture("gh-jobs.json"))),
+        Reply::ok(&gh_fixture("gh-annotations.json")),
+        Reply::ok(&settled(&gh_fixture("gh-runs.json"))),
+    ]);
+    let config = github_config("");
+    let mut poller = github_poller(&config, transport.clone());
+
+    let first = poller.tick().await.snapshot;
+    assert!(
+        first.errors.is_empty(),
+        "a nicety is not an error: {:?}",
+        first.errors
+    );
+    assert!(
+        first.watches[0].error.is_none(),
+        "{:?}",
+        first.watches[0].error
+    );
+    let second = poller.tick().await.snapshot;
+    let third = poller.tick().await.snapshot;
+
+    let paths = transport.paths();
+    assert_eq!(
+        annotation_requests(&paths),
+        [ANNOTATIONS_OF_9102, ANNOTATIONS_OF_9102],
+        "{paths:?}"
+    );
+    assert_eq!(
+        paths.len(),
+        7,
+        "the third tick is served from the cache: {paths:?}"
+    );
+    for snapshot in [&second, &third] {
+        let test = snapshot.watches[0].rows[0]
+            .parent_jobs
+            .iter()
+            .find(|j| j.name == "test")
+            .unwrap();
+        assert_eq!(
+            test.failure.as_deref(),
+            Some("src/parser.rs:142: assertion `left == right` failed")
+        );
+    }
+}
+
+/// ⛔ Seer, #64: the job asked about is the first BLOCKING failure under the
+/// watch's `[watches.jobs]` rules, which only the poller knows. With `test`
+/// ignored, `lint` is the failure the notification names, so `lint` is the
+/// job whose annotations are read, and `test` is never asked about.
+#[tokio::test]
+async fn the_job_asked_about_is_the_first_blocking_failure_under_the_rules() {
+    let transport = Scripted::new(vec![
+        Reply::ok(&gh_fixture("gh-runs.json")),
+        Reply::ok(&gh_fixture("gh-jobs.json")),
+        Reply::ok(&gh_fixture("gh-annotations.json")),
+    ]);
+    let config = github_config("[watches.jobs]\ntest = \"ignore\"");
+    let mut poller = github_poller(&config, transport.clone());
+
+    let snapshot = poller.tick().await.snapshot;
+
+    let paths = transport.paths();
+    assert_eq!(
+        annotation_requests(&paths),
+        ["/repos/acme-corp/monorepo/check-runs/9103/annotations?per_page=50"],
+        "{paths:?}"
+    );
+    let row = &snapshot.watches[0].rows[0];
+    assert_eq!(row.failures, ["lint"]);
+    assert_eq!(
+        bridgewatch_core::notify::first_failure_line(row).as_deref(),
+        Some("src/parser.rs:142: assertion `left == right` failed"),
+        "the line of the failure the notification names"
     );
 }
