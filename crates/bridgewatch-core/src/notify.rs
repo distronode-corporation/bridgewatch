@@ -344,15 +344,26 @@ fn is_passing_state(state: IconState) -> bool {
     matches!(state, IconState::Deployed | IconState::SucceededNoDeploy)
 }
 
-/// The newest pipeline (by id) that has settled to a pass or a fail.
+/// The newest pipeline (by id) that has settled to a pass or a fail, unless
+/// a newer one is still running.
 ///
-/// Running, parked, cancelled and unknown rows say nothing about whether the
+/// Parked, cancelled and settled unknown rows say nothing about whether the
 /// watch is red: a cancelled push neither breaks nor fixes it.
+///
+/// ⛔ A RUNNING row newer than every settled one means "not decided yet", not
+/// "look further back". A failing pipeline retried in place is running again
+/// under its own id, and skipping it found the green pipeline before the
+/// failure, which said "fixed again" for a pipeline that fixed nothing and
+/// cleared the failing flag, so the retry's real fix was never announced
+/// (Seer, #58). The failing state is left alone until the newest settles.
 fn newest_settled(view: &WatchView) -> Option<&PipelineView> {
-    view.rows
+    let newest = view
+        .rows
         .iter()
-        .filter(|r| !r.live && (is_failing_state(r.state) || is_passing_state(r.state)))
-        .max_by_key(|r| r.id)
+        .filter(|r| !matches!(r.state, IconState::Canceled | IconState::ParkedGate))
+        .filter(|r| r.live || is_failing_state(r.state) || is_passing_state(r.state))
+        .max_by_key(|r| r.id)?;
+    (!newest.live).then_some(newest)
 }
 
 /// Build the notifications one watch's rows imply, recording each in the ledger.
