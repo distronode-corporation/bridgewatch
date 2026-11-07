@@ -15,7 +15,7 @@ use bridgewatch_core::poll::Poller;
 use bridgewatch_core::token::SystemTokenProvider;
 use bridgewatch_core::verdict::{IconState, Snapshot};
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_notification::{ActionPerformed, NotificationExt};
 
 use crate::config::Validation;
 use crate::state::AppState;
@@ -108,6 +108,7 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             set_icon(&app, IconState::Unknown);
             publish(&app, &state, Snapshot::empty());
             state.set_clients(Default::default());
+            state.set_refused(Vec::new());
             state.reload.notified().await;
             continue;
         };
@@ -118,15 +119,21 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
         // `setup`: the core's README asks for resolution to happen in response
         // to a user action having started the app, never on a timer with
         // nobody watching.
-        let mut poller = match Poller::from_config(&config, &SystemTokenProvider) {
+        // ⛔ Per account (D4): one account whose token is missing or bound to
+        // another server fails ITS watches, with the reason on them, and the
+        // others keep polling. Only a poller that cannot be built at all
+        // (a transport, the configuration) lands in the arm below.
+        let mut poller = match Poller::from_config_per_account(&config, &SystemTokenProvider) {
             Ok(p) => {
                 failed_builds = 0;
                 state.set_clients(p.clients().clone());
+                state.set_refused(p.refused_accounts().to_vec());
                 p.with_ledger(NotifyLedger::default_path())
                     .with_eta_history(EtaHistory::default_path())
             }
             Err(e) => {
                 state.set_clients(Default::default());
+                state.set_refused(Vec::new());
                 let delay = build_retry_delay(failed_builds);
                 failed_builds = failed_builds.saturating_add(1);
                 tracing::error!(error = %e, retry_in = ?delay, "poller could not be built");
@@ -146,21 +153,70 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             }
         };
 
+        // ⛔ A refused account is retried IN PLACE (`Poller::retry_refused`),
+        // never by rebuilding the poller: a rebuild re-created every watch's
+        // state, so each attempt wiped the healthy accounts' backoff, cache
+        // and last view. Some causes pass on their own (a keychain that was
+        // locked, a Secret Service not up yet at login, a command that timed
+        // out), so the attempts follow `build_retry_delay` while any account
+        // is refused, and a token save or a Refresh retries at once.
+        let mut retries: u32 = 0;
+        let mut next_retry = tokio::time::Instant::now() + build_retry_delay(retries);
+
         loop {
             let tick = poller.tick().await;
 
             set_icon(&app, tick.snapshot.icon_state);
             state.record_tick(tick.next_interval);
             publish(&app, &state, tick.snapshot);
-            deliver(&app, &tick.notifications);
+            // A pause, or a burst folded into one: see `quiet`.
+            let outgoing = state.with_quiet(|q| q.outgoing(chrono::Utc::now(), tick.notifications));
+            deliver(&app, &outgoing);
+            // A timed pause that ran out says so in the menu by the next tick.
+            crate::tray::sync_pause(&app);
 
-            tokio::select! {
-                _ = tokio::time::sleep(tick.next_interval) => {}
-                _ = state.poll_now.notified() => {}
-                _ = state.reload.notified() => break,
+            let tick_at = tokio::time::Instant::now() + tick.next_interval;
+            let reload = loop {
+                let refused = !poller.refused_accounts().is_empty();
+                tokio::select! {
+                    _ = tokio::time::sleep_until(tick_at) => break false,
+                    _ = state.poll_now.notified() => break false,
+                    _ = state.reload.notified() => break true,
+                    _ = state.retry_refused.notified() => {
+                        // A recovery ticks at once; nothing recovered waits on.
+                        if retry_refused(&mut poller, &state) {
+                            break false;
+                        }
+                    }
+                    _ = tokio::time::sleep_until(next_retry), if refused => {
+                        retries = retries.saturating_add(1);
+                        next_retry = tokio::time::Instant::now() + build_retry_delay(retries);
+                        if retry_refused(&mut poller, &state) {
+                            break false;
+                        }
+                    }
+                }
+            };
+            if reload {
+                break;
             }
         }
     }
+}
+
+/// One in-place retry of the poller's refused accounts, and the shell's view
+/// of the result. Returns whether any account recovered.
+///
+/// ⚠ Blocking for as long as the credential reads take, like building the
+/// poller on this task is.
+fn retry_refused(poller: &mut Poller, state: &AppState) -> bool {
+    if poller.refused_accounts().is_empty() {
+        return false;
+    }
+    let recovered = poller.retry_refused();
+    state.set_clients(poller.clients().clone());
+    state.set_refused(poller.refused_accounts().to_vec());
+    !recovered.is_empty()
 }
 
 /// The configuration's own complaints, as error-strip lines. Empty when the
@@ -372,28 +428,67 @@ impl IconMemo {
     }
 }
 
+/// The key a notification's click target travels under, in the plugin's
+/// `extra` payload, which every desktop platform hands back on a click.
+pub const CLICK_URL_KEY: &str = "bridgewatch_url";
+
 /// Hand a tick's notifications to the OS.
 ///
 /// The core has already decided what is worth interrupting somebody over, has
 /// rendered the templates and has deduplicated against its ledger. There is
 /// nothing to decide here; only to deliver.
+///
+/// The click target (`n.url`, from the watch's `notify.click`) rides in the
+/// notification's `extra` and comes back to [`on_notification_action`] when
+/// the notification is clicked. `tauri-plugin-notification` reports a click on
+/// desktop since 2.6.0 (`Notification::on_action`, action `tap`): on Linux and
+/// the BSDs through the D-Bus `default` action, on macOS and Windows through
+/// notify-rust's `wait_for_response`. ⚠️ Windows reports it only while the
+/// toast is on screen, not from the Action Center, and a Linux notification
+/// server that does not offer actions (`notify-send --action` support) reports
+/// nothing; in both cases the same link is one click away in the popover.
 fn deliver(app: &AppHandle, notifications: &[Notification]) {
     for n in notifications {
-        // ⛔ `n.url` cannot be attached, and this is measured rather than
-        // assumed: `tauri-plugin-notification` 2.4.0's DESKTOP `show()`
-        // (src/desktop.rs) forwards exactly four fields to notify-rust —
-        // title, body, icon, sound — and silently drops everything else the
-        // builder accepts (`extra`, `action_type_id`, `attachment`, `group`).
-        // There is no click callback on the desktop path at all, on macOS or
-        // Linux. The link is not lost: it is the same URL the popover's row
-        // links to, which is where a click has to land.
         let mut builder = app.notification().builder().title(&n.title);
         if !n.body.is_empty() {
             builder = builder.body(&n.body);
         }
+        if let Some(url) = &n.url {
+            builder = builder.extra(CLICK_URL_KEY, url);
+        }
         if let Err(e) = builder.show() {
             tracing::warn!(error = %e, watch = %n.watch, "could not show a notification");
         }
+    }
+}
+
+/// The URL a performed notification action should open: the click target
+/// [`deliver`] attached, for a click on the notification itself (`tap`).
+/// Anything else (an action button, which bridgewatch never adds, a
+/// notification without a target, a payload the platform described
+/// differently) opens nothing.
+pub fn click_url_of(performed: &ActionPerformed) -> Option<&str> {
+    if performed.action_id() != "tap" {
+        return None;
+    }
+    performed
+        .notification()?
+        .extra()
+        .get(CLICK_URL_KEY)?
+        .as_str()
+        .filter(|u| !u.trim().is_empty())
+}
+
+/// A notification was clicked: open its target, through the same door as
+/// every other link (`links::open`, which refuses a host that is not a
+/// configured account's). Runs on the plugin's own thread.
+pub fn on_notification_action(app: &AppHandle, performed: &ActionPerformed) {
+    let Some(url) = click_url_of(performed) else {
+        return;
+    };
+    let config = app.state::<Arc<AppState>>().config();
+    if let Err(e) = crate::links::open(app, url, config.as_ref()) {
+        tracing::warn!(error = %e, "a notification's link was not opened");
     }
 }
 
@@ -414,6 +509,79 @@ mod tests {
     use super::*;
     use crate::config::DiagnosticView;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// The payload the plugin's desktop implementation hands an `on_action`
+    /// handler: `{ actionId, inputValue, notification }`, where
+    /// `notification` is the builder's `NotificationData` serialised whole
+    /// (camelCase, `extra` included). Written out by hand from
+    /// `tauri-plugin-notification` 2.8.0's `desktop.rs` (`performed`) and
+    /// `models.rs` (`NotificationData`), because neither is constructible
+    /// outside the crate.
+    fn performed(action: &str, extra: serde_json::Value) -> ActionPerformed {
+        serde_json::from_value(serde_json::json!({
+            "actionId": action,
+            "inputValue": null,
+            "notification": {
+                "id": 1_234_567,
+                "channelId": null,
+                "title": "main-push abc1234: failed",
+                "body": "verify:web\nscript failure",
+                "schedule": null,
+                "largeBody": null,
+                "summary": null,
+                "actionTypeId": null,
+                "group": null,
+                "groupSummary": false,
+                "sound": null,
+                "inboxLines": [],
+                "icon": null,
+                "largeIcon": null,
+                "iconColor": null,
+                "attachments": [],
+                "extra": extra,
+                "ongoing": false,
+                "autoCancel": false,
+                "silent": false,
+                "when": null,
+                "usesChronometer": false,
+                "chronometerCountDown": false,
+            },
+        }))
+        .expect("the plugin's payload decodes")
+    }
+
+    #[test]
+    fn a_click_on_a_notification_opens_the_url_deliver_attached() {
+        let url = "https://gitlab.example.com/acme/app/-/jobs/42";
+        let tapped = performed("tap", serde_json::json!({ CLICK_URL_KEY: url }));
+        assert_eq!(click_url_of(&tapped), Some(url));
+    }
+
+    #[test]
+    fn nothing_opens_for_an_action_button_a_missing_target_or_an_unreadable_payload() {
+        let url = "https://gitlab.example.com/acme/app/-/jobs/42";
+        let button = performed("snooze", serde_json::json!({ CLICK_URL_KEY: url }));
+        assert_eq!(
+            click_url_of(&button),
+            None,
+            "only a click on the notification itself"
+        );
+        let untargeted = performed("tap", serde_json::json!({}));
+        assert_eq!(
+            click_url_of(&untargeted),
+            None,
+            "click = \"none\" attaches nothing"
+        );
+        let blank = performed("tap", serde_json::json!({ CLICK_URL_KEY: "  " }));
+        assert_eq!(click_url_of(&blank), None);
+        let not_a_string = performed("tap", serde_json::json!({ CLICK_URL_KEY: 42 }));
+        assert_eq!(click_url_of(&not_a_string), None);
+        let unreadable: ActionPerformed = serde_json::from_value(serde_json::json!({
+            "actionId": "tap", "inputValue": null, "notification": { "id": "not a number" },
+        }))
+        .unwrap();
+        assert_eq!(click_url_of(&unreadable), None);
+    }
 
     fn broken() -> Validation {
         Validation {

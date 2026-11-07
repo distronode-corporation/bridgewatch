@@ -64,6 +64,13 @@ pub struct JobView {
     /// Seconds the job ran; see [`job_duration`]. Null, never `0`, for a job
     /// that never started, so nothing renders a fake "0s".
     pub duration: Option<f64>,
+    /// The first failing line of a failed job, one line, at most
+    /// [`crate::model::FAILURE_LINE_MAX`] characters: GitHub's first failure
+    /// annotation (`path:line: message`), or GitLab's reason code in words.
+    /// Null for every job that did not fail, and for one nobody said why.
+    /// See [`Job::failure_line`].
+    #[serde(default)]
+    pub failure: Option<String>,
 }
 
 impl JobView {
@@ -79,6 +86,7 @@ impl JobView {
             started_at: job.started_at.clone(),
             finished_at: job.finished_at.clone(),
             duration: job_duration(job),
+            failure: job.failure_line(),
         }
     }
 }
@@ -263,6 +271,11 @@ pub struct Snapshot {
     pub last_poll: chrono::DateTime<chrono::Utc>,
     /// The recent request ring, for the debug pane.
     pub request_log: Vec<RequestLog>,
+    /// Every account whose token or sign-in is about to stop working, or
+    /// has (F3): the popover's token strip. Left out when there is none, so
+    /// a healthy `check --json` reads as it always has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<crate::health::TokenHealth>,
 }
 
 impl Snapshot {
@@ -274,6 +287,7 @@ impl Snapshot {
             errors: Vec::new(),
             last_poll: chrono::Utc::now(),
             request_log: Vec::new(),
+            tokens: Vec::new(),
         }
     }
 

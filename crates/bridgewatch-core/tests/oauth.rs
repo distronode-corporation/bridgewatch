@@ -695,8 +695,8 @@ fn a_wizard_that_signs_in_writes_only_where_the_sign_in_comes_from() {
 #[test]
 fn resolving_an_oauth_source_reads_the_stored_access_token_or_says_to_sign_in() {
     let memory = MemoryStore::new();
-    let source = TokenSource::Oauth(OAuthSource::default());
-    let err = token::resolve(&source, "gl", memory.as_ref()).unwrap_err();
+    let account = oauth_account(Provider::Gitlab, None, Some("gl-app-0001"));
+    let err = token::resolve("gl", &account, memory.as_ref()).unwrap_err();
     assert!(matches!(err, TokenError::NotSignedIn(_)), "{err}");
     assert!(
         err.to_string()
@@ -711,12 +711,215 @@ fn resolving_an_oauth_source_reads_the_stored_access_token_or_says_to_sign_in() 
     )
     .unwrap();
     assert_eq!(
-        token::resolve(&source, "gl", memory.as_ref())
+        token::resolve("gl", &account, memory.as_ref())
             .unwrap()
             .expose(),
         "gl-ACCESS-0001"
     );
 }
+
+/// ⛔ The repro: a sign-in issued by gitlab.com, and the account's
+/// `base_url` since changed to another server. `resolve` used to return the
+/// stored access token whatever the account named, and `fixture record` sent
+/// it there.
+#[test]
+fn resolving_a_sign_in_issued_by_another_instance_is_refused() {
+    let memory = MemoryStore::new();
+    store::save(
+        "gl",
+        &set("gl-ACCESS-A", Some("r"), Some(10), "https://gitlab.com"),
+        memory.as_ref(),
+    )
+    .unwrap();
+    let moved = oauth_account(
+        Provider::Gitlab,
+        Some("https://gitlab.example.com"),
+        Some("gl-app-0001"),
+    );
+    let err = token::resolve("gl", &moved, memory.as_ref()).unwrap_err();
+    assert!(matches!(err, TokenError::SignedInElsewhere { .. }), "{err}");
+    let text = err.to_string();
+    assert!(
+        text.contains("signed in for gitlab.com, not gitlab.example.com"),
+        "{text}"
+    );
+    assert!(
+        text.contains("bridgewatch auth login --account gl"),
+        "{text}"
+    );
+    assert!(!text.contains("gl-ACCESS-A"), "{text}");
+
+    // The same instance, for another application, is refused too.
+    let other_app = oauth_account(Provider::Gitlab, None, Some("someone-elses-app"));
+    let err = token::resolve("gl", &other_app, memory.as_ref()).unwrap_err();
+    assert!(err.to_string().contains("another application"), "{err}");
+}
+
+/// The one rule, as every reader of a sign-in asks it: the origin (scheme,
+/// host and port, normalised) and the application, and nothing else.
+#[test]
+fn a_sign_in_fits_only_its_own_origin_and_application() {
+    let account = oauth_account(
+        Provider::Gitlab,
+        Some("https://gitlab.example.com"),
+        Some("gl-app-0001"),
+    );
+    let issued = |base: &str| set("a", None, None, base);
+    for same in [
+        "https://gitlab.example.com",
+        "https://GitLab.example.com:443/",
+        "https://gitlab.example.com/some/path",
+    ] {
+        assert!(issued(same).fits(&account, "gl-app-0001"), "{same}");
+    }
+    assert_eq!(
+        issued("https://gitlab.com").fit(&account, "gl-app-0001"),
+        oauth::Fit::OtherInstance {
+            issued: "gitlab.com".into(),
+            expected: "gitlab.example.com".into(),
+        }
+    );
+    // Same host, another scheme: the whole origins, or the sentence would say
+    // "signed in for gitlab.example.com, not gitlab.example.com".
+    assert_eq!(
+        issued("http://gitlab.example.com")
+            .fit(&account, "gl-app-0001")
+            .mismatch()
+            .as_deref(),
+        Some("signed in for http://gitlab.example.com, not https://gitlab.example.com")
+    );
+    assert_eq!(
+        issued("https://gitlab.example.com").fit(&account, "another"),
+        oauth::Fit::OtherApplication
+    );
+    // A stored address with a credential in it is refused and never echoed.
+    let why = issued("https://user:hunter2@gitlab.example.com")
+        .fit(&account, "gl-app-0001")
+        .mismatch()
+        .unwrap();
+    assert!(!why.contains("hunter2"), "{why}");
+}
+
+/// ⛔ Fail-closed: when either side has no origin (`origin_of` cannot parse
+/// it), the answer is "another instance", never a match. Two unparsable URLs
+/// are `None == None`, which used to read as the same server.
+#[test]
+fn a_sign_in_with_no_origin_on_either_side_never_fits() {
+    let unparsable = "gitlab.example.com";
+    let account = oauth_account(
+        Provider::Gitlab,
+        Some("https://gitlab.example.com"),
+        Some("gl-app-0001"),
+    );
+
+    // The stored origin is None.
+    let stored_none = set("a", None, None, unparsable);
+    assert!(
+        matches!(
+            stored_none.fit(&account, "gl-app-0001"),
+            oauth::Fit::OtherInstance { .. }
+        ),
+        "{:?}",
+        stored_none.fit(&account, "gl-app-0001")
+    );
+
+    // The account's base_url origin is None.
+    let mut moved = account.clone();
+    moved.base_url = unparsable.into();
+    let issued = set("a", None, None, "https://gitlab.example.com");
+    assert!(
+        matches!(
+            issued.fit(&moved, "gl-app-0001"),
+            oauth::Fit::OtherInstance { .. }
+        ),
+        "{:?}",
+        issued.fit(&moved, "gl-app-0001")
+    );
+
+    // Both None: still not a match.
+    let both = set("a", None, None, unparsable);
+    assert!(!both.fits(&moved, "gl-app-0001"));
+    let memory = MemoryStore::new();
+    store::save("gl", &both, memory.as_ref()).unwrap();
+    let err = token::resolve("gl", &moved, memory.as_ref()).unwrap_err();
+    assert!(matches!(err, TokenError::SignedInElsewhere { .. }), "{err}");
+}
+
+/// The poller's client, over a script, for an account that signs in.
+fn polled_client(
+    account: &Account,
+    memory: &Arc<MemoryStore>,
+    t: &Arc<ScriptTransport>,
+) -> Arc<dyn CiClient> {
+    bridgewatch_core::poll::client_for_account_on(
+        "gl",
+        account,
+        None,
+        memory.clone(),
+        t.clone(),
+        RequestRing::new(8),
+    )
+    .expect("builds")
+}
+
+/// ⛔ And through a client, the A-issued set is not sent to B at all: zero
+/// requests, and a "sign in again" rather than a 401 from B.
+#[tokio::test]
+async fn a_client_for_a_sign_in_issued_by_another_instance_sends_nothing() {
+    let memory = MemoryStore::new();
+    store::save(
+        "gl",
+        &set("gl-ACCESS-A", Some("r"), None, "https://gitlab.com"),
+        memory.as_ref(),
+    )
+    .unwrap();
+    let moved = oauth_account(
+        Provider::Gitlab,
+        Some("https://gitlab.example.com"),
+        Some("gl-app-0001"),
+    );
+    let t = Arc::new(ScriptTransport::new());
+    let err = polled_client(&moved, &memory, &t)
+        .get_pipeline(&ProjectRef::Id(1), 7)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ClientError::SignInAgain { .. }), "{err}");
+    assert!(t.requests().is_empty(), "{:?}", t.requests());
+}
+
+/// A set that fits goes as `Authorization: Bearer`, never `PRIVATE-TOKEN`,
+/// which GitLab refuses for an OAuth token.
+#[tokio::test]
+async fn a_client_for_a_sign_in_sends_it_as_a_bearer_token_to_its_own_instance() {
+    let memory = MemoryStore::new();
+    store::save(
+        "gl",
+        &set("gl-ACCESS-0001", Some("r"), None, "https://gitlab.com"),
+        memory.as_ref(),
+    )
+    .unwrap();
+    let account = oauth_account(Provider::Gitlab, None, Some("gl-app-0001"));
+    let t = Arc::new(ScriptTransport::new());
+    t.reply("/pipelines/7", 200, PIPELINE_7);
+    polled_client(&account, &memory, &t)
+        .get_pipeline(&ProjectRef::Id(1), 7)
+        .await
+        .expect("fetches");
+    let sent = t.requests();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(
+        sent[0].url.starts_with("https://gitlab.com/"),
+        "{}",
+        sent[0].url
+    );
+    assert_eq!(
+        header(&sent[0], "authorization").as_deref(),
+        Some("Bearer gl-ACCESS-0001")
+    );
+    assert_eq!(header(&sent[0], "private-token"), None);
+}
+
+const PIPELINE_7: &str = r#"{"id":7,"iid":1,"project_id":1,"ref":"main","sha":"abc","status":"success","source":"push","web_url":"https://gitlab.com/a/b/-/pipelines/7","created_at":"2026-09-17T18:07:10Z","updated_at":"2026-09-17T18:15:12Z"}"#;
 
 // ---------------------------------------------------------------------------
 // The live credential: refresh ahead of expiry, on a 401, and GitLab rotation

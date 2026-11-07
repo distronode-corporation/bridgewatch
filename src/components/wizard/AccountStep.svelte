@@ -8,9 +8,10 @@
   import FieldMessage from "./FieldMessage.svelte";
   import DeviceSignIn from "../DeviceSignIn.svelte";
   import type { CliTokenDetection, Identity, Provider } from "./api";
-  import { baseUrlOf, type Draft, type StepErrors, type TokenMode } from "./model";
+  import { baseUrlOf, type Draft, type SignInStart, type StepErrors, type TokenMode } from "./model";
   import type { OAuthApi, OAuthAvailability, SignedIn } from "../../lib/oauth";
   import { cliName, providerName } from "../../lib/providers";
+  import { cn } from "$lib/components/ui/utils.js";
 
   interface Props {
     draft: Draft;
@@ -29,10 +30,12 @@
     oauth?: OAuthApi;
     /** Whether sign-in is offered for this instance and client id. */
     availability?: OAuthAvailability | null;
-    /** A sign-in finished. */
-    onSignedIn?: (signed: SignedIn) => void;
+    /** A sign-in finished, with the instance, client id and account name it STARTED with. */
+    onSignedIn?: (signed: SignedIn, started: SignInStart) => void;
     /** The typed client id changed. */
     onClientIdChange?: () => void;
+    /** The user picked a token source: the wizard stops preselecting one. */
+    onModePick?: () => void;
   }
 
   let {
@@ -49,16 +52,27 @@
     availability = null,
     onSignedIn,
     onClientIdChange,
+    onModePick,
   }: Props = $props();
 
   /** "Sign in with ..." is offered when a client id exists, built in or typed, or is already chosen. */
   const offerSignIn = $derived(!!oauth && (availability?.available === true || draft.tokenMode === "oauth"));
   const signInName = $derived(`Sign in with ${providerName(draft.provider)}`);
+  /** Sign-in is the chosen access: its panel replaces the token hint and fields. */
+  const signingIn = $derived(draft.tokenMode === "oauth");
   /** The own-application box starts open where only a typed client id will do, or one is typed. */
   const clientIdOpen = $derived(draft.oauthClientId.trim() !== "" || availability?.needs_client_id === true);
 
   const github = $derived(draft.provider === "github");
   const cliTool = $derived(cliName(draft.provider));
+
+  /**
+   * What the sign-in in progress started with. ⛔ The wizard judges a finished
+   * sign-in by THIS, not by what the form says by then: the instance, the
+   * client id and the account name can all change while the code is pending.
+   * `account` is the name the sign-in is stored under.
+   */
+  let started: SignInStart = { base: "", clientId: "", account: "" };
 
   /** Offer the keyring option when detection found the CLI's item, or when re-running on a config that already uses one. */
   const cliFound = $derived(cli?.status === "found" || draft.cliSource !== null);
@@ -116,17 +130,33 @@
     }
   };
 
+  /** The chosen method's card is on show, so its message renders inside it. */
+  const chosenCardShown = $derived(
+    draft.tokenMode === "oauth" ? offerSignIn : draft.tokenMode === "cli" ? cliFound : true,
+  );
+
+  /** An access method's card; the chosen one is outlined in the primary colour. */
+  const cardClass = (chosen: boolean) =>
+    cn(
+      "rounded-lg border p-3 transition-colors",
+      chosen ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40",
+    );
+  /** 16px, so the controls under it line up at pl-6; the ring shows only for the keyboard. */
+  const RADIO =
+    "accent-primary focus-visible:outline-ring mt-px size-4 shrink-0 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2";
+
   function selectMode(mode: TokenMode) {
     draft.tokenMode = mode;
+    onModePick?.();
     if (mode === "cli" && cli?.status === "found") draft.cliSource = cli.source;
   }
 </script>
 
 <div class="flex flex-col gap-4">
   <fieldset class="flex flex-col gap-2">
-    <legend class="mb-1 text-sm font-medium">CI provider</legend>
+    <legend class="mb-1 font-medium">CI provider</legend>
     {#each PROVIDERS as provider (provider.value)}
-      <label class="flex items-center gap-2 text-sm">
+      <label class="flex items-center gap-2">
         <input
           type="radio"
           name="provider"
@@ -141,8 +171,8 @@
   </fieldset>
 
   <fieldset class="flex flex-col gap-2">
-    <legend class="mb-1 text-sm font-medium">{github ? "GitHub host" : "GitLab instance"}</legend>
-    <label class="flex items-center gap-2 text-sm">
+    <legend class="mb-1 font-medium">{github ? "GitHub host" : "GitLab instance"}</legend>
+    <label class="flex items-center gap-2">
       <input
         type="radio"
         name="instance"
@@ -156,7 +186,7 @@
       />
       {github ? "github.com" : "gitlab.com"}
     </label>
-    <label class="flex items-center gap-2 text-sm">
+    <label class="flex items-center gap-2">
       <input
         type="radio"
         name="instance"
@@ -194,128 +224,171 @@
     {/if}
   </fieldset>
 
-  <fieldset class="flex flex-col gap-2" aria-describedby="wizard-token-needs wizard-token-msg">
-    <legend class="mb-1 text-sm font-medium">Token</legend>
-    <p id="wizard-token-needs" class="text-muted-foreground text-xs" data-slot="token-needs">{needs}</p>
+  <!-- The access methods are cards: a native radio group (one name, inside
+       one fieldset), so arrow keys move the choice and Tab goes from the
+       chosen radio straight into its controls, which sit inside its card. -->
+  <fieldset
+    class="flex flex-col gap-2"
+    aria-describedby={signingIn ? "wizard-token-msg" : "wizard-token-needs wizard-token-msg"}
+  >
+    <legend class="mb-1 font-medium">Access</legend>
+    <!-- What a token must be allowed to do: said for the token choices only,
+         since a sign-in asks for exactly what it needs on the provider's page. -->
+    {#if !signingIn}
+      <p id="wizard-token-needs" class="text-muted-foreground text-xs" data-slot="token-needs">{needs}</p>
+    {/if}
     {#if offerSignIn}
       <!-- First, and the recommended way: nothing to create, copy or paste
            but a short code, and the tokens renew themselves. -->
-      <label class="flex items-start gap-2 text-sm">
-        <input
-          type="radio"
-          name="token-mode"
-          value="oauth"
-          class="accent-primary mt-0.5"
-          checked={draft.tokenMode === "oauth"}
-          onchange={() => selectMode("oauth")}
-        />
-        <span class="flex flex-col">
-          <span class="flex items-center gap-2">{signInName} <Badge variant="secondary">Recommended</Badge></span>
-          <span class="text-muted-foreground text-xs"
-            >Approve bridgewatch in your browser with a short code. The sign-in is kept in the system keychain and
-            renews itself.</span
-          >
-        </span>
-      </label>
-    {/if}
-    {#each modes as mode (mode.value)}
-      {#if mode.value !== "cli" || cliFound}
-        <label class="flex items-start gap-2 text-sm">
+      <div class={cardClass(signingIn)} data-slot="access-card" data-state={signingIn ? "checked" : "unchecked"}>
+        <label class="flex cursor-pointer items-start gap-2">
           <input
             type="radio"
             name="token-mode"
-            value={mode.radio}
-            class="accent-primary mt-0.5"
-            checked={draft.tokenMode === mode.value}
-            onchange={() => selectMode(mode.value)}
+            value="oauth"
+            class={RADIO}
+            checked={draft.tokenMode === "oauth"}
+            onchange={() => selectMode("oauth")}
           />
-          <span class="flex flex-col">
-            <span>{mode.label}</span>
-            <span class="text-muted-foreground text-xs">{mode.hint}</span>
+          <span class="flex min-w-0 flex-col gap-1">
+            <span class="flex flex-wrap items-center gap-x-2 gap-y-1"
+              >{signInName} <Badge variant="secondary">Recommended</Badge></span
+            >
+            <span class="text-muted-foreground text-xs"
+              >Approve bridgewatch in your browser with a short code. The sign-in is kept in the system keychain and
+              renews itself.</span
+            >
           </span>
         </label>
+        <!-- The chosen sign-in's button sits in its own card, before the alternatives. -->
+        {#if signingIn && oauth}
+          <div class="flex flex-col gap-2 pt-3 pl-6" data-slot="oauth-panel">
+            {#if draft.oauthLogin}
+              <p class="m-0" data-slot="oauth-signed-in">
+                Signed in as <span class="font-mono">@{draft.oauthLogin}</span>.
+              </p>
+            {:else if draft.oauthStored}
+              <p class="text-muted-foreground m-0 text-xs" data-slot="oauth-stored">
+                This account is already signed in. Sign in again only to replace it.
+              </p>
+            {/if}
+            <DeviceSignIn
+              api={oauth}
+              request={() => {
+                // ⛔ Stored under the name the form shows NOW, never a name an
+                // earlier sign-in was made under: on a re-run, or after signing
+                // in, renaming and signing in again, that name is not saved.
+                started = { base: baseUrlOf(draft), clientId: draft.oauthClientId.trim(), account: draft.account.trim() };
+                return {
+                  account: started.account,
+                  provider: draft.provider,
+                  base_url: started.base,
+                  client_id: started.clientId || null,
+                };
+              }}
+              label={draft.oauthLogin || draft.oauthStored ? "Sign in again" : signInName}
+              disabled={!draft.account.trim()}
+              onsignedin={(signed) => onSignedIn?.(signed, started)}
+            />
+            <FieldMessage id="wizard-token-msg" message={errors.token} />
+          </div>
+        {/if}
+      </div>
+    {/if}
+    {#each modes as mode (mode.value)}
+      {#if mode.value !== "cli" || cliFound}
+        {@const chosen = draft.tokenMode === mode.value}
+        <div class={cardClass(chosen)} data-slot="access-card" data-state={chosen ? "checked" : "unchecked"}>
+          <label class="flex cursor-pointer items-start gap-2">
+            <input
+              type="radio"
+              name="token-mode"
+              value={mode.radio}
+              class={RADIO}
+              checked={chosen}
+              onchange={() => selectMode(mode.value)}
+            />
+            <span class="flex min-w-0 flex-col gap-1">
+              <span>{mode.label}</span>
+              <span class="text-muted-foreground text-xs">{mode.hint}</span>
+            </span>
+          </label>
+          {#if chosen && (mode.value !== "cli" || errors.token)}
+            <div class="flex flex-col gap-1 pt-3 pl-6" data-slot="access-controls">
+              {#if mode.value === "paste"}
+                <Label for="wizard-secret" class="sr-only">Access token</Label>
+                <Input
+                  id="wizard-secret"
+                  name="secret"
+                  type="password"
+                  autocomplete="off"
+                  spellcheck={false}
+                  placeholder={draft.ownStored
+                    ? "Leave empty to keep the stored token"
+                    : github
+                      ? "ghp_… or github_pat_…"
+                      : "glpat-…"}
+                  bind:value={draft.secret}
+                  aria-invalid={errors.token ? "true" : undefined}
+                  aria-describedby="wizard-token-msg"
+                />
+                {#if draft.ownStoredFor && !draft.ownStored}
+                  <p class="text-muted-foreground m-0 text-xs" data-slot="own-moved">
+                    The stored token stays with {draft.ownStoredFor}; paste one for {baseUrlOf(draft)}.
+                  </p>
+                {/if}
+              {:else if mode.value === "env"}
+                <Label for="wizard-env" class="sr-only">Environment variable name</Label>
+                <Input
+                  id="wizard-env"
+                  name="env"
+                  placeholder={github ? "GITHUB_TOKEN" : "GITLAB_TOKEN"}
+                  spellcheck={false}
+                  class="font-mono"
+                  bind:value={draft.envVar}
+                  aria-invalid={errors.token ? "true" : undefined}
+                  aria-describedby="wizard-token-msg"
+                />
+              {:else if mode.value === "command"}
+                <Label for="wizard-command" class="sr-only">Command that prints the token</Label>
+                <Input
+                  id="wizard-command"
+                  name="command"
+                  placeholder={github ? "gh auth token" : "pass gitlab/pat"}
+                  spellcheck={false}
+                  class="font-mono"
+                  bind:value={draft.commandText}
+                  aria-invalid={errors.token ? "true" : undefined}
+                  aria-describedby="wizard-token-msg"
+                />
+              {/if}
+              <FieldMessage id="wizard-token-msg" message={errors.token} />
+            </div>
+          {/if}
+        </div>
       {/if}
     {/each}
-
-    <div class="pl-6">
-      {#if draft.tokenMode === "oauth" && oauth}
-        {#if draft.oauthLogin}
-          <p class="m-0 text-sm" data-slot="oauth-signed-in">
-            Signed in as <span class="font-mono">@{draft.oauthLogin}</span>.
-          </p>
-        {:else if draft.oauthStored}
-          <p class="text-muted-foreground m-0 text-xs" data-slot="oauth-stored">
-            This account is already signed in. Sign in again only to replace it.
-          </p>
-        {/if}
-        <DeviceSignIn
-          api={oauth}
-          request={() => ({
-            account: (draft.oauthAccount ?? draft.account).trim() || draft.account.trim(),
-            provider: draft.provider,
-            base_url: baseUrlOf(draft),
-            client_id: draft.oauthClientId.trim() || null,
-          })}
-          label={draft.oauthLogin || draft.oauthStored ? "Sign in again" : signInName}
-          disabled={!draft.account.trim()}
-          onsignedin={(signed) => onSignedIn?.(signed)}
-        />
-      {:else if draft.tokenMode === "paste"}
-        <Label for="wizard-secret" class="sr-only">Access token</Label>
-        <Input
-          id="wizard-secret"
-          name="secret"
-          type="password"
-          autocomplete="off"
-          spellcheck={false}
-          placeholder={draft.ownStored ? "Leave empty to keep the stored token" : github ? "ghp_… or github_pat_…" : "glpat-…"}
-          bind:value={draft.secret}
-          aria-invalid={errors.token ? "true" : undefined}
-          aria-describedby="wizard-token-msg"
-        />
-      {:else if draft.tokenMode === "env"}
-        <Label for="wizard-env" class="sr-only">Environment variable name</Label>
-        <Input
-          id="wizard-env"
-          name="env"
-          placeholder={github ? "GITHUB_TOKEN" : "GITLAB_TOKEN"}
-          spellcheck={false}
-          class="font-mono"
-          bind:value={draft.envVar}
-          aria-invalid={errors.token ? "true" : undefined}
-          aria-describedby="wizard-token-msg"
-        />
-      {:else if draft.tokenMode === "command"}
-        <Label for="wizard-command" class="sr-only">Command that prints the token</Label>
-        <Input
-          id="wizard-command"
-          name="command"
-          placeholder={github ? "gh auth token" : "pass gitlab/pat"}
-          spellcheck={false}
-          class="font-mono"
-          bind:value={draft.commandText}
-          aria-invalid={errors.token ? "true" : undefined}
-          aria-describedby="wizard-token-msg"
-        />
-      {/if}
+    <!-- A chosen method with no card on show (sign-in chosen where none is
+         offered, or a CLI token no longer found) still says what is wrong. -->
+    {#if !chosenCardShown}
       <FieldMessage id="wizard-token-msg" message={errors.token} />
-    </div>
+    {/if}
     {#if oauth}
       <details class="text-xs" open={clientIdOpen} data-slot="oauth-own-app">
         <summary class="text-muted-foreground cursor-pointer">Sign in with an OAuth application of your own</summary>
-        <div class="flex flex-col gap-1 pt-1.5 pl-4">
+        <div class="flex flex-col gap-1 pt-2 pl-4">
           <Label for="wizard-oauth-client-id" class="text-xs">Client id</Label>
           <Input
             id="wizard-oauth-client-id"
             name="oauth_client_id"
-            class="w-72 font-mono"
+            class="w-full max-w-72 font-mono"
             spellcheck={false}
             autocomplete="off"
             placeholder={availability?.builtin ? "empty: bridgewatch's own" : "client id"}
             bind:value={draft.oauthClientId}
             oninput={() => onClientIdChange?.()}
           />
-          <span class="text-muted-foreground" data-slot="oauth-client-id-hint">
+          <span class="text-muted-foreground max-w-[60ch]" data-slot="oauth-client-id-hint">
             {#if github}
               A GitHub App on {availability?.host ?? "your server"} with "Enable Device Flow" ticked. A client id is not a
               secret; there is no client secret.
@@ -334,7 +407,7 @@
     <Input
       id="wizard-account"
       name="account"
-      class="w-48 font-mono"
+      class="w-full max-w-48 font-mono"
       bind:value={draft.account}
       oninput={() => (draft.accountEdited = true)}
       aria-invalid={errors.account ? "true" : undefined}
@@ -360,7 +433,7 @@
       </Alert.Root>
     {:else if identity}
       <Alert.Root data-slot="identity">
-        <Alert.Title class="flex items-center gap-2">
+        <Alert.Title class="flex flex-wrap items-center gap-x-2 gap-y-1">
           Connected as <span class="font-mono">@{identity.username}</span>
           {#if identity.name}<span class="text-muted-foreground font-normal">({identity.name})</span>{/if}
           <Badge variant="secondary">{kindWord(identity)}</Badge>

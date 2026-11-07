@@ -8,8 +8,19 @@
  * `StepIssue`s are shown on the page they name.
  */
 
+import type { OwnTokenStatus } from "../../lib/own-token";
 import { PROVIDER_DEFAULTS, cliName, defaultBaseUrl, providerName } from "../../lib/providers";
-import type { NotifyAnswers, ProjectRef, Provider, TokenSource, WizardAnswers, WizardStepId } from "./api";
+import { relativeAge } from "../../lib/format";
+import type {
+  NotifyAnswers,
+  ProjectRef,
+  Provider,
+  QuickWatch,
+  RecentProject,
+  TokenSource,
+  WizardAnswers,
+  WizardStepId,
+} from "./api";
 
 export type StepId = WizardStepId | "review";
 
@@ -146,6 +157,16 @@ export function findTokenPrefix(text: string, provider: Provider = "gitlab"): st
   return GITHUB_TOKEN_PREFIXES.find((prefix) => text.includes(prefix)) ?? null;
 }
 
+/**
+ * What a sign-in started with: the instance, the client id ("" = the built-in
+ * application) and the account name it is stored under.
+ */
+export interface SignInStart {
+  base: string;
+  clientId: string;
+  account: string;
+}
+
 /** The form's state, flat and serialisable. */
 export interface Draft {
   /** Which CI provider. GitLab first and the default, so its path is unchanged. */
@@ -163,6 +184,11 @@ export interface Draft {
   secret: string;
   /** Re-running on a config that already uses bridgewatch's own keyring entry: an empty paste keeps it. */
   ownStored: boolean;
+  /**
+   * The instance that stored token belongs to (the file's base_url when the wizard opened).
+   * ⛔ The token is bound to it: on any other instance an empty paste keeps nothing.
+   */
+  ownStoredFor: string | null;
   envVar: string;
   commandText: string;
   /** Sign in: a client id of the user's own; empty is the host's built-in application. */
@@ -196,6 +222,13 @@ export interface Draft {
   notify: NotifyAnswers;
   launchAtLogin: boolean;
   liveSecs: number;
+
+  /**
+   * One-click setup: the watches "Watch N projects" chose, or null for the
+   * step-by-step wizard. While set, the project, watch and deploy steps are
+   * skipped and the save writes all of these at once.
+   */
+  quick: QuickWatch[] | null;
 }
 
 export function emptyDraft(provider: Provider = "gitlab"): Draft {
@@ -209,6 +242,7 @@ export function emptyDraft(provider: Provider = "gitlab"): Draft {
     cliSource: null,
     secret: "",
     ownStored: false,
+    ownStoredFor: null,
     envVar: "",
     commandText: "",
     oauthClientId: "",
@@ -231,6 +265,7 @@ export function emptyDraft(provider: Provider = "gitlab"): Draft {
     notify: { deployed: true, blocking_failure: true, finished: false },
     launchAtLogin: false,
     liveSecs: defaultLiveSecs(provider),
+    quick: null,
   };
 }
 
@@ -254,6 +289,9 @@ export function switchProvider(draft: Draft, provider: Provider): void {
   draft.oauthLogin = null;
   draft.oauthAccount = null;
   draft.oauthStored = false;
+  // A stored token belongs to the instance, and so to the provider, it was saved for.
+  draft.ownStored = false;
+  draft.ownStoredFor = null;
   if (!draft.accountEdited) draft.account = provider;
   draft.project = null;
   draft.projectInput = "";
@@ -304,6 +342,7 @@ export function draftFromAnswers(answers: Partial<WizardAnswers>): Draft {
     } else {
       draft.tokenMode = "paste";
       draft.ownStored = token.own;
+      draft.ownStoredFor = token.own ? baseUrlOf(draft) : null;
     }
   }
   if (answers.project !== undefined && answers.project !== null) {
@@ -333,6 +372,59 @@ export function draftFromAnswers(answers: Partial<WizardAnswers>): Draft {
   }
   if (answers.live_secs) draft.liveSecs = answers.live_secs;
   return draft;
+}
+
+/**
+ * Keep the stored token only while the form names the instance it was saved for.
+ *
+ * ⛔ The shell binds an own token to its server and never sends it anywhere else,
+ * so "leave empty to keep the stored token" on another instance would save an
+ * account that polls nothing. Called on every instance change; coming back to
+ * the original instance keeps it again. A display rule only: the core decides.
+ */
+export function followOwnToken(draft: Draft): void {
+  if (draft.ownStoredFor === null) {
+    draft.ownStored = false;
+    return;
+  }
+  draft.ownStored = sameInstance(draft.ownStoredFor, baseUrlOf(draft));
+}
+
+/**
+ * Take what the shell says the stored entry holds (`own_token_status`) as the
+ * truth about it, over the file's base_url.
+ *
+ * ⛔ The draft first assumes the stored token belongs to the base_url in the
+ * file. A file edited by hand to another host since the token was saved breaks
+ * that: "leave empty to keep the stored token" then saved an account whose token
+ * the core refuses. A bound entry belongs to its STORED origin; nothing stored
+ * keeps nothing; a 1.x value binds to the file's base_url on first use, so the
+ * file's answer stands for it.
+ */
+export function adoptOwnTokenStatus(draft: Draft, status: OwnTokenStatus): void {
+  switch (status.kind) {
+    case "none":
+      draft.ownStoredFor = null;
+      break;
+    case "legacy":
+      return;
+    case "bound":
+      draft.ownStoredFor = status.origin;
+      break;
+    case "mismatch":
+      draft.ownStoredFor = status.stored;
+      break;
+  }
+  followOwnToken(draft);
+}
+
+/** Whether two instance URLs name one origin, for the form's wording. */
+function sameInstance(a: string, b: string): boolean {
+  try {
+    return new URL(a.trim()).origin === new URL(b.trim()).origin;
+  } catch {
+    return false;
+  }
 }
 
 export function baseUrlOf(draft: Draft): string {
@@ -468,7 +560,24 @@ export function answersOf(draft: Draft): WizardAnswers {
     notify: { ...draft.notify },
     launch_at_login: draft.launchAtLogin,
     live_secs: draft.liveSecs,
+    // Only for a one-click setup, so a step-by-step payload is unchanged.
+    ...(draft.quick && draft.quick.length > 0 ? { watches: draft.quick.map((w) => ({ ...w })) } : {}),
   };
+}
+
+/**
+ * A one-click row's optional label, "active 3h ago", from the provider's own
+ * timestamp. Empty when the row has none (or it does not parse): a label
+ * only, and absent data shows nothing.
+ */
+export function activeLabel(row: Pick<RecentProject, "last_activity_at">, now: number): string {
+  const age = relativeAge(row.last_activity_at ?? null, now);
+  return age ? `active ${age} ago` : "";
+}
+
+/** Whether a one-click row can be watched: an empty repository has no branch to follow. */
+export function watchable(row: Pick<RecentProject, "default_branch">): boolean {
+  return !!row.default_branch;
 }
 
 /** Field → message. Empty means the step may be left. */

@@ -69,6 +69,15 @@ pub struct ListQuery {
     /// **GitLab ignores it**: a GitLab pipeline that never created a child
     /// already says so itself, as a bridge with no downstream pipeline.
     pub expect: Vec<String>,
+    /// One commit, as a FULL sha: GitLab's `sha`, GitHub's `head_sha`. Only
+    /// `bridgewatch wait` sets it, to look a commit's pipelines up directly
+    /// when they are not among the rows a watch shows. Both providers match
+    /// the full sha only; [`super::CiClient::commit_sha`] expands a short one.
+    pub sha: Option<String>,
+    /// Only what this user started, by login: GitLab's `username`, GitHub's
+    /// `actor`. Set by the poller for a watch with `mine = true`, from
+    /// [`super::CiClient::owner`].
+    pub user: Option<String>,
 }
 
 impl ListQuery {
@@ -82,6 +91,8 @@ impl ListQuery {
             workflow: None,
             commit_group: None,
             expect: Vec::new(),
+            sha: None,
+            user: None,
         }
     }
 
@@ -96,6 +107,8 @@ impl ListQuery {
             workflow: None,
             commit_group: None,
             expect: Vec::new(),
+            sha: None,
+            user: None,
         }
     }
 
@@ -122,10 +135,33 @@ impl ListQuery {
         self
     }
 
+    /// The same query, narrowed to one commit's pipelines. `sha` must be the
+    /// full sha; see [`Self::sha`].
+    pub fn for_sha(mut self, sha: &str) -> Self {
+        self.sha = Some(sha.to_string());
+        self
+    }
+
+    /// The same query, narrowed to what `login` started. A `None` or blank
+    /// login is no restriction.
+    pub fn for_user(mut self, login: Option<&str>) -> Self {
+        self.user = login
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string);
+        self
+    }
+
     fn to_query(&self) -> String {
         let mut parts = Vec::new();
         if let Some(r) = &self.ref_name {
             parts.push(format!("ref={}", urlencoding::encode(r)));
+        }
+        if let Some(user) = &self.user {
+            parts.push(format!("username={}", urlencoding::encode(user)));
+        }
+        if let Some(sha) = &self.sha {
+            parts.push(format!("sha={}", urlencoding::encode(sha)));
         }
         if let Some(s) = &self.source {
             parts.push(format!("source={}", urlencoding::encode(s)));
@@ -194,6 +230,30 @@ impl GitLabClient {
         self.get_json::<wire::Pipeline>(&path).await.map(Into::into)
     }
 
+    /// `GET /projects/{project}/repository/commits/{sha}`: a commit's full
+    /// sha from any unambiguous prefix. A 404 is `None`: no such commit, or
+    /// not pushed yet.
+    pub async fn commit_sha(
+        &self,
+        project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        #[derive(serde::Deserialize)]
+        struct Commit {
+            id: String,
+        }
+        let path = format!(
+            "/projects/{}/repository/commits/{}",
+            project.url_segment(),
+            urlencoding::encode(sha)
+        );
+        match self.get_json::<Commit>(&path).await {
+            Ok(commit) => Ok(Some(commit.id.to_ascii_lowercase())),
+            Err(ClientError::NotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// `GET /projects/{project}/pipelines/{id}/jobs`, all pages.
     pub async fn pipeline_jobs(
         &self,
@@ -237,10 +297,48 @@ impl GitLabClient {
     /// `GET /personal_access_tokens/self`: the token's own name, scopes and
     /// expiry. Older instances and non-PAT credentials (OAuth, job tokens)
     /// answer 401/403/404, which the wizard treats as "kind unknown".
+    ///
+    /// Its `expires_at` is also recorded as the credential's expiry
+    /// ([`crate::health`]): a token without one does not expire.
     pub async fn token_self(&self) -> Result<TokenInfo, ClientError> {
-        self.get_json::<wire::TokenInfo>("/personal_access_tokens/self")
+        // ⚠ A credential that is not a personal, project or group access
+        // token (a CI job token, say) can be answered 401 here and nowhere
+        // else, so this endpoint's
+        // refusal is not the credential's: what was known before is kept,
+        // and the watches' own requests say whether it works (cubic, #66).
+        let before = self.conn.probe().get().refused;
+        let info: TokenInfo = match self
+            .get_json::<wire::TokenInfo>("/personal_access_tokens/self")
             .await
-            .map(Into::into)
+        {
+            Ok(info) => info.into(),
+            // Only this endpoint's 401 is ignored. A decode error follows a
+            // 2xx, which accepted the credential, and that stands (cubic, #67).
+            Err(e @ ClientError::Auth { status: 401, .. }) => {
+                self.conn.probe().restore_refusal(before);
+                return Err(e);
+            }
+            Err(e) => return Err(e),
+        };
+        match info
+            .expires_at
+            .as_deref()
+            .and_then(crate::health::parse_gitlab_date)
+        {
+            Some(at) => self.conn.probe().expires(crate::health::Expiry {
+                at,
+                of: crate::health::ExpiryOf::Token,
+            }),
+            None => self.conn.probe().never_expires(),
+        }
+        Ok(info)
+    }
+
+    /// [`super::CiClient::owner`]: asked once, then remembered.
+    pub async fn owner(&self) -> Result<String, ClientError> {
+        self.conn
+            .owner(|| async { self.current_user().await.map(|u| u.username) })
+            .await
     }
 
     /// `GET /projects?membership=true`, most recently active first, following
@@ -448,6 +546,14 @@ impl CiClient for GitLabClient {
         GitLabClient::ring(self)
     }
 
+    async fn commit_sha(
+        &self,
+        project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        GitLabClient::commit_sha(self, project, sha).await
+    }
+
     async fn list_pipelines(
         &self,
         project: &ProjectRef,
@@ -486,6 +592,18 @@ impl CiClient for GitLabClient {
 
     async fn token_self(&self) -> Result<TokenInfo, ClientError> {
         GitLabClient::token_self(self).await
+    }
+
+    async fn owner(&self) -> Result<String, ClientError> {
+        GitLabClient::owner(self).await
+    }
+
+    fn credential(&self) -> crate::health::Observed {
+        self.conn.probe().get()
+    }
+
+    async fn read_token_expiry(&self) -> Result<(), ClientError> {
+        GitLabClient::token_self(self).await.map(|_| ())
     }
 
     async fn list_projects(

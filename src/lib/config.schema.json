@@ -330,7 +330,7 @@
         "body": {
           "description": "MiniJinja template for the notification body.",
           "type": "string",
-          "default": "{{failures | join(', ') | default('all green', true)}}"
+          "default": "{{failures | join(', ') | default('all green', true)}}{% if failure_line %}\n{{failure_line}}{% endif %}"
         },
         "click": {
           "description": "Where clicking the notification goes.",
@@ -352,6 +352,11 @@
           "type": "boolean",
           "default": false
         },
+        "recovered": {
+          "description": "A watch that was failing passes again (\"fixed again\"). It replaces what\nthat pipeline would otherwise say on the same tick.",
+          "type": "boolean",
+          "default": true
+        },
         "started": {
           "description": "A pipeline started.",
           "type": "boolean",
@@ -360,7 +365,7 @@
         "title": {
           "description": "MiniJinja template for the notification title.",
           "type": "string",
-          "default": "{{watch.id}} {{sha7}}: {{state}}"
+          "default": "{{watch.id}} {{sha7}}: {{state}}{% if kind == 'recovered' %}, fixed again{% endif %}"
         }
       },
       "additionalProperties": false
@@ -582,7 +587,7 @@
           ]
         },
         {
-          "description": "bridgewatch's own credential-store entry, `bridgewatch:<account>`,\nwritten by the GUI or by `set_own_token`.",
+          "description": "bridgewatch's own credential-store entry, `bridgewatch:<account>`,\nwritten by the GUI or by `set_own_token`. The token is bound to the\nserver it was saved for and sent nowhere else: after a change of\n`base_url` it is not sent until a token is saved for the new server.\nA value stored by bridgewatch 1.x is bound to the account's server the\nfirst time it is used.",
           "type": "object",
           "properties": {
             "own": {
@@ -731,18 +736,23 @@
           "$ref": "#/$defs/JobOverrides",
           "default": {}
         },
+        "mine": {
+          "description": "Only the pipelines (GitLab) or workflow runs (GitHub) that YOU\nstarted: the account's signed-in user, or the owner of its token.\nGitLab is asked with `username=`, GitHub with `actor=`; who you are is\nasked once (`GET /user`) and remembered, or read from the sign-in.",
+          "type": "boolean"
+        },
         "notify": {
           "description": "Which events raise a notification, and how they read.",
           "$ref": "#/$defs/NotifyConfig",
           "default": {
             "blocking_failure": true,
-            "body": "{{failures | join(', ') | default('all green', true)}}",
+            "body": "{{failures | join(', ') | default('all green', true)}}{% if failure_line %}\n{{failure_line}}{% endif %}",
             "click": "first_failure_or_pipeline",
             "deployed": true,
             "finished": true,
             "gate_opened": false,
+            "recovered": true,
             "started": false,
-            "title": "{{watch.id}} {{sha7}}: {{state}}"
+            "title": "{{watch.id}} {{sha7}}: {{state}}{% if kind == 'recovered' %}, fixed again{% endif %}"
           }
         },
         "poll": {

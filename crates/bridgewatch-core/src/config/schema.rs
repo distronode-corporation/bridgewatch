@@ -374,7 +374,11 @@ pub enum TokenSource {
     /// A non-zero exit is an error.
     Command(Vec<String>),
     /// bridgewatch's own credential-store entry, `bridgewatch:<account>`,
-    /// written by the GUI or by `set_own_token`.
+    /// written by the GUI or by `set_own_token`. The token is bound to the
+    /// server it was saved for and sent nowhere else: after a change of
+    /// `base_url` it is not sent until a token is saved for the new server.
+    /// A value stored by bridgewatch 1.x is bound to the account's server the
+    /// first time it is used.
     Own(bool),
     /// Sign in with GitHub or GitLab (the OAuth device flow). `oauth = true`
     /// uses bridgewatch's own application on github.com or gitlab.com;
@@ -634,6 +638,14 @@ pub struct Watch {
     /// means all of them.
     #[serde(default)]
     pub sources: Vec<String>,
+    /// Only the pipelines (GitLab) or workflow runs (GitHub) that YOU
+    /// started: the account's signed-in user, or the owner of its token.
+    /// GitLab is asked with `username=`, GitHub with `actor=`; who you are is
+    /// asked once (`GET /user`) and remembered, or read from the sign-in.
+    // Skipped when off, like `group`: a watch written back must not gain a
+    // line nobody asked for.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mine: bool,
     /// Whether this watch drives the tray icon.
     #[serde(default)]
     pub role: Role,
@@ -1113,6 +1125,10 @@ pub struct NotifyConfig {
     /// A bridge parked at a manual gate.
     #[serde(default)]
     pub gate_opened: bool,
+    /// A watch that was failing passes again ("fixed again"). It replaces what
+    /// that pipeline would otherwise say on the same tick.
+    #[serde(default = "yes")]
+    pub recovered: bool,
     /// MiniJinja template for the notification title.
     #[serde(default = "default_title")]
     pub title: String,
@@ -1132,6 +1148,7 @@ impl Default for NotifyConfig {
             finished: true,
             started: false,
             gate_opened: false,
+            recovered: true,
             title: default_title(),
             body: default_body(),
             click: ClickTarget::default(),
@@ -1142,8 +1159,11 @@ impl Default for NotifyConfig {
 fn yes() -> bool {
     true
 }
+/// The default title. `kind` is `recovered` on a "fixed again", which keeps
+/// the state word and says so after it.
 fn default_title() -> String {
-    "{{watch.id}} {{sha7}}: {{state}}".to_string()
+    "{{watch.id}} {{sha7}}: {{state}}{% if kind == 'recovered' %}, fixed again{% endif %}"
+        .to_string()
 }
 /// The default body.
 ///
@@ -1151,8 +1171,14 @@ fn default_title() -> String {
 /// `default(x)` substitutes only for an **undefined** value, and
 /// `failures | join(', ')` on an empty list is the defined empty string. Without
 /// `, true` a green pipeline notifies with a blank body. Measured, not assumed.
+///
+/// The second line is the first failing line (`failure_line`): GitHub's first
+/// failure annotation, or GitLab's reason code in words. A pipeline nobody
+/// said anything about keeps the one-line body it always had.
 fn default_body() -> String {
-    "{{failures | join(', ') | default('all green', true)}}".to_string()
+    "{{failures | join(', ') | default('all green', true)}}\
+     {% if failure_line %}\n{{failure_line}}{% endif %}"
+        .to_string()
 }
 
 /// Where a notification click lands.

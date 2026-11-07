@@ -12,7 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::OAuthError;
+use super::{OAuthError, host_of, origin_of};
+use crate::config::Account;
 use crate::token::{Secret, TokenError, TokenProvider};
 
 /// The credential-store user every sign-in is kept under.
@@ -82,6 +83,46 @@ impl TokenSet {
             .is_some_and(|at| at <= now.saturating_add(margin))
     }
 
+    /// Whether this set may be used for `account`, whose sign-in application
+    /// is `client_id`: issued by the same instance, for the same application.
+    ///
+    /// ⛔ A set from another host is never sent: the configuration's
+    /// `base_url` can change under a stored sign-in (by hand, or by a hostile
+    /// edit), and the token would otherwise go wherever it now points. The
+    /// poller's session, `token::resolve`, `auth status` and the app's
+    /// `oauth_status` all ask this one question, so none of them can come to
+    /// call a sign-in usable that another refuses.
+    pub fn fits(&self, account: &Account, client_id: &str) -> bool {
+        self.fit(account, client_id) == Fit::Fits
+    }
+
+    /// [`Self::fits`], with the reason when it does not.
+    pub fn fit(&self, account: &Account, client_id: &str) -> Fit {
+        self.fit_for(&account.base_url, client_id)
+    }
+
+    /// [`Self::fit`] against a `base_url` and a client id directly, for the
+    /// session, which keeps those rather than the whole account.
+    pub(crate) fn fit_for(&self, base_url: &str, client_id: &str) -> Fit {
+        let (issued, expected) = (origin_of(&self.base_url), origin_of(base_url));
+        // ⛔ Fail-closed: a side with no origin matches nothing. Two unparsable
+        // URLs are `None == None`, which used to read as the same instance.
+        if issued.is_none() || issued != expected {
+            // The host alone reads best; the whole origin only when the hosts
+            // agree and the scheme or port is what differs.
+            let (mut issued, mut expected) = (label(&self.base_url), label(base_url));
+            if issued == expected {
+                issued = origin_of(&self.base_url).unwrap_or(issued);
+                expected = origin_of(base_url).unwrap_or(expected);
+            }
+            return Fit::OtherInstance { issued, expected };
+        }
+        if self.client_id != client_id {
+            return Fit::OtherApplication;
+        }
+        Fit::Fits
+    }
+
     /// What a UI or `auth status` may show. No token in it.
     pub fn status(&self) -> SignInStatus {
         SignInStatus {
@@ -145,6 +186,49 @@ impl TokenSet {
             obtained_at: doc.obtained_at,
         })
     }
+}
+
+/// Whether a stored sign-in may be used for an account ([`TokenSet::fit`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Fit {
+    /// Issued by the account's instance, for its application.
+    Fits,
+    /// Issued by another instance than the account's `base_url` names.
+    OtherInstance {
+        /// The instance that issued it, as a host (`gitlab.example.com`).
+        issued: String,
+        /// The account's instance, the same way.
+        expected: String,
+    },
+    /// Issued by the right instance, for another application than the
+    /// account's client id.
+    OtherApplication,
+}
+
+impl Fit {
+    /// Why the sign-in is not used, as the middle of a sentence:
+    /// "signed in for gitlab.com, not gitlab.example.com". `None` when it fits.
+    pub fn mismatch(&self) -> Option<String> {
+        match self {
+            Fit::Fits => None,
+            Fit::OtherInstance { issued, expected } => {
+                Some(format!("signed in for {issued}, not {expected}"))
+            }
+            Fit::OtherApplication => {
+                Some("signed in with another application than this account's client id".to_string())
+            }
+        }
+    }
+}
+
+/// A URL's host for a sentence.
+///
+/// ⛔ Never the URL itself when it has no host [`origin_of`] accepts: that is
+/// how `https://user:token@host` is refused, and echoing it would print the
+/// credential.
+fn label(url: &str) -> String {
+    host_of(url).unwrap_or_else(|| "an address that is not an http(s) URL".to_string())
 }
 
 /// What a sign-in may say about itself in public: who, until when, with

@@ -47,14 +47,14 @@
 </script>
 
 <div class="flex flex-col gap-4">
-  <p class="text-muted-foreground text-sm" data-slot="marker-explainer">
+  <p class="text-muted-foreground" data-slot="marker-explainer">
     A deploy marker is the job whose success means "this commit is live"; bridgewatch shows the {run} as deployed once
     it passes.
   </p>
 
   <fieldset class="flex flex-col gap-2" aria-describedby="wizard-markers-msg">
-    <legend class="mb-1 text-sm font-medium">Deploy detection</legend>
-    <label class="flex items-center gap-2 text-sm">
+    <legend class="mb-1 font-medium">Deploy detection</legend>
+    <label class="flex items-center gap-2">
       <input
         type="radio"
         name="marker-mode"
@@ -68,14 +68,14 @@
 
     <div class="flex flex-col gap-2 pl-6">
       {#if loading}
-        <p class="text-muted-foreground text-sm" aria-live="polite">Reading the latest {run}…</p>
+        <p class="text-muted-foreground" aria-live="polite">Reading the latest {run}…</p>
       {:else if loadError}
         <Alert.Root variant="destructive">
           <Alert.Title>Could not read the latest {run}</Alert.Title>
           <Alert.Description>{loadError} You can still type a job name.</Alert.Description>
         </Alert.Root>
       {:else if suggestions && suggestions.suggestions.length === 0}
-        <p class="text-muted-foreground text-sm" data-slot="no-suggestions">
+        <p class="text-muted-foreground" data-slot="no-suggestions">
           {suggestions.pipeline_id === null
             ? `No ${run} on this branch yet, so nothing to suggest.`
             : `No job in the latest ${run} looks like a deploy.`}
@@ -117,7 +117,7 @@
         <Label for="wizard-marker-custom" class="sr-only">Another job name</Label>
         <Input
           id="wizard-marker-custom"
-          class="w-56 font-mono"
+          class="w-full max-w-56 font-mono"
           placeholder="another job name"
           spellcheck={false}
           disabled={draft.noMarker}
@@ -133,7 +133,7 @@
       </div>
     </div>
 
-    <label class="flex items-center gap-2 text-sm">
+    <label class="flex items-center gap-2">
       <input
         type="radio"
         name="marker-mode"

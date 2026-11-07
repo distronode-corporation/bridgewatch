@@ -52,6 +52,11 @@ pub struct Inner {
     /// bound, its request ring and its sign-in with the watches. Empty until a
     /// poller is built, and again while one cannot be.
     pub clients: BTreeMap<String, Arc<dyn CiClient>>,
+    /// "Pause notifications", from the tray menu. In memory: a pause ends
+    /// when the app quits.
+    /// The accounts the running poller refuses, by name.
+    pub refused: Vec<String>,
+    pub quiet: crate::quiet::Quiet,
 }
 
 /// Shared application state, reachable from every command and from the poller.
@@ -64,6 +69,9 @@ pub struct AppState {
     pub poll_now: Arc<Notify>,
     /// Raised to ask the poller to rebuild itself from the current config.
     pub reload: Arc<Notify>,
+    /// Raised to ask the poller to retry its refused accounts now, in place
+    /// (`Poller::retry_refused`): after a token is saved, and on a Refresh.
+    pub retry_refused: Arc<Notify>,
     /// The outstanding confirmation for a sensitive write, if any.
     pub confirmations: crate::guard::Confirmations,
 }
@@ -99,6 +107,8 @@ pub struct Status {
     /// Where crash reporting stands; `ask` is the popover's cue to put the
     /// question. See `crash`.
     pub crash_reports: CrashReports,
+    /// The notification pause in force, or `None`. See `quiet`.
+    pub notifications_paused: Option<crate::quiet::PauseView>,
 }
 
 /// Where crash reporting stands.
@@ -147,9 +157,12 @@ impl AppState {
                 popover_hidden_at: None,
                 disk_text: resolved.text,
                 clients: BTreeMap::new(),
+                refused: Vec::new(),
+                quiet: Default::default(),
             }),
             poll_now: Arc::new(Notify::new()),
             reload: Arc::new(Notify::new()),
+            retry_refused: Arc::new(Notify::new()),
             confirmations: Default::default(),
         }
     }
@@ -202,6 +215,11 @@ impl AppState {
         if allowed {
             self.poll_now.notify_one();
         }
+        // A person asked: a refused account is retried too, at once, rather
+        // than at its next backed-off attempt.
+        if reason == PollNow::Manual {
+            self.retry_refused.notify_one();
+        }
         allowed
     }
 
@@ -213,8 +231,9 @@ impl AppState {
     /// The current shell status. `crash` is the reporter's two facts: whether
     /// the build has an address, and whether it is sending.
     pub fn status(&self, launch_at_login: bool, crash: (bool, bool)) -> Status {
-        let inner = self.lock();
+        let mut inner = self.lock();
         let answer = inner.config.as_ref().map(|c| c.ui.send_crash_reports);
+        let notifications_paused = inner.quiet.view(chrono::Utc::now());
         Status {
             config_path: self.config_path.display().to_string(),
             seeded: inner.seeded,
@@ -230,7 +249,13 @@ impl AppState {
             platform: std::env::consts::OS.to_string(),
             vibrancy: crate::windows::vibrancy(),
             crash_reports: CrashReports::of(crash.0, answer, crash.1),
+            notifications_paused,
         }
+    }
+
+    /// Run `f` on the notification pause state, under the lock.
+    pub fn with_quiet<T>(&self, f: impl FnOnce(&mut crate::quiet::Quiet) -> T) -> T {
+        f(&mut self.lock().quiet)
     }
 
     /// Record a completed tick's timings. The snapshot itself is stored by
@@ -260,6 +285,16 @@ impl AppState {
     /// Replace the running poller's clients (empty when there is none).
     pub fn set_clients(&self, clients: BTreeMap<String, Arc<dyn CiClient>>) {
         self.lock().clients = clients;
+    }
+
+    /// Record which accounts the running poller refuses (empty when none).
+    pub fn set_refused(&self, refused: Vec<String>) {
+        self.lock().refused = refused;
+    }
+
+    /// Whether the running poller refuses this account's credential.
+    pub fn is_refused(&self, account: &str) -> bool {
+        self.lock().refused.iter().any(|a| a == account)
     }
 
     /// The client an account is polled through, if the poller has one.
@@ -309,6 +344,28 @@ mod tests {
         state.record_tick(Duration::from_secs(60));
         assert!(!state.request_poll(PollNow::PopoverOpened));
         assert!(state.request_poll(PollNow::Manual));
+    }
+
+    /// A Refresh retries refused accounts at once (a permit is left for the
+    /// poll loop), a popover open does not, and the refused list is what the
+    /// token-save command asks.
+    #[tokio::test]
+    async fn a_manual_refresh_retries_refused_accounts_and_an_open_does_not() {
+        let state = state_with("");
+        let retried = || async {
+            tokio::time::timeout(Duration::from_millis(50), state.retry_refused.notified())
+                .await
+                .is_ok()
+        };
+        state.request_poll(PollNow::PopoverOpened);
+        assert!(!retried().await, "a popover open retried");
+        state.request_poll(PollNow::Manual);
+        assert!(retried().await, "a Refresh did not retry");
+
+        assert!(!state.is_refused("gl"));
+        state.set_refused(vec!["gl".into()]);
+        assert!(state.is_refused("gl"));
+        assert!(!state.is_refused("other"));
     }
 
     #[test]

@@ -108,9 +108,90 @@ pub struct Job {
     /// Link to the job in the GitLab UI.
     #[serde(default)]
     pub web_url: Option<String>,
+    /// GitLab's reason code for a failed job (`script_failure`,
+    /// `stuck_or_timeout_failure`, ...), from the jobs list it already
+    /// fetches. Null on a job that did not fail, and always null on GitHub,
+    /// which has no such field and says why in [`Job::annotation`] instead.
+    #[serde(default)]
+    pub failure_reason: Option<String>,
+    /// GitHub's first failure annotation of the job's check run (the
+    /// `file:line` and message a failing step reported), when it was fetched.
+    /// Only a failed pipeline's first blocking failure is ever asked about;
+    /// see `GitHubClient::failure_annotation` and the poller's `annotate`.
+    ///
+    /// ⚠️ Skipped when absent, so a GitLab recording, which never has one,
+    /// writes exactly the bytes it wrote before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<Annotation>,
+}
+
+/// One check-run annotation: where a failing step pointed, and what it said.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Annotation {
+    /// The file, relative to the repository root. GitHub writes `.github` for
+    /// an annotation that is about the workflow rather than a file.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// The first line it points at.
+    #[serde(default)]
+    pub start_line: Option<u64>,
+    /// What it said.
+    #[serde(default)]
+    pub message: String,
+}
+
+impl Annotation {
+    /// `path:line: message`, on one line: the form a compiler error takes and
+    /// the one an editor jumps to. The message is cut to its first non-empty
+    /// line, and the location is left out when GitHub gave none worth
+    /// pointing at (no path, or the `.github` placeholder).
+    pub fn line(&self) -> Option<String> {
+        let message = first_line(&self.message)?;
+        let location = match (self.path.as_deref().map(str::trim), self.start_line) {
+            (Some(p), _) if p.is_empty() || p == ".github" => None,
+            (Some(p), Some(l)) if l > 0 => Some(format!("{p}:{l}")),
+            (Some(p), _) => Some(p.to_string()),
+            (None, _) => None,
+        };
+        Some(match location {
+            Some(at) => format!("{at}: {message}"),
+            None => message,
+        })
+    }
+}
+
+/// The most a first failing line carries, in characters. A notification body
+/// and a popover row are both one line; the whole message is on the job page.
+pub const FAILURE_LINE_MAX: usize = 200;
+
+/// The first non-empty line of `text`, trimmed and cut to
+/// [`FAILURE_LINE_MAX`] characters with an ellipsis. `None` when there is no
+/// such line.
+pub fn first_line(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    if line.chars().count() <= FAILURE_LINE_MAX {
+        return Some(line.to_string());
+    }
+    let cut: String = line.chars().take(FAILURE_LINE_MAX - 1).collect();
+    Some(format!("{}\u{2026}", cut.trim_end()))
 }
 
 impl Job {
+    /// The first failing line of a failed job: GitHub's annotation when one
+    /// was fetched, else GitLab's reason code in words (`script_failure` reads
+    /// "script failure"). `None` for a job that did not fail, and for a failed
+    /// job its provider said nothing about.
+    pub fn failure_line(&self) -> Option<String> {
+        if self.status != Status::Failed {
+            return None;
+        }
+        if let Some(line) = self.annotation.as_ref().and_then(Annotation::line) {
+            return Some(line);
+        }
+        let reason = self.failure_reason.as_deref()?.trim();
+        first_line(&reason.replace('_', " "))
+    }
+
     /// Ordering key for "did this job start before that one".
     ///
     /// `started_at` first, job id as the tie-break, because a job that never ran
@@ -271,4 +352,9 @@ pub struct Project {
     /// Link to the project.
     #[serde(default)]
     pub web_url: Option<String>,
+    /// When the provider last saw activity on it, as it reports it (RFC 3339):
+    /// GitLab's `last_activity_at`, GitHub's `pushed_at`. `None` when the
+    /// answer carries no such field.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
 }

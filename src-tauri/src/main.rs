@@ -20,6 +20,7 @@ mod links;
 mod logging;
 mod oauth;
 mod poller;
+mod quiet;
 mod reorder;
 mod state;
 mod tray;
@@ -109,6 +110,7 @@ fn main() {
             commands::get_snapshot,
             commands::get_status,
             commands::refresh_now,
+            commands::resume_notifications,
             commands::popover_opened,
             commands::read_config_text,
             commands::get_config_json,
@@ -128,11 +130,13 @@ fn main() {
             commands::quit,
             commands::set_own_token,
             commands::clear_own_token,
+            commands::own_token_status,
             jobs::job_log_tail,
             jobs::job_action,
             wizard::wizard_detect_cli_token,
             wizard::wizard_test_connection,
             wizard::wizard_list_projects,
+            wizard::wizard_recent_projects,
             wizard::wizard_resolve_project,
             wizard::wizard_suggest_deploy_markers,
             wizard::wizard_preview_config,
@@ -171,6 +175,14 @@ fn main() {
             ) {
                 let _ = notifier.request_permission();
             }
+
+            // A click on a notification opens its target (`notify.click`).
+            // ⛔ Registered before the poller starts: the plugin reports
+            // actions only for notifications shown while a handler exists.
+            let clicked = app.handle().clone();
+            let _ = notifier.on_action(move |performed| {
+                poller::on_notification_action(&clicked, performed);
+            });
 
             let handle = app.handle().clone();
             let watch_state = state.clone();

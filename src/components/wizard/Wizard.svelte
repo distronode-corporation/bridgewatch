@@ -21,6 +21,7 @@
   import DeployStep from "./DeployStep.svelte";
   import PreferencesStep from "./PreferencesStep.svelte";
   import ReviewStep from "./ReviewStep.svelte";
+  import QuickSetup from "./QuickSetup.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import {
     diagnosticsOf,
@@ -34,6 +35,8 @@
     type ProjectListing,
     type ProjectSummary,
     type Provider,
+    type QuickWatch,
+    type RecentListing,
     type StepIssue,
     type WizardAnswers,
     type WizardApi,
@@ -43,6 +46,8 @@
     STEPS,
     answersOf,
     baseUrlOf,
+    followOwnToken,
+    adoptOwnTokenStatus,
     draftFromAnswers,
     emptyDraft,
     formatCommand,
@@ -55,6 +60,7 @@
     tokenSourceOf,
     validateStep,
     type Draft,
+    type SignInStart,
     type StepErrors,
   } from "./model";
 
@@ -68,9 +74,11 @@
     onSkip?: () => void;
     /** Sign-in commands. Absent: "Sign in with ..." is not offered. */
     oauth?: OAuthApi;
+    /** The clock the one-click list's "active" labels read. */
+    now?: () => number;
   }
 
-  let { api, initial = null, onFinish, onSkip, oauth }: Props = $props();
+  let { api, initial = null, onFinish, onSkip, oauth, now = Date.now }: Props = $props();
 
   // The draft is seeded once; later changes to `initial` do not reset a form in progress.
   const seed = (): Draft => (initial ? draftFromAnswers(initial) : emptyDraft());
@@ -110,8 +118,32 @@
   // --- step 1: sign in with GitHub / GitLab ---------------------------------
   let availability = $state<OAuthAvailability | null>(null);
   let availabilitySeq = 0;
-  /** The instance the sign-in on this page was made against. */
-  let signedInBase: string | null = null;
+  /**
+   * The instance and the client id ("" = the built-in application) that the
+   * sign-in on this page, or the one a re-run found stored, was made with.
+   */
+  let signedInBase: string | null = untrack(() => (draft.oauthStored ? baseUrlOf(draft) : null));
+  let signedInClientId: string | null = untrack(() => (draft.oauthStored ? draft.oauthClientId.trim() : null));
+
+  /**
+   * ⛔ A sign-in, fresh or stored, belongs to the instance and the application
+   * it was made with. Once the form names another, it is forgotten and Finish
+   * asks for a new one: the file would otherwise name an instance or an
+   * application its stored tokens never came from, and the first poll would
+   * say "sign in again". Returns whether it forgot one.
+   *
+   * A renamed ACCOUNT is not forgotten: the sign-in stays stored under
+   * `draft.oauthAccount`, and Finish moves it to the saved name.
+   */
+  function forgetSignInIfMoved(): boolean {
+    if (signedInBase === null) return false;
+    if (signedInBase === baseUrlOf(draft) && signedInClientId === draft.oauthClientId.trim()) return false;
+    draft.oauthLogin = null;
+    draft.oauthStored = false;
+    signedInBase = null;
+    signedInClientId = null;
+    return true;
+  }
 
   async function refreshAvailability() {
     if (!oauth) return;
@@ -121,19 +153,80 @@
       const answer = await oauth.availability(provider, baseUrlOf(draft), draft.oauthClientId.trim() || null);
       if (seq !== availabilitySeq) return;
       availability = answer;
-      // Recommended means chosen, on a fresh start where nothing else has been.
-      if (answer.builtin && freshStart && draft.tokenMode === "paste" && !draft.secret) draft.tokenMode = "oauth";
+      preselect();
     } catch {
-      if (seq === availabilitySeq) availability = null;
+      if (seq === availabilitySeq) {
+        availability = null;
+        preselect();
+      }
     }
   }
 
-  function signedIn(signed: SignedIn) {
+  // --- step 1: which token source a fresh start preselects -----------------
+  /** The user picked a token source themselves: nothing here changes it after that. */
+  let modeChosen = false;
+
+  /**
+   * Whether the token source is still the wizard's to choose: a fresh start,
+   * one of the three it preselects, and nothing the user did since (a pick, a
+   * pasted token, a typed client id, a finished sign-in).
+   */
+  function mayPreselect(): boolean {
+    if (!freshStart || modeChosen) return false;
+    if (draft.secret || draft.oauthClientId.trim() || draft.oauthLogin) return false;
+    return draft.tokenMode === "paste" || draft.tokenMode === "oauth" || draft.tokenMode === "cli";
+  }
+
+  /**
+   * Preselect the token source from what is known so far: "Sign in" where this
+   * host has a built-in application, else the provider CLI's token when
+   * detection found one, else a pasted token.
+   *
+   * ⛔ Run after EITHER answer arrives, availability or CLI detection, and
+   * decided from both, never from the one that just landed. Each used to
+   * switch the mode on its own when it found the form still on "paste", so a
+   * found gh token beat "Sign in" whenever detection answered first, and the
+   * same fresh start ended on a different radio from one launch to the next.
+   */
+  function preselect() {
+    if (!mayPreselect()) return;
+    if (availability?.builtin) {
+      draft.tokenMode = "oauth";
+    } else if (cli?.status === "found" && cliBase === baseUrlOf(draft)) {
+      draft.cliSource = cli.source;
+      draft.tokenMode = "cli";
+    } else {
+      draft.tokenMode = "paste";
+    }
+  }
+
+  function modePicked() {
+    modeChosen = true;
+  }
+
+  function signedIn(signed: SignedIn, started: SignInStart) {
     draft.oauthLogin = signed.login ?? "(unknown)";
-    draft.oauthAccount = draft.account.trim();
+    // ⛔ The name it was stored under, which is not always the one the form
+    // shows by now (a rename while the code was pending): Finish moves it from
+    // here to the saved name.
+    draft.oauthAccount = started.account;
     draft.oauthStored = false;
-    signedInBase = baseUrlOf(draft);
+    modeChosen = true;
+    signedInBase = started.base;
+    signedInClientId = started.clientId;
     delete errors.token;
+    // It finished for what it STARTED with; if the form moved on while the
+    // code was pending, it does not count.
+    if (forgetSignInIfMoved()) {
+      errors.token = "The instance or client id changed while you were signing in. Sign in again.";
+      return;
+    }
+    void loadRecent();
+  }
+
+  function clientIdChanged() {
+    forgetSignInIfMoved();
+    void refreshAvailability();
   }
 
   // --- confirmation dialog -------------------------------------------------
@@ -185,6 +278,8 @@
 
   // --- step 1: CLI token detection (glab or gh) and test connection -------
   let cli = $state<CliTokenDetection | null>(null);
+  /** The instance `cli` answers for: a token is only ever used on the instance it was found for. */
+  let cliBase: string | null = null;
   let detectedSource: Draft["cliSource"] = null;
   let detectSeq = 0;
   // `draft` is a deep $state proxy, so compare sources by value, never by identity.
@@ -203,34 +298,55 @@
     }
     if (seq !== detectSeq) return;
     cli = result;
+    cliBase = base;
     if (result.status === "found") {
-      const adopt = draft.tokenMode === "cli" || (freshStart && draft.tokenMode === "paste" && !draft.secret);
+      const adopt = draft.tokenMode === "cli" || mayPreselect();
       if (adopt || sameSource(draft.cliSource, detectedSource)) draft.cliSource = result.source;
       detectedSource = result.source;
-      if (adopt) draft.tokenMode = "cli";
-    } else if (draft.cliSource !== null && sameSource(draft.cliSource, detectedSource)) {
-      draft.cliSource = null;
+    } else {
+      if (draft.cliSource !== null && sameSource(draft.cliSource, detectedSource)) draft.cliSource = null;
       detectedSource = null;
-      if (draft.tokenMode === "cli") draft.tokenMode = "paste";
+      // ⛔ Also when an instance change cleared the source before this answer
+      // came, and whatever `modeChosen` says: the CLI option is hidden with
+      // no source, and a hidden radio must never stay selected.
+      if (draft.tokenMode === "cli" && draft.cliSource === null) leaveCli();
     }
+    preselect();
+  }
+
+  /** The CLI's token is gone: sign in where this instance offers it, else paste one. */
+  function leaveCli() {
+    draft.tokenMode = oauth && availability?.available ? "oauth" : "paste";
   }
 
   function instanceChanged() {
     if (!draft.accountEdited) draft.account = suggestAccountName(baseUrlOf(draft), draft.provider);
-    // A sign-in belongs to the instance it was made on.
-    if (signedInBase !== null && signedInBase !== baseUrlOf(draft)) {
-      draft.oauthLogin = null;
-      signedInBase = null;
+    // ⛔ The last instance's CLI token answers nothing about this one. Kept until
+    // the new detection answered, it was preselected (and sent by Test
+    // connection) against the new host whenever availability answered first.
+    if (cliBase !== null && cliBase !== baseUrlOf(draft)) {
+      if (sameSource(draft.cliSource, detectedSource)) draft.cliSource = null;
+      cli = null;
+      cliBase = null;
+      detectedSource = null;
     }
+    // A sign-in, fresh or stored, belongs to the instance it was made on, and
+    // so does a stored token.
+    forgetSignInIfMoved();
+    followOwnToken(draft);
     void detect();
     void refreshAvailability();
   }
 
   function providerChanged(provider: Provider) {
     if (draft.provider === provider) return;
+    const before = draft.tokenMode;
     switchProvider(draft, provider);
+    // A pick the switch undid (a CLI token, a sign-in) is no pick any more.
+    if (draft.tokenMode !== before) modeChosen = false;
     // The last provider's detection answers nothing about this one.
     cli = null;
+    cliBase = null;
     detectedSource = null;
     listing = null;
     listingKey = null;
@@ -238,14 +354,30 @@
     suggestionsKey = null;
     delete errors.project;
     signedInBase = null;
+    signedInClientId = null;
     availability = null;
     void detect();
     void refreshAvailability();
   }
 
+  /**
+   * A re-run on a stored own token asks the shell which server that token is
+   * bound to, and keeps it only for that server (`adoptOwnTokenStatus`). Next
+   * and Test connection wait for the answer; a failed read leaves the file's
+   * word, which the core still checks.
+   */
+  let ownCheck: Promise<void> | null = null;
+
   onMount(() => {
     void detect();
     void refreshAvailability();
+    const ask = api.ownTokenStatus;
+    if (draft.ownStored && ask) {
+      const account = draft.account.trim();
+      ownCheck = ask(account)
+        .then((status) => adoptOwnTokenStatus(draft, status))
+        .catch(() => {});
+    }
   });
 
   let identity = $state<Identity | null>(null);
@@ -255,7 +387,21 @@
   const shownIdentity = $derived(testKey === connKey ? identity : null);
   const shownTestError = $derived(testKey === connKey ? testError : null);
 
+  /**
+   * ⛔ What a changed instance drops, applied again before anything is judged.
+   * `instanceChanged` runs on the URL field's blur, and Enter in that field
+   * submits the form without one: Next then accepted "leave empty to keep the
+   * stored token" for a host that token is not bound to. Every path that
+   * validates the account step (Next, Enter, Test connection) calls this first.
+   */
+  async function settleInstance() {
+    if (ownCheck) await ownCheck;
+    followOwnToken(draft);
+    forgetSignInIfMoved();
+  }
+
   async function testConnection() {
+    await settleInstance();
     const stepErrors = validateStep("account", draft);
     errors = stepErrors;
     if (Object.keys(stepErrors).length > 0) return focusInvalid();
@@ -267,6 +413,7 @@
       identity = result;
       testError = null;
       testKey = key;
+      void loadRecent();
     } catch (error) {
       identity = null;
       testError = messageOf(error);
@@ -275,6 +422,103 @@
       testing = false;
     }
   }
+
+  // --- step 1, after a sign-in: one-click setup ------------------------------
+  let recent = $state<RecentListing | null>(null);
+  /** The connection `recent` was listed for: a list belongs to the account that made it. */
+  let recentKey = $state<string | null>(null);
+  let recentLoading = $state(false);
+  let recentError = $state<string | null>(null);
+  let recentNow = $state(0);
+  /** Project id → ticked, seeded from the core's `ticked`. */
+  let ticks = $state<Record<number, boolean>>({});
+  let quickBusy = $state(false);
+  let recentSeq = 0;
+  /** The connection the last request was for; its loading line and error belong to it alone. */
+  let recentAsked = $state<string | null>(null);
+  const shownRecent = $derived(recentKey === connKey ? recent : null);
+  const shownRecentLoading = $derived(recentLoading && recentAsked === connKey);
+  const shownRecentError = $derived(recentAsked === connKey ? recentError : null);
+
+  /**
+   * The one-click list, once per connection: a sign-in or a passed Test
+   * connection asks for it, and asking again for the same account sends
+   * nothing (one list call per account).
+   */
+  async function loadRecent() {
+    if (!api.recentProjects) return;
+    const key = connKey;
+    if (recentKey === key && recent !== null) return;
+    const seq = ++recentSeq;
+    recentAsked = key;
+    recentLoading = true;
+    recentError = null;
+    try {
+      const result = await live((c) => api.recentProjects!(c));
+      if (seq !== recentSeq || result === null) return;
+      recent = result;
+      recentKey = key;
+      recentNow = now();
+      ticks = Object.fromEntries(
+        result.mode === "projects" ? result.projects.map((p) => [p.id, p.ticked]) : [],
+      );
+      // It lands under the sign-in or Test connection result, often below the
+      // fold of the account step: bring it into view.
+      await tick();
+      body?.querySelector<HTMLElement>('[data-slot="quick-setup"]')?.scrollIntoView?.({ block: "nearest" });
+    } catch (error) {
+      if (seq !== recentSeq) return;
+      recent = null;
+      recentKey = null;
+      recentError = messageOf(error);
+    } finally {
+      if (seq === recentSeq) recentLoading = false;
+    }
+  }
+
+  /**
+   * "Watch N projects": the ticked rows become watches. Each takes its best
+   * deploy marker from the deploy step's own ranking (`suggestDeployMarkers`,
+   * the first suggestion), or none when nothing ranks or the read fails; then
+   * the wizard goes to Preferences, and Finish writes every watch at once.
+   */
+  async function quickSetup() {
+    const listing = shownRecent;
+    if (quickBusy || !listing || listing.mode !== "projects") return;
+    await settleInstance();
+    const stepErrors = validateStep("account", draft);
+    errors = stepErrors;
+    if (Object.keys(stepErrors).length > 0) return void focusInvalid();
+    if (!(await ensureCommandAck())) return;
+    const rows = listing.projects.filter((p) => p.default_branch && ticks[p.id]);
+    if (rows.length === 0) return;
+    quickBusy = true;
+    try {
+      const watches: QuickWatch[] = [];
+      for (const row of rows) {
+        const project = projectRefFor(draft.provider, row);
+        const ref = row.default_branch as string;
+        let markers: string[] = [];
+        try {
+          const found = await live((c) => api.suggestDeployMarkers(c, project, ref));
+          if (found === null) return;
+          const best = found.suggestions[0];
+          if (best) markers = [best.name];
+        } catch {
+          // No marker is a real answer; the watch reports "succeeded" until one is added.
+        }
+        watches.push({ project, path: row.path, ref_name: ref, deploy_markers: markers, listed_by: listing.listed_by });
+      }
+      draft.quick = watches;
+      delete errors.watches;
+      await goTo(STEPS.findIndex((s) => s.id === "preferences"));
+    } finally {
+      quickBusy = false;
+    }
+  }
+
+  /** The one-click steps skipped: project, watch and deploy. */
+  const QUICK_SKIPS = new Set(["project", "watch", "deploy"]);
 
   // --- step 2: project -----------------------------------------------------
   let listing = $state<ProjectListing | null>(null);
@@ -532,6 +776,12 @@
     advancing = true;
     try {
       const id = step.id;
+      // Next on the account step is the step-by-step path: a one-click
+      // choice made earlier is dropped.
+      if (id === "account") {
+        draft.quick = null;
+        await settleInstance();
+      }
       if (id === "project" && draft.projectInput.trim() && !inputMatchesProject()) {
         if (!(await resolve())) return void focusInvalid();
       }
@@ -546,7 +796,16 @@
   }
 
   function back() {
-    if (index > 0) void goTo(index - 1);
+    if (index === 0) return;
+    let target = index - 1;
+    while (draft.quick && target > 0 && QUICK_SKIPS.has(STEPS[target].id)) target--;
+    void goTo(target);
+  }
+
+  /** The stepper: a one-click setup stays one only while no skipped step is opened. */
+  function select(stepIndex: number) {
+    if (draft.quick && QUICK_SKIPS.has(STEPS[stepIndex].id)) draft.quick = null;
+    void goTo(stepIndex);
   }
 
   function submit(event: SubmitEvent) {
@@ -555,18 +814,28 @@
     else void next();
   }
 
-  const busy = $derived(advancing || saving || skipping);
+  const busy = $derived(advancing || saving || skipping || quickBusy);
 </script>
 
-<section class="flex h-full flex-col gap-4 p-4" aria-labelledby="wizard-heading" data-slot="wizard" data-step={step.id}>
-  <Stepper steps={STEPS} current={index} onSelect={(i) => void goTo(i)} label="Setup steps" />
+<!-- One column, at most 560px, with the window's own padding (no second p-4).
+     Body text is 13/18 and the step title 15/20; the shared primitives are
+     13/18 themselves, so every step reads at one size. Hints stay 12px
+     (text-xs). -->
+<section
+  class="mx-auto flex h-full w-full max-w-[560px] flex-col gap-4 text-[13px]/[18px]"
+  aria-labelledby="wizard-heading"
+  data-slot="wizard"
+  data-step={step.id}
+>
+  <Stepper steps={STEPS} current={index} onSelect={select} label="Setup steps" />
 
   <form class="flex min-h-0 flex-1 flex-col gap-4" onsubmit={submit} novalidate>
-    <h2 id="wizard-heading" class="text-base font-semibold outline-none" tabindex="-1" bind:this={heading}>
+    <h2 id="wizard-heading" class="text-[15px]/[20px] font-semibold outline-none" tabindex="-1" bind:this={heading}>
       {stepTitle(step, draft.provider)}
     </h2>
 
-    <div class="min-h-0 flex-1 overflow-y-auto" bind:this={body}>
+    <!-- -mx-1 px-1: room for the focus rings, which the scroll box would clip. -->
+    <div class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1" bind:this={body}>
       {#if step.id === "account"}
         <AccountStep
           bind:draft
@@ -581,7 +850,20 @@
           {oauth}
           {availability}
           onSignedIn={signedIn}
-          onClientIdChange={() => void refreshAvailability()}
+          onClientIdChange={clientIdChanged}
+          onModePick={modePicked}
+        />
+        <QuickSetup
+          provider={draft.provider}
+          listing={shownRecent}
+          loading={shownRecentLoading}
+          loadError={shownRecentError}
+          {ticks}
+          onToggle={(id, on) => (ticks = { ...ticks, [id]: on })}
+          onSetUp={() => void quickSetup()}
+          busy={quickBusy}
+          error={errors.watches}
+          now={recentNow}
         />
       {:else if step.id === "project"}
         <ProjectStep
@@ -613,6 +895,7 @@
           {saveError}
           {tokenNote}
           primary={draft.primary}
+          quick={!!draft.quick}
           onprimary={(primary) => {
             draft.primary = primary;
             void loadPreview();

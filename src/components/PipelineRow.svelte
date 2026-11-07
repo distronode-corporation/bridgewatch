@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { Badge } from "$lib/components/ui/badge/index.js";
   import {
     TONE_BG,
     TONE_DOT,
     TONE_TEXT,
+    deployAddsInfo,
     deployTone,
     deployWord,
     relativeAge,
@@ -12,7 +12,7 @@
     stateWord,
   } from "../lib/format";
   import { openExternal } from "../lib/ipc";
-  import type { BridgeView, JobsMode, PipelineView, Provider } from "../lib/types";
+  import type { BridgeView, IconState, JobsMode, PipelineView, Provider } from "../lib/types";
   import { PipelineJobs, defaultExpanded, etaLine, type ExpansionStore } from "./jobs";
   import Link from "./Link.svelte";
 
@@ -32,6 +32,11 @@
     watchId?: string;
     /** The watch's account allows retry and play. */
     actions?: boolean;
+    /**
+     * The watch's own state, as its header shows it. A row whose state is the
+     * same says it to screen readers only: the verdict is shown once.
+     */
+    watchState?: IconState | null;
   }
 
   let {
@@ -43,6 +48,7 @@
     expansion,
     watchId,
     actions = false,
+    watchState = null,
   }: Props = $props();
 
   // Only with a watch to resolve against: a row mounted without one (a test,
@@ -88,55 +94,82 @@
   const dTone = $derived(deployTone(row.deploy));
   /** "usually ~11m · 6m 30s in", or "" when the core sent no estimate. */
   const eta = $derived(etaLine(row, now));
+  /** The state word is already in the watch header right above this row. */
+  const stateShown = $derived(row.state !== watchState);
+  const showDeploy = $derived(deployAddsInfo(row.state, row.deploy));
+  const source = $derived(sourceBadge(row.source));
 </script>
 
-<div class="row border-border/60 flex flex-col gap-1 border-b px-3 pt-1.5 pb-2 last:border-b-0">
-  <div class="head flex items-center gap-1.5 text-[13px]">
+<!--
+  LAYOUT (L1, the two-line row). F2 and later packets: add to a line, do not
+  reshape it.
+    line 1 `.head`: dot · ref (13px mono, truncates) · state · deploy pill · age
+    line 2 `.sub` : sha · source · "deploy job <name>" · eta   (12px muted, pl-4)
+    then the jobs (`PipelineJobs`) and the sibling / after-deploy notes.
+  The lines of a row are 8px apart (`gap-2`); rows in a watch are split by an
+  inset hairline.
+-->
+<div
+  class="row border-border/60 mx-3 flex flex-col gap-2 border-b py-2 last:border-b-0"
+  data-state={row.state}
+>
+  <!-- Line 1. The verdict is said ONCE: the state word only when the watch
+       header above does not already say it (else for screen readers only),
+       and the deploy pill only when it adds something the word does not. -->
+  <div class="head text-ui-body flex min-w-0 items-center gap-2">
     <span class={["size-2 shrink-0 rounded-full", TONE_DOT[tone], row.live && "bw-live"]} aria-hidden="true"
     ></span>
-    <Link href={row.web_url} class="sha text-foreground font-mono text-xs font-semibold" title={row.sha}
-      >{row.sha7}</Link
-    >
-    <span class="ref text-muted-foreground max-w-36 truncate font-mono text-xs" title="ref">{row.ref}</span>
-    {#if row.source}
-      <Badge variant="secondary" class="source h-4 px-1.5 text-[10px]">{sourceBadge(row.source)}</Badge>
+    <span class="ref text-foreground min-w-0 flex-1 truncate font-mono" title={`ref ${row.ref}`}>{row.ref}</span>
+    <span class={["state text-ui-meta shrink-0", TONE_TEXT[tone], !stateShown && "sr-only"]}>{stateWord(row.state)}</span>
+    {#if showDeploy}
+      <span
+        class={["deploy text-ui-badge shrink-0 rounded-full px-1.5 py-px", TONE_TEXT[dTone], TONE_BG[dTone]]}
+        title="deploy verdict">{deployWord(row.deploy)}</span
+      >
     {/if}
-    <span class="flex-1"></span>
-    <span class={["state text-xs", TONE_TEXT[tone]]}>{stateWord(row.state)}</span>
-    <span
-      class={["deploy rounded-full px-1.5 text-[11px] leading-[17px]", TONE_TEXT[dTone], TONE_BG[dTone]]}
-      title="deploy verdict">{deployWord(row.deploy)}</span
-    >
-    <span class="age text-muted-foreground min-w-6 text-right text-[11px] tabular-nums" title={row.created_at ?? ""}
+    <span class="age text-muted-foreground text-ui-meta min-w-6 shrink-0 text-right tabular-nums" title={row.created_at ?? ""}
       >{relativeAge(row.created_at, now)}</span
     >
   </div>
 
-  {#if !collapsed}
-    {#if eta}
-      <div class="eta text-muted-foreground pl-3.5 text-xs tabular-nums" title="from this watch's recent deploys">
-        {eta}
-      </div>
+  <!-- Line 2: what the pipeline is. `·` separators are decoration only. -->
+  <div class="sub text-muted-foreground text-ui-meta flex min-w-0 flex-wrap items-baseline gap-x-1 pl-4">
+    <Link href={row.web_url} class="sha text-foreground font-mono" title={row.sha}>{row.sha7}</Link>
+    {#if source}
+      <span aria-hidden="true">·</span>
+      <span class="source" title="what started the pipeline">{source}</span>
     {/if}
-
-    {#if row.deploy_marker}
-      <div class="marker flex flex-wrap gap-1.5 pl-3.5 text-xs">
-        <Link href={row.deploy_marker.web_url} class="font-mono" title="the deploy marker job">
+    {#if !collapsed && row.deploy_marker}
+      <span aria-hidden="true">·</span>
+      <!-- The deploy marker, labelled: a bare job name here read as wrapped text. -->
+      <span class="marker inline-flex max-w-full min-w-0 items-baseline gap-x-1">
+        <span class="shrink-0">deploy job</span>
+        <Link
+          href={row.deploy_marker.web_url}
+          class="text-foreground min-w-0 truncate font-mono"
+          title={`the deploy marker job, ${row.deploy_marker.name}`}
+        >
           {row.deploy_marker.name}
         </Link>
         {#if row.deploy_failures.length > 0}
-          <span class="text-tone-red">{row.deploy_failures.join(", ")}</span>
+          <span class="text-tone-red shrink-0">{row.deploy_failures.join(", ")}</span>
         {/if}
-      </div>
+      </span>
     {/if}
+    {#if !collapsed && eta}
+      <span aria-hidden="true">·</span>
+      <span class="eta tabular-nums" title="from this watch's recent deploys">{eta}</span>
+    {/if}
+  </div>
 
+  {#if !collapsed}
     <!--
       Every job, parent and child, by stage (or only the failures, per the
       watch's `jobs` mode). The parent's OWN failures are in here too: a
       `secret_detection` that failed in the parent pipeline has no child to
       hang off, and a monitor that only walks bridges loses it.
     -->
-    <div class="pl-2">
+    <div class="jobs pl-3">
       <PipelineJobs
         pipeline={row}
         {expansion}
@@ -150,9 +183,9 @@
     </div>
 
     {#if row.sibling_failures.length > 0 || row.post_deploy_failures.length > 0}
-      <div class="notes text-muted-foreground flex flex-wrap gap-1.5 pl-3.5 text-xs">
+      <div class="notes text-muted-foreground text-ui-meta flex flex-wrap gap-x-2 gap-y-1 pl-4">
         {#if row.sibling_failures.length > 0}
-          <span class="note flex flex-wrap gap-1.5">
+          <span class="note flex flex-wrap gap-1">
             sibling:
             {#each row.sibling_failures as name (name)}
               <Link href={jobUrl(name)} class="text-foreground font-mono">{name}</Link>
@@ -160,7 +193,7 @@
           </span>
         {/if}
         {#if row.post_deploy_failures.length > 0}
-          <span class="note flex flex-wrap gap-1.5">
+          <span class="note flex flex-wrap gap-1">
             after deploy:
             {#each row.post_deploy_failures as name (name)}
               <Link href={jobUrl(name)} class="text-foreground font-mono">{name}</Link>

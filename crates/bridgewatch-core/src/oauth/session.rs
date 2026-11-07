@@ -33,7 +33,7 @@
 use std::sync::Arc;
 
 use super::store::{self, TokenSet};
-use super::{BuiltinClients, Endpoints, OAuthError, client_id_for, origin_of};
+use super::{BuiltinClients, Endpoints, OAuthError, client_id_for};
 use crate::client::{ClientError, HttpRequest, HttpResponse, Transport};
 use crate::config::{Account, OAuthSource, Provider};
 use crate::token::{Secret, TokenProvider};
@@ -68,13 +68,16 @@ pub fn system_clock() -> Clock {
 pub struct OAuthSession {
     account: String,
     provider: Provider,
-    base_origin: Option<String>,
+    base_url: String,
     endpoints: Endpoints,
     client_id: String,
     transport: Arc<dyn Transport>,
     store: Arc<dyn TokenProvider>,
     clock: Clock,
     state: tokio::sync::Mutex<State>,
+    /// What [`Self::note`] answers: a copy of the held set's login and end,
+    /// kept outside the async lock so a caller that may not wait can read it.
+    note: std::sync::Mutex<crate::health::SignInNote>,
 }
 
 #[derive(Default)]
@@ -115,13 +118,14 @@ impl OAuthSession {
         Ok(Self {
             account: account_name.to_string(),
             provider: account.provider,
-            base_origin: origin_of(&account.base_url),
+            base_url: account.base_url.clone(),
             endpoints: Endpoints::for_account(account),
             client_id: client_id_for(account, source, builtin)?,
             transport,
             store,
             clock: system_clock(),
             state: tokio::sync::Mutex::new(State::default()),
+            note: std::sync::Mutex::new(crate::health::SignInNote::default()),
         })
     }
 
@@ -129,6 +133,33 @@ impl OAuthSession {
     pub fn with_clock(mut self, clock: Clock) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// The held sign-in's login and end, as last held. No lock is waited on.
+    pub fn note(&self) -> crate::health::SignInNote {
+        self.note.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Who is signed in: the stored sign-in is read first if no request has
+    /// read it yet. Sends nothing.
+    pub async fn login(&self) -> Option<String> {
+        let mut state = self.state.lock().await;
+        if !state.loaded {
+            self.adopt_stored(&mut state);
+        }
+        state.current.as_ref().and_then(|s| s.login.clone())
+    }
+
+    /// Copy what [`Self::note`] answers from the set now held.
+    fn publish(&self, set: &TokenSet) {
+        let ends_at = match set.refresh_token {
+            Some(_) => set.refresh_expires_at,
+            None => set.expires_at,
+        };
+        *self.note.lock().unwrap_or_else(|e| e.into_inner()) = crate::health::SignInNote {
+            ends_at: ends_at.and_then(|at| i64::try_from(at).ok()),
+            login: set.login.clone(),
+        };
     }
 
     fn sign_in_again(&self, never_signed_in: bool) -> ClientError {
@@ -139,14 +170,10 @@ impl OAuthSession {
         }
     }
 
-    /// Whether a stored set may be used for this account: issued by the same
-    /// instance, for the same application.
-    ///
-    /// ⛔ A set from another host is never sent: the configuration's
-    /// `base_url` can change under a stored sign-in (by hand, or by a hostile
-    /// edit), and the token would otherwise go wherever it now points.
+    /// Whether a stored set may be used for this account: [`TokenSet::fits`],
+    /// the one rule every reader of a sign-in shares.
     fn fits(&self, set: &TokenSet) -> bool {
-        origin_of(&set.base_url) == self.base_origin && set.client_id == self.client_id
+        set.fit_for(&self.base_url, &self.client_id) == super::Fit::Fits
     }
 
     /// Read the store; adopt what is there if it differs from what is held.
@@ -176,6 +203,7 @@ impl OAuthSession {
                     // written; the store's copy is the spent one.
                     return false;
                 }
+                self.publish(&set);
                 state.current = Some(set);
                 state.dead = false;
                 true
@@ -328,6 +356,7 @@ impl OAuthSession {
                 }
                 tracing::debug!(account = %self.account, "sign-in refreshed");
                 let token = set.access_token.clone();
+                self.publish(&set);
                 state.current = Some(set);
                 state.dead = false;
                 Ok(token)
@@ -400,6 +429,14 @@ fn authorised(request: &HttpRequest, token: &Secret) -> HttpRequest {
 
 #[async_trait::async_trait]
 impl Transport for OAuthTransport {
+    fn sign_in(&self) -> Option<crate::health::SignInNote> {
+        Some(self.session.note())
+    }
+
+    async fn signed_in_login(&self) -> Option<String> {
+        self.session.login().await
+    }
+
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ClientError> {
         // ⛔ Sent exactly as built, with no token: the second leg of a job log,
         // a signed URL on a storage host (see `HttpRequest::anonymous`). This

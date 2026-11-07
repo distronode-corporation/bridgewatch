@@ -324,6 +324,8 @@ fn build(
                 finished_at: None,
                 duration: None,
                 web_url: url(file),
+                failure_reason: None,
+                annotation: None,
             })
             .collect();
         (waiting, Vec::new())

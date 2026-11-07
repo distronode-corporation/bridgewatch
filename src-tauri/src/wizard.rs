@@ -34,8 +34,8 @@ use bridgewatch_core::poll::{self, PollerError};
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider, TokenProvider};
 use bridgewatch_core::wizard::{
     self, CliTokenDetection, FailureKind, Identity, MarkerSuggestions, ProjectListing,
-    ResolvedProject, StepIssue, SystemKeyringProbe, WizardAnswers, WizardError, WizardFailure,
-    WizardStep,
+    RecentListing, ResolvedProject, StepIssue, SystemKeyringProbe, WizardAnswers, WizardError,
+    WizardFailure, WizardStep,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -100,6 +100,14 @@ pub struct WizardPreview {
     /// The id of the primary watch already in the file, when the new watch was
     /// added as secondary because of it. The review step says so.
     pub secondary_because: Option<String>,
+    /// One-click setup: the ids of the watches the save adds. Absent for the
+    /// step-by-step wizard, so its answer is exactly what it was.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub added: Vec<String>,
+    /// One-click setup: watches the file already had for a project asked for,
+    /// left as they are.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub already_watched: Vec<String>,
 }
 
 /// `save`'s answer: the shell's `Validation`, plus answers the core refused
@@ -229,19 +237,32 @@ pub fn client_for(
         .filter(|s| !s.is_empty())
         .map(Secret::new);
     let name = conn.account.as_deref().unwrap_or(UNNAMED);
-    poll::client_for_account(
-        name,
-        &account_for(conn),
-        pasted,
-        store,
-        RequestRing::new(16),
-    )
-    .map_err(|e| match e {
-        PollerError::Token(_, e) => {
-            account_issue("token", format!("could not read the token: {e}"))
+    let account = account_for(conn);
+    // ⛔ A 1.x value is bound, on first use, to the base_url it is resolved
+    // against, and here that is the WEBVIEW's answer, not the file's. So the
+    // wizard never makes that first use: only the poller does, against the
+    // file. A bound entry is safe to resolve here, because `resolve` refuses
+    // it for any other server.
+    if pasted.is_none()
+        && matches!(conn.token, TokenSource::Own(true))
+        && let Ok(token::OwnTokenStatus::Legacy) =
+            token::own_token_status(name, &account, store.as_ref())
+    {
+        return Err(account_issue(
+            "token",
+            "the stored token was saved by bridgewatch 1.x and is not tied to a server yet: \
+             paste it again here, or let the app use it once on the account's current server"
+                .to_string(),
+        ));
+    }
+    poll::client_for_account(name, &account, pasted, store, RequestRing::new(16)).map_err(|e| {
+        match e {
+            PollerError::Token(_, e) => {
+                account_issue("token", format!("could not read the token: {e}"))
+            }
+            PollerError::SignIn(_, e) => account_issue("token", e.to_string()),
+            other => failure(FailureKind::Network, other.to_string()),
         }
-        PollerError::SignIn(_, e) => account_issue("token", e.to_string()),
-        other => failure(FailureKind::Network, other.to_string()),
     })
 }
 
@@ -349,6 +370,43 @@ pub async fn wizard_list_projects(
     .map_err(fail)
 }
 
+/// Step 1, once a sign-in or Test connection succeeded: the one-click list,
+/// the account's ten most recently active projects with the top three ticked.
+///
+/// ⚠️ It asks who the token is first, as `wizard_list_projects` does, because
+/// a project token cannot usefully list; that is `/user` and the token's own
+/// description, never a second list request.
+#[tauri::command]
+pub async fn wizard_recent_projects(
+    connection: Connection,
+    app: AppHandle,
+) -> Result<Confirmable<RecentListing>, WizardFailure> {
+    let client = match connect(&app, &connection).await? {
+        Ok(c) => c,
+        Err(confirm) => return Ok(Confirmable::NeedsConfirm { confirm }),
+    };
+    recent_for(client.as_ref(), &connection)
+        .await
+        .map(Confirmable::Ready)
+        .map_err(fail)
+}
+
+/// `wizard_recent_projects` once the client exists: who the token is, then
+/// the list, for the connection's own instance.
+async fn recent_for(
+    client: &dyn CiClient,
+    connection: &Connection,
+) -> Result<RecentListing, WizardError> {
+    let identity = wizard::test_connection(client, connection.provider).await?;
+    wizard::recent_projects(
+        client,
+        connection.provider,
+        &identity.token,
+        &connection.base_url,
+    )
+    .await
+}
+
 /// Step 2: resolve a typed id, path or pasted project URL.
 #[tauri::command]
 pub async fn wizard_resolve_project(
@@ -399,6 +457,8 @@ pub fn preview(answers: &WizardAnswers, existing: &str) -> Result<WizardPreview,
         warnings,
         edited_existing: built.edited_existing,
         secondary_because: built.secondary_because,
+        added: built.added,
+        already_watched: built.already_watched,
     })
 }
 
@@ -486,21 +546,48 @@ pub async fn wizard_save(
     }
 
     // Stored BEFORE the write, so the reload the write triggers finds it.
+    //
+    // ⛔ And put back if the write then fails (an I/O error, or a file that
+    // changed since it was read): the new entry is bound to the NEW base_url,
+    // and a file still naming the old one would refuse it, locking the
+    // account out of a token that used to work.
+    let mut stored_over: Option<(String, Previous)> = None;
     if let (TokenSource::Own(true), Some(pasted)) = (&answers.token, secret.as_deref()) {
         let pasted = pasted.trim().to_string();
         if !pasted.is_empty() {
             let account = answers.account.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                token::set_own_token(&account, &Secret::new(pasted), &SystemTokenProvider)
+            // ⛔ Bound to the base_url being ADMITTED: the account as the text
+            // `admit` just checked, and the write below puts on disk, says it.
+            // The token is sent to that server and no other.
+            let base_url = admitted_base_url(&built.toml, &path, &answers.account)?;
+            let previous = tauri::async_runtime::spawn_blocking(move || {
+                let previous = previous_own(&account, &SystemTokenProvider);
+                token::set_own_token(
+                    &account,
+                    &base_url,
+                    &Secret::new(pasted),
+                    &SystemTokenProvider,
+                )
+                .map(|()| previous)
             })
             .await
             .map_err(|e| failure(FailureKind::Network, e.to_string()))?
             .map_err(|e| account_issue("token", format!("could not store the token: {e}")))?;
+            stored_over = Some((answers.account.clone(), previous));
         }
     }
 
     let validation = crate::commands::write_admitted(&app, &state, &base, &built.toml, validation);
     let written = validation.ok;
+    if !written && let Some((account, previous)) = stored_over {
+        let restored = tauri::async_runtime::spawn_blocking(move || {
+            restore_own(&account, previous, &SystemTokenProvider)
+        })
+        .await;
+        if !matches!(restored, Ok(Ok(()))) {
+            tracing::warn!("the file was not written, and the stored token could not be put back");
+        }
+    }
     let mut result = WizardSaveResult {
         validation,
         issues: Vec::new(),
@@ -522,6 +609,62 @@ pub async fn wizard_save(
         hide_wizard(&app);
     }
     Ok(result)
+}
+
+/// The `base_url` of `account` in the text being admitted, which is what a
+/// pasted token is bound to: never the webview's answer, which the core may
+/// have normalised on its way into the file.
+fn admitted_base_url(
+    toml: &str,
+    path: &std::path::Path,
+    account: &str,
+) -> Result<String, WizardFailure> {
+    bridgewatch_core::config::parse_lenient(toml, path)
+        .ok()
+        .and_then(|(c, _)| c.accounts.get(account).map(|a| a.base_url.clone()))
+        .ok_or_else(|| {
+            account_issue(
+                "token",
+                "could not store the token: the account is not in the file being saved".to_string(),
+            )
+        })
+}
+
+/// What an account's own entry held before the wizard stored over it.
+#[derive(Debug, PartialEq, Eq)]
+enum Previous {
+    /// This value, as the store returned it.
+    Value(String),
+    /// Nothing was stored.
+    Nothing,
+    /// It could not be read, so it cannot be put back either.
+    Unknown,
+}
+
+fn previous_own(account: &str, store: &dyn TokenProvider) -> Previous {
+    match store.keyring_get(
+        &SystemTokenProvider::own_service(account),
+        SystemTokenProvider::OWN_USER,
+    ) {
+        Ok(raw) => Previous::Value(raw),
+        Err(token::TokenError::NoEntry { .. }) => Previous::Nothing,
+        Err(_) => Previous::Unknown,
+    }
+}
+
+/// Put an own entry back as [`previous_own`] found it. An entry that could
+/// not be read is left as it is now: deleting it would lose more.
+fn restore_own(
+    account: &str,
+    previous: Previous,
+    store: &dyn TokenProvider,
+) -> Result<(), token::TokenError> {
+    let service = SystemTokenProvider::own_service(account);
+    match previous {
+        Previous::Value(raw) => store.keyring_set(&service, SystemTokenProvider::OWN_USER, &raw),
+        Previous::Nothing => store.keyring_delete(&service, SystemTokenProvider::OWN_USER),
+        Previous::Unknown => Ok(()),
+    }
 }
 
 /// "I'll edit config.toml": leave the wizard, writing nothing, and open
@@ -629,6 +772,139 @@ mod tests {
             s.gate(&conn("https://new.example", TokenSource::Own(true)), None)
                 .is_ok()
         );
+    }
+
+    /// ⛔ A pasted token is bound to the account as the text being written
+    /// says it, not to anything the webview sent alongside.
+    #[test]
+    fn a_pasted_token_is_bound_to_the_base_url_being_written() {
+        let answers = bridgewatch_core::wizard::WizardAnswers {
+            account: "lab".into(),
+            base_url: "https://GitLab.Example.com/".into(),
+            token: TokenSource::Own(true),
+            project: Some(bridgewatch_core::config::ProjectRef::Id(1)),
+            ..Default::default()
+        };
+        let built = preview(&answers, "").expect("builds");
+        let base = admitted_base_url(&built.toml, Path::new("x.toml"), "lab").unwrap();
+        assert_eq!(
+            bridgewatch_core::oauth::origin_of(&base).as_deref(),
+            Some("https://gitlab.example.com")
+        );
+        let missing = admitted_base_url(&built.toml, Path::new("x.toml"), "other").unwrap_err();
+        assert_eq!(missing.issues[0].field, "token");
+    }
+
+    /// A store holding one 1.x (bare) own value, under `bridgewatch:gl`.
+    #[derive(Default)]
+    struct OneLegacy(Mutex<Vec<String>>);
+    impl TokenProvider for OneLegacy {
+        fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+            if service == "bridgewatch:gl" && user == "token" {
+                return Ok("glpat-legacy".into());
+            }
+            Err(TokenError::NoEntry {
+                service: service.into(),
+                user: user.into(),
+            })
+        }
+        fn keyring_set(&self, service: &str, _: &str, _: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().push(service.into());
+            Ok(())
+        }
+        fn keyring_delete(&self, _: &str, _: &str) -> Result<(), TokenError> {
+            Ok(())
+        }
+        fn env(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn run(&self, _: &[String]) -> Result<String, TokenError> {
+            unreachable!()
+        }
+    }
+
+    /// ⛔ The wizard's connection carries the webview's base_url, so it never
+    /// binds a 1.x value: that would tie the token to whatever host the form
+    /// names. It asks for a paste instead, and writes nothing.
+    #[test]
+    fn the_wizard_never_binds_a_1x_value_to_the_forms_host() {
+        let store = Arc::new(OneLegacy::default());
+        let mut c = conn("https://evil.example", TokenSource::Own(true));
+        c.account = Some("gl".into());
+        let Err(f) = client_for(&c, store.clone()) else {
+            panic!("a 1.x value was used for the form's host");
+        };
+        assert_eq!(f.issues[0].field, "token");
+        assert!(f.message.contains("bridgewatch 1.x"), "{}", f.message);
+        assert!(store.0.lock().unwrap().is_empty(), "nothing was bound");
+
+        // A paste is what was asked for, and is used.
+        c.secret = Some("glpat-typed".into());
+        assert!(client_for(&c, store.clone()).is_ok());
+        assert!(store.0.lock().unwrap().is_empty());
+    }
+
+    /// A credential store in memory, for the save-then-restore test.
+    #[derive(Default)]
+    struct Memory(Mutex<std::collections::BTreeMap<String, String>>);
+    impl TokenProvider for Memory {
+        fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(service)
+                .cloned()
+                .ok_or_else(|| TokenError::NoEntry {
+                    service: service.into(),
+                    user: user.into(),
+                })
+        }
+        fn keyring_set(&self, service: &str, _: &str, secret: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().insert(service.into(), secret.into());
+            Ok(())
+        }
+        fn keyring_delete(&self, service: &str, _: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().remove(service);
+            Ok(())
+        }
+        fn env(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn run(&self, _: &[String]) -> Result<String, TokenError> {
+            unreachable!()
+        }
+    }
+
+    /// ⛔ A save whose file write fails puts the account's entry back: the
+    /// token bound to the new base_url would otherwise sit beside a file still
+    /// naming the old one, and the account would refuse a token that worked.
+    #[test]
+    fn a_failed_save_puts_the_previous_own_entry_back() {
+        let store = Memory::default();
+        let account = |base: &str| Account {
+            base_url: base.into(),
+            token: TokenSource::Own(true),
+            ..Account::default()
+        };
+        token::set_own_token("gl", "https://a.example", &Secret::new("glpat-A"), &store).unwrap();
+
+        let previous = previous_own("gl", &store);
+        token::set_own_token("gl", "https://b.example", &Secret::new("glpat-B"), &store).unwrap();
+        restore_own("gl", previous, &store).unwrap();
+        assert_eq!(
+            token::resolve("gl", &account("https://a.example"), &store)
+                .unwrap()
+                .expose(),
+            "glpat-A",
+            "the old token works on the old server again"
+        );
+
+        // Nothing before: nothing after.
+        let previous = previous_own("new", &store);
+        assert_eq!(previous, Previous::Nothing);
+        token::set_own_token("new", "https://b.example", &Secret::new("glpat-B"), &store).unwrap();
+        restore_own("new", previous, &store).unwrap();
+        assert!(!store.0.lock().unwrap().contains_key("bridgewatch:new"));
     }
 
     struct NoStore;
@@ -818,6 +1094,7 @@ mod tests {
                     etag: None,
                     link: None,
                     oauth_scopes: None,
+                    token_expiration: None,
                     location: None,
                     truncated: false,
                 })
@@ -900,6 +1177,177 @@ mod tests {
         assert_eq!(
             account.header,
             bridgewatch_core::config::AuthHeader::PrivateToken
+        );
+    }
+
+    /// Answers GitLab's `/user`, its token description and one page of
+    /// projects that claims a second, and records every path.
+    #[derive(Debug, Default)]
+    struct OnePage {
+        paths: Mutex<Vec<String>>,
+    }
+
+    impl bridgewatch_core::client::Transport for OnePage {
+        fn execute<'life0, 'async_trait>(
+            &'life0 self,
+            request: bridgewatch_core::client::HttpRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            bridgewatch_core::client::HttpResponse,
+                            bridgewatch_core::client::ClientError,
+                        >,
+                    > + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            Self: 'async_trait,
+        {
+            self.paths.lock().unwrap().push(request.path.clone());
+            let (body, next_page) = if request.path.starts_with("/projects?") {
+                let rows: Vec<_> = (1..=12u64)
+                    .map(|id| {
+                        serde_json::json!({
+                            "id": id,
+                            "path_with_namespace": format!("g/p{id}"),
+                            "default_branch": "main",
+                            "last_activity_at": format!("2026-10-{id:02}T00:00:00Z"),
+                        })
+                    })
+                    .collect();
+                (
+                    serde_json::Value::Array(rows).to_string(),
+                    Some("2".to_string()),
+                )
+            } else if request.path.starts_with("/personal_access_tokens/self") {
+                (
+                    r#"{"id":1,"name":"t","scopes":["read_api"],"active":true}"#.to_string(),
+                    None,
+                )
+            } else {
+                (
+                    r#"{"id":1,"username":"sean","name":"Sean","bot":false}"#.to_string(),
+                    None,
+                )
+            };
+            Box::pin(async move {
+                Ok(bridgewatch_core::client::HttpResponse {
+                    status: 200,
+                    body,
+                    next_page,
+                    ratelimit_remaining: None,
+                    ratelimit_reset: None,
+                    retry_after: None,
+                    etag: None,
+                    link: None,
+                    oauth_scopes: None,
+                    token_expiration: None,
+                    location: None,
+                    truncated: false,
+                })
+            })
+        }
+    }
+
+    /// The command's composition: who the token is, then ONE list request,
+    /// whatever the account holds, and the list names the connection's own
+    /// server as the account that made it.
+    #[tokio::test]
+    async fn the_one_click_list_costs_one_list_request_per_account() {
+        let conn = Connection {
+            base_url: "https://GitLab.com/".into(),
+            ..conn_gitlab()
+        };
+        let spy = Arc::new(OnePage::default());
+        let client = bridgewatch_core::client::client_for(
+            &account_for(&conn),
+            &Secret::new("not-a-real-token"),
+            spy.clone(),
+            bridgewatch_core::client::RequestRing::new(4),
+        )
+        .unwrap();
+        let RecentListing::Projects {
+            projects,
+            listed_by,
+        } = recent_for(client.as_ref(), &conn).await.unwrap()
+        else {
+            panic!("no list");
+        };
+        assert_eq!(projects.len(), wizard::RECENT_LIMIT);
+        assert_eq!(projects[0].project.id, 12, "newest first");
+        assert_eq!(
+            projects.iter().filter(|p| p.ticked).count(),
+            wizard::PRE_TICKED
+        );
+        assert_eq!(listed_by.origin, "https://gitlab.com");
+        let paths = spy.paths.lock().unwrap().clone();
+        assert_eq!(
+            paths.iter().filter(|p| p.starts_with("/projects?")).count(),
+            1,
+            "{paths:?}"
+        );
+    }
+
+    fn quick_answers(n: u64) -> WizardAnswers {
+        let listed_by =
+            wizard::ListedBy::for_instance(Provider::Gitlab, "https://gitlab.com").unwrap();
+        WizardAnswers {
+            project: None,
+            watch_id: String::new(),
+            deploy_markers: Vec::new(),
+            watches: (1..=n)
+                .map(|id| wizard::QuickWatch {
+                    project: ProjectRef::Id(id),
+                    path: format!("g/p{id}"),
+                    ref_name: "main".into(),
+                    deploy_markers: vec!["deploy".into()],
+                    listed_by: listed_by.clone(),
+                })
+                .collect(),
+            ..answers()
+        }
+    }
+
+    /// The save's text for N watches is one config the write gate admits with
+    /// no question, holding all N; a second run over it adds none, and the
+    /// step-by-step preview's wire shape gains no key.
+    #[test]
+    fn a_one_click_preview_is_one_admissible_text_and_a_rerun_adds_nothing() {
+        let p = preview(&quick_answers(3), "").unwrap();
+        assert_eq!(p.added, ["p1-main", "p2-main", "p3-main"]);
+        let c = Confirmations::default();
+        assert!(crate::commands::admit(Path::new("x.toml"), "", &p.toml, None, &c, None).is_ok());
+        let wire = serde_json::to_value(&p).unwrap();
+        assert_eq!(
+            wire["added"],
+            serde_json::json!(["p1-main", "p2-main", "p3-main"])
+        );
+
+        let again = preview(&quick_answers(3), &p.toml).unwrap();
+        assert_eq!(again.toml, p.toml);
+        assert!(again.added.is_empty());
+        assert_eq!(again.already_watched, ["p1-main", "p2-main", "p3-main"]);
+
+        let single = serde_json::to_value(preview(&answers(), "").unwrap()).unwrap();
+        assert!(single.get("added").is_none() && single.get("already_watched").is_none());
+    }
+
+    /// ⛔ A list made for another server comes back as an account-step issue,
+    /// which `wizard_save` answers without writing.
+    #[test]
+    fn a_one_click_list_from_another_server_is_an_issue_not_a_write() {
+        let mut a = quick_answers(2);
+        a.base_url = "https://gitlab.example.com".into();
+        let f = preview(&a, "").expect_err("bound to the wrong server");
+        assert_eq!(f.kind, FailureKind::Answers);
+        assert_eq!(f.issues.len(), 2);
+        assert!(
+            f.issues
+                .iter()
+                .all(|i| i.step == WizardStep::Account && i.field == "watches")
         );
     }
 

@@ -108,6 +108,9 @@ pub struct Job {
     /// Link to the job in the GitLab UI.
     #[serde(default)]
     pub web_url: Option<String>,
+    /// Why a failed job failed, as GitLab's reason code.
+    #[serde(default)]
+    pub failure_reason: Option<String>,
 }
 
 impl From<Job> for model::Job {
@@ -122,6 +125,8 @@ impl From<Job> for model::Job {
             finished_at: j.finished_at,
             duration: j.duration,
             web_url: j.web_url,
+            failure_reason: j.failure_reason,
+            annotation: None,
         }
     }
 }
@@ -280,6 +285,10 @@ pub struct Project {
     /// Link to the project.
     #[serde(default)]
     pub web_url: Option<String>,
+    /// When the project last saw activity. Part of the simple representation
+    /// `GET /projects?simple=true` returns.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
 }
 
 impl From<Project> for model::Project {
@@ -290,6 +299,7 @@ impl From<Project> for model::Project {
             name: p.name,
             default_branch: p.default_branch,
             web_url: p.web_url,
+            last_activity_at: p.last_activity_at,
         }
     }
 }

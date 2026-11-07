@@ -40,11 +40,15 @@ blocking_failure = true
 finished = true
 started = false
 gate_opened = false
-title = "{{watch.id}} {{sha7}}: {{state}}"   # minijinja over the verdict view model
+recovered = true                       # "fixed again" when a failing watch passes
+# minijinja over the verdict view model; `kind` is "recovered" on a "fixed again"
+title = "{{watch.id}} {{sha7}}: {{state}}{% if kind == 'recovered' %}, fixed again{% endif %}"
 # `default`'s second argument is load-bearing: without it an empty failures list
 # is a defined empty string, not undefined, and a green pipeline notifies blank.
-body  = "{{failures | join(', ') | default('all green', true)}}"
-click = "first_failure_or_pipeline"    # first_failure_or_pipeline | pipeline | marker_job | none (desktop notifications cannot open it yet)
+# `failure_line` is the first failing line (GitHub's first failure annotation,
+# or GitLab's failure reason in words), on a line of its own when there is one.
+body  = "{{failures | join(', ') | default('all green', true)}}{% if failure_line %}\n{{failure_line}}{% endif %}"
+click = "first_failure_or_pipeline"    # first_failure_or_pipeline | pipeline | marker_job | none
 
 [[watches]]
 id = "hourly"

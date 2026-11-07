@@ -80,7 +80,10 @@ type FakeApi = { [K in keyof Api]: Mock<Api[K]> };
 function fakeApi(overrides: Partial<{ [K in keyof Api]: Mock<(...args: never[]) => unknown> }> = {}): FakeApi {
   return {
     detectCliToken: vi.fn<Api["detectCliToken"]>(async () => ({ status: "not_found", service: "glab:gitlab.com" })),
+    // A 1.x value: the file's base_url stands for it, as before this check.
+    ownTokenStatus: vi.fn<Api["ownTokenStatus"]>(async () => ({ kind: "legacy" })),
     testConnection: vi.fn<Api["testConnection"]>(async () => IDENTITY),
+    recentProjects: vi.fn<Api["recentProjects"]>(async () => ({ mode: "unlisted", reason: "" })),
     listProjects: vi.fn<Api["listProjects"]>(async () => LISTING),
     resolveProject: vi.fn<Api["resolveProject"]>(async () => RESOLVED),
     suggestDeployMarkers: vi.fn<Api["suggestDeployMarkers"]>(async () => SUGGESTIONS),
@@ -620,6 +623,157 @@ describe("re-running on an existing config", () => {
     await next();
     expect(stepId()).toBe("watch");
     expect(q<HTMLInputElement>("#wizard-watch-id")?.value).toBe("web-main");
+  });
+});
+
+describe("a stored own token after an instance change", () => {
+  /**
+   * ⛔ The shell binds an own token to the server it was saved for and never
+   * sends it elsewhere, so "leave empty to keep the stored token" is only true
+   * on that instance. Moving to another drops it, as a sign-in is dropped;
+   * moving back keeps it again.
+   */
+  it("is dropped when the instance changes, says why, and comes back with the instance", async () => {
+    const api = fakeApi();
+    await start(api, {
+      initial: {
+        account: "work",
+        base_url: "https://gitlab.example.com",
+        token: { own: true },
+        project: 42,
+        ref_name: "main",
+        watch_id: "web-main",
+      },
+    });
+    expect(q<HTMLInputElement>("#wizard-secret")?.placeholder).toBe("Leave empty to keep the stored token");
+    expect(q('[data-slot="own-moved"]')).toBeNull();
+
+    const url = q<HTMLInputElement>("#wizard-base-url")!;
+    url.value = "https://gitlab.other.example";
+    url.dispatchEvent(new Event("input", { bubbles: true }));
+    url.dispatchEvent(new Event("blur"));
+    await settle();
+    expect(q<HTMLInputElement>("#wizard-secret")?.placeholder).toBe("glpat-…");
+    expect(text('[data-slot="own-moved"]')).toBe(
+      "The stored token stays with https://gitlab.example.com; paste one for https://gitlab.other.example.",
+    );
+    await next();
+    expect(stepId()).toBe("account");
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+
+    url.value = "https://GitLab.example.com/";
+    url.dispatchEvent(new Event("input", { bubbles: true }));
+    url.dispatchEvent(new Event("blur"));
+    await settle();
+    expect(q('[data-slot="own-moved"]')).toBeNull();
+    await next();
+    expect(stepId()).toBe("project");
+  });
+});
+
+describe("a stored own token, checked against the server it is bound to", () => {
+  const RERUN = {
+    account: "work",
+    base_url: "https://gitlab.other.example",
+    token: { own: true },
+    project: 42,
+    ref_name: "main",
+    watch_id: "web-main",
+  } as const;
+
+  /**
+   * ⛔ Seer #62 round 5: the re-run trusted the FILE's base_url as the stored
+   * token's server. A file edited by hand to another host since the token was
+   * saved then accepted an empty paste, and saved an account the core refuses.
+   */
+  it("requires a paste when the file names another server than the token is bound to", async () => {
+    const api = fakeApi({
+      ownTokenStatus: vi.fn(async () => ({
+        kind: "mismatch" as const,
+        stored: "https://gitlab.example.com",
+        expected: "https://gitlab.other.example",
+      })),
+    });
+    await start(api, { initial: RERUN });
+    expect(api.ownTokenStatus).toHaveBeenCalledWith("work");
+    expect(q<HTMLInputElement>("#wizard-secret")?.placeholder).toBe("glpat-…");
+    expect(text('[data-slot="own-moved"]')).toBe(
+      "The stored token stays with https://gitlab.example.com; paste one for https://gitlab.other.example.",
+    );
+    await next();
+    expect(stepId()).toBe("account");
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+  });
+
+  it("keeps a token bound to the file's server, and keeps nothing when nothing is stored", async () => {
+    const bound = fakeApi({
+      ownTokenStatus: vi.fn(async () => ({ kind: "bound" as const, origin: "https://gitlab.other.example" })),
+    });
+    await start(bound, { initial: RERUN });
+    expect(q<HTMLInputElement>("#wizard-secret")?.placeholder).toBe("Leave empty to keep the stored token");
+    await next();
+    expect(stepId()).toBe("project");
+    unmount(component!);
+    component = null;
+    host.innerHTML = "";
+
+    const none = fakeApi({ ownTokenStatus: vi.fn(async () => ({ kind: "none" as const })) });
+    await start(none, { initial: RERUN });
+    expect(q('[data-slot="own-moved"]')).toBeNull();
+    await next();
+    expect(stepId()).toBe("account");
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+  });
+
+  it("Next waits for the answer rather than judging before it", async () => {
+    let answer: (s: { kind: "none" }) => void = () => {};
+    const api = fakeApi({ ownTokenStatus: vi.fn(() => new Promise((r) => (answer = r))) });
+    await start(api, { initial: RERUN });
+    const pending = next();
+    await settle();
+    expect(stepId()).toBe("account");
+    answer({ kind: "none" });
+    await pending;
+    await settle();
+    expect(stepId()).toBe("account");
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+  });
+});
+
+describe("a stored own token, the instance changed without a blur", () => {
+  /**
+   * ⛔ Seer round 4: the instance change ran on the URL field's blur only, and
+   * Enter in that field submits the form without one, so Next kept "leave
+   * empty to keep the stored token" for a host that token is not bound to.
+   */
+  it("Enter in the URL field still requires a paste, and so does Test connection", async () => {
+    const api = fakeApi();
+    await start(api, {
+      initial: {
+        account: "work",
+        base_url: "https://gitlab.example.com",
+        token: { own: true },
+        project: 42,
+        ref_name: "main",
+        watch_id: "web-main",
+      },
+    });
+    const url = q<HTMLInputElement>("#wizard-base-url")!;
+    url.focus();
+    url.value = "https://gitlab.other.example";
+    url.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+
+    await click('[data-action="test-connection"]');
+    expect(api.testConnection).not.toHaveBeenCalled();
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+
+    // Enter in a text field is the form's implicit submission.
+    url.form!.requestSubmit();
+    await settle();
+    expect(stepId()).toBe("account");
+    expect(fieldErrors()).toContain("Paste a personal, project or group access token.");
+    expect(api.save).not.toHaveBeenCalled();
   });
 });
 

@@ -123,7 +123,7 @@ describe("WatchesTab, keys for the other provider", () => {
       onremove: () => {},
       onmove: () => {},
       onadd: () => {},
-    }) as ComponentProps<typeof WatchesTab>;
+      }) as ComponentProps<typeof WatchesTab>;
     component = mount(WatchesTab, { target: host, props });
     flushSync();
   }
@@ -168,3 +168,100 @@ describe("WatchesTab, keys for the other provider", () => {
     }
   });
 });
+
+describe("WatchesTab, groups (L2)", () => {
+  const groups = () => [...host.querySelectorAll<HTMLDetailsElement>("section.watch .body details.settings-group")];
+
+  it("splits the open watch into seven groups by config path, only Source open", () => {
+    render();
+    expect(groups().map((g) => g.dataset.group)).toEqual([
+      "Source",
+      "Rows",
+      "Polling",
+      "Child pipelines",
+      "Deploy",
+      "Jobs",
+      "Notifications",
+    ]);
+    expect(groups().map((g) => g.open)).toEqual([true, false, false, false, false, false, false]);
+    const labels = (name: string) =>
+      [...groups().find((g) => g.dataset.group === name)!.querySelectorAll(".label")].map((l) => l.textContent);
+    expect(labels("Source")).toContain("Project");
+    expect(labels("Polling")).toEqual(["Poll while live (s)", "Poll while idle (s)"]);
+    expect(labels("Jobs")).toContain("Job class overrides");
+    expect(labels("Notifications")).toContain("Fixed again");
+    expect(labels("Notifications")).toContain("Click opens");
+    // The heading says "Notifications", so no label repeats it.
+    expect(labels("Notifications").some((l) => /^Notif/.test(l ?? ""))).toBe(false);
+  });
+
+  it("keeps a group the user opened open across a reload of the file", () => {
+    const h = render();
+    const polling = () => groups().find((g) => g.dataset.group === "Polling")!;
+    polling().open = true;
+    polling().dispatchEvent(new Event("toggle"));
+    flushSync();
+    h.reload(WATCHES.map((w) => ({ ...w })));
+    expect(polling().open).toBe(true);
+  });
+
+  it("says so when there are no watches", () => {
+    render([]);
+    expect(host.querySelector(".empty")?.textContent).toContain("No watches yet");
+  });
+});
+
+describe("WatchesTab, a long account name (cubic, #65)", () => {
+  it("sizes the account menu to its names, capped at the row, with the full name as its title", () => {
+    const long = "gitlab.engineering-division.example.com-platform-team";
+    host = document.createElement("div");
+    document.body.append(host);
+    const props = reactive({
+      config: { accounts: { [long]: {} }, watches: [{ id: "w", account: long, project: 1, ref: "main" }] },
+      jobOrder: [[]],
+      onedit: () => Promise.resolve(),
+      onremove: () => {},
+      onmove: () => {},
+      onadd: () => {},
+    }) as ComponentProps<typeof WatchesTab>;
+    component = mount(WatchesTab, { target: host, props });
+    flushSync();
+    const select = [...host.querySelectorAll<HTMLLabelElement>("label.field")]
+      .find((l) => l.querySelector(".label")?.textContent === "Account")!
+      .querySelector("select")!;
+    const cls = select.getAttribute("class") ?? "";
+    // Not a fixed width: as wide as the longest name, at least 12rem, at most the row.
+    expect(cls).not.toMatch(/(^|\s)w-48(\s|$)/);
+    expect(cls).toMatch(/(^|\s)w-auto(\s|$)/);
+    expect(cls).toMatch(/(^|\s)min-w-48(\s|$)/);
+    expect(cls).toMatch(/(^|\s)max-w-full(\s|$)/);
+    expect(select.title).toBe(long);
+  });
+});
+
+describe("WatchesTab, only my pipelines (F3)", () => {
+  const source = () =>
+    [...host.querySelectorAll<HTMLDetailsElement>("section.watch .body details.settings-group")].find(
+      (g) => g.dataset.group === "Source",
+    )!;
+  const mine = () =>
+    [...source().querySelectorAll<HTMLLabelElement>("label.field")]
+      .find((l) => l.textContent?.includes("Only my pipelines"))!
+      .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+
+  it("is a checkbox in the open Source group, off by default, and writes watches.N.mine", async () => {
+    const h = render();
+    expect(source().open).toBe(true);
+    expect(mine().checked).toBe(false);
+    mine().click();
+    await Promise.resolve();
+    flushSync();
+    expect(h.edits).toEqual([[{ op: "set", path: "watches.0.mine", value: { boolean: true } }]]);
+  });
+
+  it("shows a watch that has it on as ticked", () => {
+    render([{ ...WATCHES[0], mine: true } as (typeof WATCHES)[0], ...WATCHES.slice(1)]);
+    expect(mine().checked).toBe(true);
+  });
+});
+

@@ -242,18 +242,33 @@ an editor gutter. Warnings come back on a successful load, in `Loaded::warnings`
 
 ```rust,no_run
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider};
-use bridgewatch_core::config::TokenSource;
+use bridgewatch_core::config::{Account, TokenSource};
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
-let source = TokenSource::Keyring {
-    service: "glab:gitlab.com:token".into(),
-    user: String::new(),                       // ⚠️ empty is legal and is what glab writes
+let account = Account {
+    token: TokenSource::Keyring {
+        service: "glab:gitlab.com:token".into(),
+        user: String::new(),                   // ⚠️ empty is legal and is what glab writes
+    },
+    ..Account::default()
 };
-let secret: Secret = token::resolve(&source, "gitlab", &SystemTokenProvider)?;
+// The account's name, and the account itself: a sign-in
+// (`token = { oauth = .. }`) is checked against its `base_url` and client id,
+// and one issued by another instance or application is refused, never returned.
+let secret: Secret = token::resolve("gitlab", &account, &SystemTokenProvider)?;
 
 // The GUI's "paste a token" field writes bridgewatch's own entry, which
-// `token = { own = true }` reads back.
-token::set_own_token("gitlab", &Secret::new("glpat-…"), &SystemTokenProvider)?;
+// `token = { own = true }` reads back. It is bound to the origin of the
+// base_url given here, which must be the account's as the config file says:
+// `resolve` refuses it (`TokenError::BoundElsewhere`) for any other server.
+token::set_own_token(
+    "gitlab",
+    "https://gitlab.com",
+    &Secret::new("glpat-…"),
+    &SystemTokenProvider,
+)?;
+// What the entry holds (none, a 1.x value, bound, bound elsewhere), for a UI.
+let _status = token::own_token_status("gitlab", &account, &SystemTokenProvider)?;
 token::clear_own_token("gitlab", &SystemTokenProvider)?;
 # let _ = secret;
 # Ok(())
@@ -263,7 +278,20 @@ token::clear_own_token("gitlab", &SystemTokenProvider)?;
 `Secret`'s `Debug` and `Display` both print `<redacted>`; `expose()` is the only
 way to see it, and should be called as late as possible.
 
-Three things worth knowing before wiring a settings pane:
+Four things worth knowing before wiring a settings pane:
+
+- ⛔ **An own token stays with its server.** `set_own_token` stores
+  `bw-bound-v1:` + a tab + `{"version":1,"token":"…","origin":"https://host"}`,
+  the origin normalised by `oauth::origin_of`. `resolve` sends it only when that
+  origin is the account's `base_url` origin, and otherwise fails with
+  `TokenError::BoundElsewhere` before any request. A value without the prefix
+  (written by 1.x) is bound to the account's origin on first use: read, write
+  the bound form, then return it, and nothing if the write fails. The tab is what
+  makes 1.3 refuse a 2.0 entry locally (a control character) rather than send
+  the document as a header. `Poller::from_config_per_account` (the app's) fails
+  only the account whose token failed, and `Poller::retry_refused` tries those
+  accounts again in place, every watch's state kept; `Poller::from_config` (the
+  CLI's) fails the whole build.
 
 - ⛔ **An empty keyring user does not work through the `keyring` crate.** Measured
   against 4.2.0 on macOS, `Entry::new(service, "")` returns
@@ -307,6 +335,8 @@ let _ = (&mut ledger, NotifyKind::Deployed);
 A `Notification` is `{ watch, kind, pipeline_id, title, body, url, key }`.
 `title` and `body` are already rendered through the watch's MiniJinja templates;
 `url` is the resolved `click` target. Hand them to the OS and do nothing else.
+The default body's second line is `failure_line`, the first failing line of the
+first blocking failure (`notify::first_failure_line`, from `JobView::failure`).
 
 Rules the shell can rely on:
 

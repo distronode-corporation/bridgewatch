@@ -32,7 +32,7 @@
     <Input
       id="wizard-ref"
       name="ref_name"
-      class="w-56 font-mono"
+      class="w-full max-w-56 font-mono"
       spellcheck={false}
       bind:value={draft.refName}
       oninput={refChanged}
@@ -43,7 +43,7 @@
   </div>
 
   <fieldset class="flex flex-col gap-1.5" aria-describedby="wizard-sources-msg">
-    <legend class="mb-1 text-sm font-medium">{github ? "Workflow runs triggered by" : "Pipelines started by"}</legend>
+    <legend class="mb-1 font-medium">{github ? "Workflow runs triggered by" : "Pipelines started by"}</legend>
     {#each choices as choice (choice.value)}
       <div class="flex items-center gap-2">
         <Checkbox
@@ -64,7 +64,7 @@
       <Input
         id="wizard-workflow"
         name="workflow"
-        class="w-56 font-mono"
+        class="w-full max-w-56 font-mono"
         placeholder="ci.yml"
         spellcheck={false}
         bind:value={draft.workflow}
@@ -84,7 +84,7 @@
     <Input
       id="wizard-watch-id"
       name="watch_id"
-      class="w-56 font-mono"
+      class="w-full max-w-56 font-mono"
       spellcheck={false}
       bind:value={draft.watchId}
       oninput={() => (draft.watchIdEdited = true)}
@@ -95,7 +95,7 @@
   </div>
 
   <fieldset class="flex flex-col gap-2">
-    <legend class="mb-1 text-sm font-medium">Also watch, quietly</legend>
+    <legend class="mb-1 font-medium">Also watch, quietly</legend>
     <div class="flex items-center gap-2">
       <Switch id="wizard-schedule" bind:checked={draft.scheduleWatch} />
       <Label for="wizard-schedule" class="font-normal"
@@ -115,7 +115,7 @@
         <Input
           id="wizard-preflight-ref"
           name="preflight_ref"
-          class="w-56 font-mono"
+          class="w-full max-w-56 font-mono"
           placeholder="pf/*"
           spellcheck={false}
           bind:value={draft.preflightRef}

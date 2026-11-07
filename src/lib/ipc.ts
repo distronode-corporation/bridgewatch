@@ -20,6 +20,7 @@ import type {
   Identity,
   MarkerSuggestions,
   ProjectListing,
+  RecentListing,
   ResolvedProject,
   TokenSource,
   WizardAnswers,
@@ -35,6 +36,7 @@ import type {
   SignedIn,
   StartedSignIn,
 } from "./oauth";
+import type { OwnTokenStatus } from "./own-token";
 import type {
   DiagnosticView,
   Edit,
@@ -55,6 +57,7 @@ export const getSnapshot = () => invoke<Snapshot>("get_snapshot");
 export const getStatus = () => invoke<Status>("get_status");
 export const refreshNow = () => invoke<boolean>("refresh_now");
 export const popoverOpened = () => invoke<boolean>("popover_opened");
+export const resumeNotifications = () => invoke<void>("resume_notifications");
 export const readConfigText = () => invoke<string>("read_config_text");
 export const getConfigJson = () =>
   invoke<{ config: unknown; job_order: string[][] } | null>("get_config_json");
@@ -83,6 +86,11 @@ export const quit = () => invoke<void>("quit");
 export const setOwnToken = (account: string, token: string) =>
   invoke<void>("set_own_token", { account, token });
 export const clearOwnToken = (account: string) => invoke<void>("clear_own_token", { account });
+/**
+ * What the account's own entry holds, against its `base_url` as the FILE says
+ * it (the shell reads it; nothing is sent from here). Never the token.
+ */
+export const ownTokenStatus = (account: string) => invoke<OwnTokenStatus>("own_token_status", { account });
 
 /**
  * The end of one job's log. The job is named by its watch and its page URL;
@@ -212,8 +220,11 @@ export function wizardApi(fallbackAccount?: string): WizardApi {
   return {
     detectCliToken: (baseUrl, provider) =>
       invoke<CliTokenDetection>("wizard_detect_cli_token", { baseUrl, provider }),
+    ownTokenStatus: (account) => invoke<OwnTokenStatus>("own_token_status", { account }),
     testConnection: (connection) =>
       invoke<Confirmable<Identity>>("wizard_test_connection", { connection: withAccount(connection) }),
+    recentProjects: (connection) =>
+      invoke<Confirmable<RecentListing>>("wizard_recent_projects", { connection: withAccount(connection) }),
     listProjects: (connection, search) =>
       invoke<Confirmable<ProjectListing>>("wizard_list_projects", {
         connection: withAccount(connection),

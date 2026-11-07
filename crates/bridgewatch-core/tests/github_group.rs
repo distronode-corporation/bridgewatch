@@ -105,6 +105,16 @@ impl Transport for Routed {
         self.seen.lock().unwrap().push(path.clone());
         let reply = {
             let mut routes = self.routes.lock().unwrap();
+            // A failed run's first blocking failure has its annotations asked for
+            // (F2). Unless a test routes them, they are an empty list: what
+            // the group tests pin is the runs and the jobs, and an empty list
+            // changes no verdict. Still recorded in `seen`.
+            if !routes.contains_key(&path)
+                && path.contains("/check-runs/")
+                && path.contains("/annotations")
+            {
+                routes.insert(path.clone(), vec![Reply::ok("[]".to_string())]);
+            }
             let Some(queue) = routes.get_mut(&path) else {
                 panic!("unrouted request: {path}");
             };
@@ -124,6 +134,7 @@ impl Transport for Routed {
             etag: None,
             link: reply.link,
             oauth_scopes: None,
+            token_expiration: None,
             location: None,
             truncated: false,
         })
@@ -415,7 +426,8 @@ async fn a_push_that_fans_out_into_three_workflows_is_one_row_that_deployed_with
     assert_eq!(row.failures, ["eslint"]);
     assert!(!row.live);
 
-    // One list, and one /jobs per run. Nothing for the group itself.
+    // One list, and one /jobs per run. Nothing for the group itself, and one
+    // annotations call for the failed run's first blocking failure (F2).
     let mut seen = transport.seen();
     seen.sort();
     let mut want = vec![
@@ -423,6 +435,7 @@ async fn a_push_that_fans_out_into_three_workflows_is_one_row_that_deployed_with
         jobs_path(4101),
         jobs_path(4102),
         jobs_path(4103),
+        "/repos/acme-corp/monorepo/check-runs/9301/annotations?per_page=50".to_string(),
     ];
     want.sort();
     assert_eq!(seen, want);
@@ -890,7 +903,9 @@ async fn a_deeper_dive_costs_no_request_on_a_commit_group() {
 
     let snapshot = poller.tick().await.snapshot;
 
-    assert_eq!(transport.seen().len(), 4, "{:#?}", transport.seen());
+    // The list, three /jobs, and the failed run's annotations: nothing more
+    // for the depth.
+    assert_eq!(transport.seen().len(), 5, "{:#?}", transport.seen());
     assert!(
         snapshot.watches[0].rows[0]
             .bridges
@@ -1755,7 +1770,8 @@ async fn a_group_just_inside_the_window_does_not_read_dead_and_does_once_it_clos
         .collect();
     assert_eq!(kinds, ["blocking_failure"]);
     let failure = &third.notifications[0];
-    assert_eq!(failure.key, "6102|blocking_failure|release.yml");
+    // One failure notice per pipeline, whichever jobs it names.
+    assert_eq!(failure.key, "6102|blocking_failure|");
     assert_eq!(
         failure.url.as_deref(),
         Some("https://github.com/acme-corp/monorepo/actions/workflows/release.yml")
@@ -2080,6 +2096,7 @@ async fn a_gitlab_client_ignores_expect_entirely() {
                 etag: None,
                 link: None,
                 oauth_scopes: None,
+                token_expiration: None,
                 location: None,
                 truncated: false,
             })

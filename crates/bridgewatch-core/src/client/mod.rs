@@ -33,6 +33,18 @@ use crate::config::{Account, ProjectRef, Provider};
 use crate::model::{Bridge, Job, Pipeline, Project, TokenInfo, User};
 use crate::token::Secret;
 
+/// What [`CiClient::failure_annotation`] found out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnnotationAnswer {
+    /// An answer, which may be "there is none" (including "this token may not
+    /// read it"). Not asked again for the same job.
+    Known(Option<crate::model::Annotation>),
+    /// No answer yet: a rate limit, a 5xx or a dropped connection. The poller
+    /// stores the pipeline as incomplete, so it is asked again next tick even
+    /// when the pipeline has settled.
+    Later,
+}
+
 /// One CI provider, as everything above the client sees it.
 ///
 /// The methods are exactly what the poller, the fixture recorder and the setup
@@ -58,6 +70,34 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
 
     /// One pipeline by id.
     async fn get_pipeline(&self, project: &ProjectRef, id: u64) -> Result<Pipeline, ClientError>;
+
+    /// The full sha of a commit given by any unambiguous prefix, or `None`
+    /// when the project has no such commit (yet: a push may still be on its
+    /// way). `bridgewatch wait` needs it because both providers match a
+    /// pipeline's `sha` in full only.
+    ///
+    /// The default refuses, so a client that has not been taught it says so.
+    async fn commit_sha(
+        &self,
+        _project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        Err(ClientError::Unsupported {
+            message: format!("looking up commit {sha} is not supported for this provider"),
+        })
+    }
+
+    /// The first failure annotation of a failed job: what its first failing
+    /// line is made of (F2). The poller asks this for each pipeline's first
+    /// BLOCKING failure under the watch's `[watches.jobs]` rules, which only
+    /// it knows.
+    ///
+    /// The default answers "nothing" without a request: GitLab says why in
+    /// `failure_reason`, already in the jobs list. GitHub reads the job's
+    /// check-run annotations once per job and remembers the answer.
+    async fn failure_annotation(&self, _project: &ProjectRef, _job: &Job) -> AnnotationAnswer {
+        AnnotationAnswer::Known(None)
+    }
 
     /// Every job of a pipeline, all pages.
     async fn pipeline_jobs(&self, project: &ProjectRef, id: u64) -> Result<Vec<Job>, ClientError>;
@@ -114,6 +154,34 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
     /// The token's own name, scopes and expiry, where the provider exposes
     /// them. A failure here is an answer ("kind unknown"), not an outage.
     async fn token_self(&self) -> Result<TokenInfo, ClientError>;
+
+    /// The login this client's credential belongs to: the signed-in user, or
+    /// the owner of the token. What a `mine = true` watch filters on (F3).
+    ///
+    /// ⛔ A successful answer is remembered per client (GitLab and GitHub keep
+    /// it on their connection), so a `mine` watch costs one `GET /user` for
+    /// the life of the poller, and none when the sign-in already names the
+    /// user. A failed lookup is not remembered: it is asked again on a later
+    /// tick (the poller asks once per account per tick). The default asks
+    /// every time, for a client that keeps nothing.
+    async fn owner(&self) -> Result<String, ClientError> {
+        self.current_user().await.map(|u| u.username)
+    }
+
+    /// What the requests this client has sent show of its credential: a
+    /// stated expiry, and the last refusal. No request. See [`crate::health`].
+    fn credential(&self) -> crate::health::Observed {
+        crate::health::Observed::default()
+    }
+
+    /// Ask for the credential's expiry where the provider states it only on
+    /// request: GitLab's `GET /personal_access_tokens/self`, and GitHub's
+    /// `GET /user` (whose answer carries the expiry header). The answer lands
+    /// in [`Self::credential`]. The poller asks this of a GitLab token once;
+    /// a GitHub poll carries the header on every response anyway.
+    async fn read_token_expiry(&self) -> Result<(), ClientError> {
+        Ok(())
+    }
 
     /// Projects this token can pick from, and whether the listing was cut
     /// short.
@@ -426,6 +494,17 @@ pub enum ClientError {
         /// True when nothing was ever stored, rather than a sign-in that ran
         /// out.
         never_signed_in: bool,
+    },
+    /// The account's token could not be resolved when the poller was built
+    /// (a missing entry, a token bound to another server, a failing command).
+    /// Nothing is sent for that account; its watches show this until the
+    /// configuration or the token changes. The other accounts poll on.
+    #[error("account {account}: {message}")]
+    Token {
+        /// The `[accounts.*]` key.
+        account: String,
+        /// The token error, as it displays. Never a token.
+        message: String,
     },
 }
 

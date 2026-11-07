@@ -58,6 +58,18 @@
 //! [`decode_keyring_envelope`] unwraps it after **every** keyring read, the
 //! `keyring`-crate path included: a go-keyring writer may have used a non-empty
 //! user, and the envelope is a property of the writer, not of the address.
+//!
+//! # An own token stays with its server
+//!
+//! ⛔ `token = { own = true }` used to store the bare token, and send it to
+//! whatever the account's `base_url` said at the time: change the URL (by hand,
+//! by `bridgewatch init --account`, or by a hostile edit) and the next poll
+//! sent the token to the new host. Since 2.0 the entry is the token AND the
+//! origin it was saved for ([`BOUND_V1`]), the same binding a sign-in carries,
+//! and [`resolve`] refuses with [`TokenError::BoundElsewhere`] before anything
+//! is sent when the two differ. A 1.x value is bound, on first use, to the
+//! origin the account names at that moment, and the bound form is written
+//! before the token is returned: if the write fails, nothing is sent.
 
 use crate::config::TokenSource;
 
@@ -151,6 +163,41 @@ pub enum TokenError {
          bridgewatch auth login --account {0}"
     )]
     NotSignedIn(String),
+    /// The account's stored sign-in was issued by another instance, or for
+    /// another application, than the account now names. It is never sent.
+    #[error(
+        "the sign-in of account {account:?} is not used: it is {why}. Sign in again from \
+         Settings, or run bridgewatch auth login --account {account}"
+    )]
+    SignedInElsewhere {
+        /// The `[accounts.*]` key.
+        account: String,
+        /// Which way it does not fit, from `oauth::Fit::mismatch`.
+        why: String,
+    },
+    /// The account's own token (`token = { own = true }`) was saved for
+    /// another server than the account's `base_url` names now. It is never
+    /// sent. Neither origin is secret, and neither carries a credential:
+    /// [`crate::oauth::origin_of`] refuses a URL with one.
+    #[error("{}", bound_elsewhere_message(.account, .stored, .expected.as_deref()))]
+    BoundElsewhere {
+        /// The `[accounts.*]` key.
+        account: String,
+        /// The origin the token was saved for, as stored.
+        stored: String,
+        /// The origin of the account's `base_url`, or `None` when it has none
+        /// (not an http(s) URL).
+        expected: Option<String>,
+    },
+    /// The account signs in, and which application it signs in with cannot
+    /// be said, so a stored sign-in cannot be checked against it.
+    #[error("account {account:?} cannot use its sign-in: {message}")]
+    NoClientId {
+        /// The `[accounts.*]` key.
+        account: String,
+        /// Why there is no client id, and what to write.
+        message: String,
+    },
     /// The credential carries a `go-keyring-*` envelope that would not decode.
     #[error(
         "the credential is wrapped in a {envelope:?} envelope that will not decode: {message}. \
@@ -163,6 +210,23 @@ pub enum TokenError {
         /// Why it would not decode.
         message: String,
     },
+}
+
+/// The sentence [`TokenError::BoundElsewhere`] displays: what happened and the
+/// two ways out.
+fn bound_elsewhere_message(account: &str, stored: &str, expected: Option<&str>) -> String {
+    match expected {
+        Some(expected) => format!(
+            "the stored token of account {account:?} was saved for {stored}, and the account \
+             now points at {expected}, so it is not sent. Save a token for {expected} in \
+             Settings, or put base_url back"
+        ),
+        None => format!(
+            "the stored token of account {account:?} was saved for {stored}, and the account's \
+             base_url is not an http(s) URL, so it is not sent. Put base_url back, or save a \
+             token for the new address in Settings"
+        ),
+    }
 }
 
 /// The side effects token resolution needs, behind a trait so the selection
@@ -672,16 +736,17 @@ fn secret_tool_lookup_args(service: &str) -> Vec<&str> {
     }
 }
 
-/// Resolve a token for one account.
+/// Resolve the token of one account, from its `token` source.
 ///
-/// `account` names the `[accounts.*]` entry and is used only by
-/// [`TokenSource::Own`], which addresses `bridgewatch:<account>`.
+/// `account_name` names the `[accounts.*]` entry: [`TokenSource::Own`]
+/// addresses `bridgewatch:<account_name>`, and a sign-in is stored under it.
+/// `account` is the entry itself, which a sign-in is checked against.
 pub fn resolve(
-    source: &TokenSource,
-    account: &str,
+    account_name: &str,
+    account: &crate::config::Account,
     provider: &dyn TokenProvider,
 ) -> Result<Secret, TokenError> {
-    let raw = match source {
+    let raw = match &account.token {
         TokenSource::Keyring { service, user } => provider.keyring_get(service, user)?,
         TokenSource::Env(name) => provider
             .env(name)
@@ -693,33 +758,57 @@ pub fn resolve(
         // lines of help. Refusing multi-line output instead — and telling the
         // user to pipe through `head -1` — made the documented recipe fail.
         TokenSource::Command(argv) => first_line(&provider.run(argv)?),
-        TokenSource::Own(true) => provider.keyring_get(
-            &SystemTokenProvider::own_service(account),
-            SystemTokenProvider::OWN_USER,
-        )?,
-        TokenSource::Own(false) => return Err(TokenError::NotConfigured(account.to_string())),
+        TokenSource::Own(true) => return resolve_own(account_name, account, provider),
+        TokenSource::Own(false) => return Err(TokenError::NotConfigured(account_name.to_string())),
         // The access token as it was last stored, possibly expired. What
         // POLLS goes through `oauth::OAuthTransport`, which refreshes it; this
         // path serves a caller that wants one value now and can say "sign in
         // again" when it is refused.
-        TokenSource::Oauth(_) => match crate::oauth::store::load(account, provider) {
-            Ok(Some(set)) => set.access_token.expose().to_string(),
-            Ok(None) => return Err(TokenError::NotSignedIn(account.to_string())),
+        //
+        // ⛔ Through the same check as the poller's session: a set issued by
+        // another instance, or for another application, is refused here
+        // rather than handed to a caller that sends it to the account's
+        // `base_url` as it reads now.
+        TokenSource::Oauth(oauth) => match crate::oauth::store::load(account_name, provider) {
+            Ok(Some(set)) => {
+                let client_id = crate::oauth::client_id_for(
+                    account,
+                    oauth,
+                    &crate::oauth::BuiltinClients::shipped(),
+                )
+                .map_err(|e| TokenError::NoClientId {
+                    account: account_name.to_string(),
+                    message: e.to_string(),
+                })?;
+                if let Some(why) = set.fit(account, &client_id).mismatch() {
+                    return Err(TokenError::SignedInElsewhere {
+                        account: account_name.to_string(),
+                        why,
+                    });
+                }
+                set.access_token.expose().to_string()
+            }
+            Ok(None) => return Err(TokenError::NotSignedIn(account_name.to_string())),
             Err(e) => {
                 return Err(TokenError::Store {
-                    service: crate::oauth::store::service(account),
+                    service: crate::oauth::store::service(account_name),
                     message: e.to_string(),
                 });
             }
         },
     };
+    checked(&raw)
+}
+
+/// A resolved value made ready for a header, or the reason it cannot be one.
+fn checked(raw: &str) -> Result<Secret, TokenError> {
     // Also unwrap here, not only in the provider. The envelope is a property of
     // whatever WROTE the credential, and the obvious way to reuse glab's token
     // without the keyring source is
     // `token = { command = ["security", "find-generic-password", "-s", "...", "-w"] }`,
     // which returns the enveloped bytes verbatim. Decoding is idempotent: a
     // value with no prefix is returned trimmed and unchanged.
-    let raw = decode_keyring_envelope(&raw)?;
+    let raw = decode_keyring_envelope(raw)?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(TokenError::Empty);
@@ -748,18 +837,232 @@ fn first_line(raw: &str) -> String {
     raw.lines().next().unwrap_or("").trim().to_string()
 }
 
+/// What every bound own entry starts with.
+///
+/// ⛔ The tab after it is not decoration. bridgewatch 1.x reads the entry,
+/// trims it, finds no `go-keyring-` prefix and then refuses any control
+/// character as [`TokenError::Malformed`]: so a 1.x binary handed a 2.0 entry
+/// fails locally and sends nothing. A document of printable ASCII alone would
+/// have gone out as the header, whole.
+pub const BOUND_PREFIX: &str = "bw-bound-";
+
+/// The full marker of the layout this version writes: [`BOUND_PREFIX`], the
+/// version, a colon and a tab, then the JSON document.
+pub const BOUND_V1: &str = "bw-bound-v1:\t";
+
+/// The layout version inside the document.
+const BOUND_VERSION: u32 = 1;
+
+/// The document after [`BOUND_V1`].
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BoundDoc {
+    version: u32,
+    token: String,
+    origin: String,
+}
+
+/// An own token as it is stored: the token and the origin it was saved for.
+///
+/// `origin` is normalised by [`crate::oauth::origin_of`], the one origin rule
+/// the sign-in uses too, so `https://GitLab.com:443/` is `https://gitlab.com`.
+/// Returns `None` when `base_url` has no origin, which is never stored.
+pub fn encode_bound(token: &Secret, base_url: &str) -> Option<String> {
+    let origin = crate::oauth::origin_of(base_url)?;
+    let doc = BoundDoc {
+        version: BOUND_VERSION,
+        token: token.expose().to_string(),
+        origin,
+    };
+    // Two strings and a number: this cannot fail, and the fallback exists so
+    // that a panic cannot either.
+    Some(format!(
+        "{BOUND_V1}{}",
+        serde_json::to_string(&doc).unwrap_or_default()
+    ))
+}
+
+/// A stored own entry, read.
+enum OwnEntry {
+    /// Written by 2.0: the token and the origin it is bound to.
+    Bound { token: String, origin: String },
+    /// Written by 1.x (or by hand): a bare value, bound to nothing yet.
+    Legacy(String),
+}
+
+/// Read an own entry's value. A value carrying [`BOUND_PREFIX`] that is not
+/// a readable [`BOUND_V1`] document is an error, never a legacy value: it
+/// would otherwise be bound, as a token, to whatever the account names now.
+fn read_own_entry(raw: &str, service: &str) -> Result<OwnEntry, TokenError> {
+    let value = raw.trim();
+    if !value.starts_with(BOUND_PREFIX) {
+        return Ok(OwnEntry::Legacy(value.to_string()));
+    }
+    let unreadable = |why: &str| TokenError::Store {
+        service: service.to_string(),
+        message: format!("the stored token is not readable ({why}); save it again in Settings"),
+    };
+    let Some(document) = value.strip_prefix(BOUND_V1) else {
+        return Err(unreadable(
+            "it was written by a newer bridgewatch, or edited",
+        ));
+    };
+    // ⛔ serde's message can quote the input, which holds the token: only the
+    // position is kept.
+    let doc: BoundDoc = serde_json::from_str(document).map_err(|e| {
+        unreadable(&format!(
+            "{:?} at line {} column {}",
+            e.classify(),
+            e.line(),
+            e.column()
+        ))
+    })?;
+    if doc.version != BOUND_VERSION {
+        return Err(unreadable(&format!("layout {}", doc.version)));
+    }
+    Ok(OwnEntry::Bound {
+        token: doc.token,
+        origin: doc.origin,
+    })
+}
+
+/// The one comparison: both sides through [`crate::oauth::origin_of`], and a
+/// side with no origin matches nothing, itself included.
+fn same_origin(stored: &str, base_url: &str) -> bool {
+    match (
+        crate::oauth::origin_of(stored),
+        crate::oauth::origin_of(base_url),
+    ) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// A stored origin as it may be shown: normalised, or a phrase when it is not
+/// an origin at all. ⛔ Never the stored text itself, which an edit could have
+/// made `https://user:secret@host`.
+fn shown_origin(stored: &str) -> String {
+    crate::oauth::origin_of(stored)
+        .unwrap_or_else(|| "an address that is not an http(s) URL".to_string())
+}
+
+/// `token = { own = true }`: read, refuse a token bound elsewhere, and bind a
+/// 1.x value to the account's server before it is ever sent.
+///
+/// ⛔ The order for a 1.x value is read, write the bound form, THEN send. If
+/// the write fails, nothing is returned, so nothing is sent: a value that is
+/// not bound is never used.
+fn resolve_own(
+    account_name: &str,
+    account: &crate::config::Account,
+    provider: &dyn TokenProvider,
+) -> Result<Secret, TokenError> {
+    let service = SystemTokenProvider::own_service(account_name);
+    let raw = provider.keyring_get(&service, SystemTokenProvider::OWN_USER)?;
+    match read_own_entry(&raw, &service)? {
+        OwnEntry::Bound { token, origin } => {
+            if !same_origin(&origin, &account.base_url) {
+                return Err(TokenError::BoundElsewhere {
+                    account: account_name.to_string(),
+                    stored: shown_origin(&origin),
+                    expected: crate::oauth::origin_of(&account.base_url),
+                });
+            }
+            checked(&token)
+        }
+        OwnEntry::Legacy(value) => {
+            // Checked before it is bound: a value that could never be sent is
+            // not worth binding, and its error is the one to show.
+            let secret = checked(&value)?;
+            let bound =
+                encode_bound(&secret, &account.base_url).ok_or_else(|| TokenError::Store {
+                    service: service.clone(),
+                    message: "the account's base_url is not an http(s) URL, so the stored \
+                              token cannot be tied to a server, and it is not sent"
+                        .to_string(),
+                })?;
+            provider.keyring_set(&service, SystemTokenProvider::OWN_USER, &bound)?;
+            tracing::info!(
+                account = %account_name,
+                origin = %crate::oauth::origin_of(&account.base_url).unwrap_or_default(),
+                "bound a token stored by bridgewatch 1.x to its server"
+            );
+            Ok(secret)
+        }
+    }
+}
+
+/// What bridgewatch's own entry for an account holds, as a UI or `auth status`
+/// may show it. Never the token.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OwnTokenStatus {
+    /// Nothing is stored.
+    None,
+    /// A value written by bridgewatch 1.x: bound to the account's server the
+    /// first time it is used.
+    Legacy,
+    /// Saved for the account's server, and sent there.
+    Bound {
+        /// The origin it is bound to.
+        origin: String,
+    },
+    /// Saved for another server than the account names now: never sent.
+    Mismatch {
+        /// The origin it was saved for.
+        stored: String,
+        /// The origin of the account's `base_url`; `None` when it has none.
+        expected: Option<String>,
+    },
+}
+
+/// [`OwnTokenStatus`] for an account, by reading its own entry. Binds nothing
+/// and sends nothing.
+///
+/// ⚠️ It reads the credential store, which on macOS can raise a prompt.
+pub fn own_token_status(
+    account_name: &str,
+    account: &crate::config::Account,
+    provider: &dyn TokenProvider,
+) -> Result<OwnTokenStatus, TokenError> {
+    let service = SystemTokenProvider::own_service(account_name);
+    let raw = match provider.keyring_get(&service, SystemTokenProvider::OWN_USER) {
+        Ok(raw) => raw,
+        Err(TokenError::NoEntry { .. }) => return Ok(OwnTokenStatus::None),
+        Err(e) => return Err(e),
+    };
+    Ok(match read_own_entry(&raw, &service)? {
+        OwnEntry::Legacy(_) => OwnTokenStatus::Legacy,
+        OwnEntry::Bound { origin, .. } if same_origin(&origin, &account.base_url) => {
+            OwnTokenStatus::Bound { origin }
+        }
+        OwnEntry::Bound { origin, .. } => OwnTokenStatus::Mismatch {
+            stored: shown_origin(&origin),
+            expected: crate::oauth::origin_of(&account.base_url),
+        },
+    })
+}
+
 /// Store a token in bridgewatch's own credential entry for an account, which is
-/// what `token = { own = true }` reads back.
+/// what `token = { own = true }` reads back, bound to the origin of
+/// `base_url`: it is sent there and nowhere else.
+///
+/// ⛔ `base_url` is the caller's to get right, and the only right answer is
+/// the configuration file's: the app reads it from disk, never from the
+/// webview, because whoever chooses it chooses where the token goes.
 pub fn set_own_token(
     account: &str,
+    base_url: &str,
     token: &Secret,
     provider: &dyn TokenProvider,
 ) -> Result<(), TokenError> {
-    provider.keyring_set(
-        &SystemTokenProvider::own_service(account),
-        SystemTokenProvider::OWN_USER,
-        token.expose(),
-    )
+    let service = SystemTokenProvider::own_service(account);
+    let bound = encode_bound(token, base_url).ok_or_else(|| TokenError::Store {
+        service: service.clone(),
+        message: "the account's base_url is not an http(s) URL, so the token cannot be tied \
+                  to a server; it is not stored"
+            .to_string(),
+    })?;
+    provider.keyring_set(&service, SystemTokenProvider::OWN_USER, &bound)
 }
 
 /// Remove bridgewatch's own credential entry for an account.

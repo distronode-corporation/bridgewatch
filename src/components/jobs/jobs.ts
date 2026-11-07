@@ -168,18 +168,27 @@ export function etaLine(row: Pick<PipelineView, "eta" | "created_at">, now: numb
   return `usually ${approxDuration(eta.typical_secs)} · ${formatDuration(elapsed)} in`;
 }
 
-/** "updated 4s ago". `now` and the result of `Date.parse(at)` are ms. */
-export function updatedAgo(at: string | number | null | undefined, now: number): string {
+/**
+ * "updated 4s ago", or with `short` just "4s ago" (the popover header, where
+ * the state word sits right before it). `now` and the result of
+ * `Date.parse(at)` are ms.
+ */
+export function updatedAgo(at: string | number | null | undefined, now: number, short = false): string {
   if (at === null || at === undefined || at === "") return "not updated yet";
   const then = typeof at === "number" ? at : Date.parse(at);
   if (Number.isNaN(then)) return "not updated yet";
   const seconds = Math.max(0, Math.floor((now - then) / 1000));
-  if (seconds < 60) return `updated ${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `updated ${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `updated ${hours}h ago`;
-  return `updated ${Math.floor(hours / 24)}d ago`;
+  const ago =
+    seconds < 60
+      ? `${seconds}s ago`
+      : minutes < 60
+        ? `${minutes}m ago`
+        : hours < 24
+          ? `${hours}h ago`
+          : `${Math.floor(hours / 24)}d ago`;
+  return short ? ago : `updated ${ago}`;
 }
 
 /** A job's tone, from its core-decided class. */

@@ -76,9 +76,10 @@ use serde::de::DeserializeOwned;
 use super::http::{Conn, HttpRequest, HttpResponse, RequestRing, Transport};
 use super::log::{self as joblog, JobActionOutcome, LOG_TAIL_LINES, LogTail};
 use super::wire::github as wire;
-use super::{CiClient, ClientError, ListQuery};
+use super::{AnnotationAnswer, CiClient, ClientError, ListQuery};
 use crate::config::{Account, ProjectRef, Provider};
-use crate::model::{Bridge, Job, Pipeline, Project, TokenInfo, User};
+use crate::model::{Annotation, Bridge, Job, Pipeline, Project, TokenInfo, User};
+use crate::status::Status;
 use crate::token::Secret;
 
 /// The REST API version this client pins.
@@ -104,6 +105,26 @@ pub const ACCEPT: &str = "application/vnd.github+json";
 /// largest run either research lane measured was 108.
 pub const JOB_PAGES: u32 = 10;
 
+/// How many jobs' annotations one client remembers. A failed pipeline's first
+/// blocking failure is the only job ever asked about, so this is that many
+/// failed runs; past it the memo starts again, which costs one request per
+/// failed run still on screen.
+pub const ANNOTATION_MEMO: usize = 256;
+
+/// The annotations already asked for, by job id, with the `completed_at` they
+/// were asked for at.
+///
+/// ⛔ This is what makes polling cost nothing extra. A settled run is served
+/// from the poller's own cache and is not asked again; a run that is still
+/// going is fetched again every tick, and its failed job's annotations cannot
+/// change once that job has completed. Keyed on the finish time as well as the id, so
+/// a job GitHub re-runs under the same id is asked about again once it has
+/// finished again. An answer that was an error is remembered as "nothing" too
+/// (a fine-grained token without the Checks permission gets a 403 on every
+/// one), except for the errors that say "later": a rate limit, a 5xx, a
+/// dropped connection, which come back as [`AnnotationAnswer::Later`].
+type AnnotationMemo = std::collections::HashMap<u64, (Option<String>, Option<Annotation>)>;
+
 /// A client for one GitHub account.
 ///
 /// Cloning is cheap: the transport, the ring and the token are shared.
@@ -120,6 +141,8 @@ pub struct GitHubClient {
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
     /// The account's `actions`: whether a re-run may be SENT.
     actions: bool,
+    /// The annotations already fetched. See [`AnnotationMemo`].
+    annotations: Arc<Mutex<AnnotationMemo>>,
 }
 
 impl std::fmt::Debug for GitHubClient {
@@ -144,6 +167,7 @@ impl GitHubClient {
             groups: Arc::new(Mutex::new(group::Memo::default())),
             clock: Arc::new(Utc::now),
             actions: account.actions,
+            annotations: Arc::default(),
         }
     }
 
@@ -209,6 +233,32 @@ impl GitHubClient {
         Ok(run.into())
     }
 
+    /// `GET /repos/{owner}/{repo}/commits/{sha}`: a commit's full sha from
+    /// any unambiguous prefix. A 404, or the 422 GitHub answers for a prefix
+    /// it cannot resolve, is `None`.
+    pub async fn commit_sha(
+        &self,
+        project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        #[derive(serde::Deserialize)]
+        struct Commit {
+            sha: String,
+        }
+        let path = format!(
+            "/repos/{}/commits/{}",
+            repo_segment(project)?,
+            urlencoding::encode(sha)
+        );
+        match self.get_json::<Commit>(&path).await {
+            Ok((commit, _)) => Ok(Some(commit.sha.to_ascii_lowercase())),
+            Err(ClientError::NotFound { .. } | ClientError::Unexpected { status: 422, .. }) => {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// `GET /repos/{owner}/{repo}/actions/runs/{id}/jobs`, all pages.
     ///
     /// `filter=latest` is pinned rather than relied on as a default: a re-run
@@ -244,6 +294,66 @@ impl GitHubClient {
             .collect())
     }
 
+    /// `GET /repos/{repo}/check-runs/{id}/annotations`: the first failure
+    /// annotation of one failed job, whose id IS its check run's id. See
+    /// [`CiClient::failure_annotation`].
+    ///
+    /// ⚠️ The POLLER picks the job, one per pipeline: its first blocking
+    /// failure under the watch's `[watches.jobs]` rules. A run with twelve
+    /// failed shards costs one request, not twelve, and a job the rules ignore
+    /// or call a warning is never the one asked about.
+    ///
+    /// Asked once per (job id, `completed_at`); see [`AnnotationMemo`]. Never
+    /// an error: an annotation is a nicety on top of a job list that is already
+    /// right, and a token that may read Actions but not Checks still gets every
+    /// verdict.
+    pub async fn failure_annotation(&self, project: &ProjectRef, job: &Job) -> AnnotationAnswer {
+        if job.status != Status::Failed {
+            return AnnotationAnswer::Known(None);
+        }
+        let at = job.finished_at.clone();
+        if let Some((seen_at, cached)) = self.annotation_memo().get(&job.id)
+            && *seen_at == at
+        {
+            return AnnotationAnswer::Known(cached.clone());
+        }
+        let Ok(repo) = repo_segment(project) else {
+            return AnnotationAnswer::Known(None);
+        };
+        let path = format!(
+            "/repos/{repo}/check-runs/{}/annotations?per_page=50",
+            job.id
+        );
+        let found = match self.get_json::<Vec<wire::Annotation>>(&path).await {
+            Ok((list, _)) => first_failure(list),
+            Err(
+                e @ (ClientError::RateLimited { .. }
+                | ClientError::Server { .. }
+                | ClientError::Transport(_)),
+            ) => {
+                // None of these is an answer: the poller asks again next tick.
+                tracing::debug!(job = job.id, error = %e, "annotations not fetched; will ask again");
+                return AnnotationAnswer::Later;
+            }
+            Err(e) => {
+                tracing::debug!(job = job.id, error = %e, "annotations not readable; not asked again");
+                None
+            }
+        };
+        let mut memo = self.annotation_memo();
+        if memo.len() >= ANNOTATION_MEMO {
+            memo.clear();
+        }
+        memo.insert(job.id, (at, found.clone()));
+        AnnotationAnswer::Known(found)
+    }
+
+    /// The annotation memo, whatever a panicking holder left in it: it is a
+    /// cache, and the worst a half-written entry does is cost a request.
+    fn annotation_memo(&self) -> std::sync::MutexGuard<'_, AnnotationMemo> {
+        self.annotations.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// `GET /user`: who the token authenticates as.
     pub async fn current_user(&self) -> Result<User, ClientError> {
         let (user, _) = self.get_json::<wire::User>("/user").await?;
@@ -263,9 +373,8 @@ impl GitHubClient {
     ///
     /// ⚠️ Nothing here is invented. There is no token id (the user's own id
     /// stands in, so the field can be filled at all), no token name, no
-    /// `active` flag, and no expiry: GitHub does send an expiry header on some
-    /// credentials, but reporting it would need a second header field and the
-    /// wizard does not draw it yet.
+    /// `active` flag, and no expiry here: the expiry header GitHub sends is
+    /// read on every response by token health instead ([`crate::health`]).
     pub async fn token_self(&self) -> Result<TokenInfo, ClientError> {
         let (user, meta) = self.get_json::<wire::User>("/user").await?;
         let Some(raw) = meta.oauth_scopes else {
@@ -444,6 +553,11 @@ impl GitHubClient {
             parts.push(format!("event={}", urlencoding::encode(event)));
         }
         parts.push(format!("head_sha={}", urlencoding::encode(&row.sha)));
+        // Held to the same actor as the list that made the row, or a `mine`
+        // group would gain other people's runs as bridges (cubic, #66).
+        if let Some(user) = &query.user {
+            parts.push(format!("actor={}", urlencoding::encode(user)));
+        }
         parts.push("exclude_pull_requests=true".to_string());
         parts.push("per_page=100".to_string());
         parts.push("page=1".to_string());
@@ -589,6 +703,28 @@ impl GitHubClient {
     }
 }
 
+/// The annotation a first failing line is made of: the first `failure` one
+/// that points into the repository, else the first `failure` one at all
+/// (GitHub's own "Process completed with exit code 1." is on `.github`).
+/// Warnings and notices are not why a job failed, and are never chosen.
+fn first_failure(list: Vec<wire::Annotation>) -> Option<Annotation> {
+    let failures: Vec<wire::Annotation> = list
+        .into_iter()
+        .filter(|a| a.annotation_level.as_deref() == Some("failure"))
+        .filter(|a| a.message.as_deref().is_some_and(|m| !m.trim().is_empty()))
+        .collect();
+    let in_repo = failures.iter().position(|a| {
+        a.path
+            .as_deref()
+            .is_some_and(|p| !p.is_empty() && p != ".github")
+    });
+    let chosen = match in_repo {
+        Some(i) => failures.into_iter().nth(i),
+        None => failures.into_iter().next(),
+    };
+    chosen.map(Into::into)
+}
+
 /// The path of the runs listing a query asks for.
 ///
 /// One function because the commit group keys what it remembers on this exact
@@ -601,6 +737,12 @@ fn list_path(repo: &str, query: &ListQuery) -> String {
     }
     if let Some(s) = &query.source {
         parts.push(format!("event={}", urlencoding::encode(s)));
+    }
+    if let Some(sha) = &query.sha {
+        parts.push(format!("head_sha={}", urlencoding::encode(sha)));
+    }
+    if let Some(user) = &query.user {
+        parts.push(format!("actor={}", urlencoding::encode(user)));
     }
     // Drops the `pull_requests` array, which is never read and was 45
     // entries on one sampled run.
@@ -702,6 +844,14 @@ impl CiClient for GitHubClient {
         GitHubClient::ring(self)
     }
 
+    async fn commit_sha(
+        &self,
+        project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        GitHubClient::commit_sha(self, project, sha).await
+    }
+
     async fn list_pipelines(
         &self,
         project: &ProjectRef,
@@ -780,8 +930,26 @@ impl CiClient for GitHubClient {
         GitHubClient::current_user(self).await
     }
 
+    async fn failure_annotation(&self, project: &ProjectRef, job: &Job) -> AnnotationAnswer {
+        GitHubClient::failure_annotation(self, project, job).await
+    }
+
     async fn token_self(&self) -> Result<TokenInfo, ClientError> {
         GitHubClient::token_self(self).await
+    }
+
+    async fn owner(&self) -> Result<String, ClientError> {
+        self.conn
+            .owner(|| async { self.current_user().await.map(|u| u.username) })
+            .await
+    }
+
+    fn credential(&self) -> crate::health::Observed {
+        self.conn.probe().get()
+    }
+
+    async fn read_token_expiry(&self) -> Result<(), ClientError> {
+        self.current_user().await.map(|_| ())
     }
 
     async fn list_projects(

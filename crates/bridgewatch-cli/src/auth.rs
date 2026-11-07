@@ -15,10 +15,11 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bridgewatch_core::client::Transport;
-use bridgewatch_core::config::{Account, Config, OAuthSource, TokenSource};
+use bridgewatch_core::client::{ClientError, RequestRing, Transport};
+use bridgewatch_core::config::{Account, Config, OAuthSource, Provider, TokenSource};
+use bridgewatch_core::health::Refusal;
 use bridgewatch_core::oauth::{self, BuiltinClients, OAuthError, Progress, store};
-use bridgewatch_core::token::TokenProvider;
+use bridgewatch_core::token::{self, OwnTokenStatus, TokenError, TokenProvider};
 use clap::Subcommand;
 
 use crate::{Failure, Outcome, exit};
@@ -41,7 +42,13 @@ pub enum AuthAction {
         account: String,
     },
     /// Show who each signing-in account is signed in as, until when and with
-    /// what scopes. Never a token. Exits 70 when one is not signed in.
+    /// what scopes, which server each own token (token = { own = true })
+    /// is bound to, and when it expires (one expiry lookup per own token,
+    /// with a `GET /user` after it when GitLab refuses the lookup). Never a
+    /// token. Exits 70 unless every account listed is
+    /// usable: one is not signed in, is signed in for another server or
+    /// application than it names now, has no own token stored, or has one
+    /// saved for another server.
     Status {
         /// Only this account.
         #[arg(long)]
@@ -189,38 +196,94 @@ pub fn logout(
     Ok(exit::OK)
 }
 
+/// Whether `auth status` has anything to say about an account: it signs in,
+/// or it reads bridgewatch's own entry.
+fn listed(account: &Account) -> bool {
+    matches!(
+        account.token,
+        TokenSource::Oauth(_) | TokenSource::Own(true)
+    )
+}
+
 /// `auth status`.
+///
+/// ⛔ A stored sign-in is "signed in" only when the poller would use it:
+/// [`oauth::TokenSet::fits`], the session's own rule. One issued by another
+/// instance, or for another application, is never sent, and saying "signed in"
+/// for it sent people looking everywhere but the sign-in.
+///
+/// ⛔ The same for an own token: [`token::own_token_status`] is the binding
+/// `token::resolve` enforces, so a token saved for another server reads as
+/// what it is, and is not counted as usable. A 1.x value is usable (it binds
+/// on first use) and is said to be unbound; reading it here binds nothing.
+///
+/// The expiry of each bound own token is `expiries`' answer, read from the
+/// server beforehand by [`own_expiries`] (one request per token). A sign-in's
+/// end is in the sign-in itself, and needs none.
 pub fn status(
     config: &Config,
     only: Option<&str>,
     store_provider: &dyn TokenProvider,
+    builtin: &BuiltinClients,
+    expiries: &Expiries,
     now: u64,
     out: &mut dyn Write,
 ) -> Outcome {
     let names: Vec<String> = match only {
         Some(name) => {
-            oauth_source(name, account(config, name)?)?;
+            let account = account(config, name)?;
+            if !listed(account) {
+                oauth_source(name, account)?;
+            }
             vec![name.to_string()]
         }
         None => config
             .accounts
             .iter()
-            .filter(|(_, a)| matches!(a.token, TokenSource::Oauth(_)))
+            .filter(|(_, a)| listed(a))
             .map(|(k, _)| k.clone())
             .collect(),
     };
     if names.is_empty() {
         writeln!(
             out,
-            "No account signs in. An account does when its token source is token = {{ oauth = true }}."
+            "No account signs in or keeps its own token. An account does when its token source \
+             is token = {{ oauth = true }} or token = {{ own = true }}."
         )?;
         return Ok(exit::OK);
     }
     let mut all_signed_in = true;
     for name in &names {
-        let host = oauth::Endpoints::for_account(&config.accounts[name]).host;
+        let account = &config.accounts[name];
+        let host = oauth::Endpoints::for_account(account).host;
+        if let TokenSource::Own(true) = account.token {
+            let (usable, line) = own_line(name, account, store_provider, expiries.get(name), now);
+            all_signed_in &= usable;
+            writeln!(out, "{name} ({host}): {line}")?;
+            continue;
+        }
+        // Only signing-in and own accounts are listed (above).
+        let TokenSource::Oauth(source) = &account.token else {
+            continue;
+        };
         match store::load(name, store_provider) {
             Ok(Some(set)) => {
+                let client_id = match oauth::client_id_for(account, source, builtin) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        all_signed_in = false;
+                        writeln!(out, "{name} ({host}): {e}")?;
+                        continue;
+                    }
+                };
+                if let Some(why) = set.fit(account, &client_id).mismatch() {
+                    all_signed_in = false;
+                    writeln!(
+                        out,
+                        "{name} ({host}): {why}; run bridgewatch auth login --account {name}"
+                    )?;
+                    continue;
+                }
                 let s = set.status();
                 let who = s
                     .login
@@ -240,6 +303,25 @@ pub fn status(
                     (true, Some(at)) => format!(", renewed automatically until {}", stamp(at)),
                     (true, None) => ", renewed automatically".to_string(),
                     (false, _) => String::new(),
+                };
+                // F3: inside 72 h of the sign-in's end, say what to do.
+                let ends = if s.can_refresh {
+                    s.refresh_expires_at
+                } else {
+                    s.expires_at
+                };
+                let renews = match ends {
+                    Some(at) if at > now && at - now <= WARN_SECS => format!(
+                        "{renews}; the sign-in ends in {}: sign in again before then (bridgewatch \
+                         auth login --account {name})",
+                        span(at - now)
+                    ),
+                    Some(at) if at <= now => format!(
+                        "{renews}; the sign-in ended at {}: sign in again (bridgewatch auth login \
+                         --account {name})",
+                        stamp(at)
+                    ),
+                    _ => renews,
                 };
                 let scopes = if s.scopes.is_empty() {
                     "none reported".to_string()
@@ -265,6 +347,280 @@ pub fn status(
         }
     }
     Ok(if all_signed_in { exit::OK } else { exit::ERROR })
+}
+
+/// A credential store that reads each address at most ONCE: what one
+/// `auth status` run hands to [`own_expiries`] and [`status`], so a bound own
+/// token is read once rather than three times (its binding for the expiry
+/// lookup, its secret for the request, its binding again for the line).
+/// ⚠ On macOS each read of an item another program wrote can raise an
+/// access prompt (cubic, #67).
+///
+/// What it remembers is a value or "no entry"; any other error is not
+/// remembered. A write or a delete forgets that address.
+pub struct ReadOnce<'a> {
+    inner: &'a dyn TokenProvider,
+    seen: std::sync::Mutex<std::collections::HashMap<(String, String), Option<String>>>,
+}
+
+impl<'a> ReadOnce<'a> {
+    /// Wrap `inner` for one run.
+    pub fn new(inner: &'a dyn TokenProvider) -> Self {
+        Self {
+            inner,
+            seen: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn seen(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<(String, String), Option<String>>>
+    {
+        self.seen.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl TokenProvider for ReadOnce<'_> {
+    fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        let key = (service.to_string(), user.to_string());
+        if let Some(remembered) = self.seen().get(&key).cloned() {
+            return remembered.ok_or_else(|| TokenError::NoEntry {
+                service: service.to_string(),
+                user: user.to_string(),
+            });
+        }
+        let read = self.inner.keyring_get(service, user);
+        match &read {
+            Ok(value) => {
+                self.seen().insert(key, Some(value.clone()));
+            }
+            Err(TokenError::NoEntry { .. }) => {
+                self.seen().insert(key, None);
+            }
+            Err(_) => {}
+        }
+        read
+    }
+
+    fn keyring_set(&self, service: &str, user: &str, secret: &str) -> Result<(), TokenError> {
+        self.seen().remove(&(service.to_string(), user.to_string()));
+        self.inner.keyring_set(service, user, secret)
+    }
+
+    fn keyring_delete(&self, service: &str, user: &str) -> Result<(), TokenError> {
+        self.seen().remove(&(service.to_string(), user.to_string()));
+        self.inner.keyring_delete(service, user)
+    }
+
+    fn env(&self, name: &str) -> Option<String> {
+        self.inner.env(name)
+    }
+
+    fn run(&self, argv: &[String]) -> Result<String, TokenError> {
+        self.inner.run(argv)
+    }
+}
+
+/// How close an end has to be for `auth status` to say what to do: the
+/// widest warning, 72 h.
+const WARN_SECS: u64 = bridgewatch_core::health::WARN_HOURS[0] as u64 * 3600;
+
+/// What the server said of one bound own token's expiry (F3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnExpiry {
+    /// It stops working at this Unix second.
+    At(i64),
+    /// GitLab: it has no expiry.
+    Never,
+    /// GitHub sent no expiry header it could be read from (a classic token
+    /// without one sends none).
+    NotStated,
+    /// The server refused it, and why.
+    Refused(Refusal),
+    /// The request failed for another reason.
+    Unread(String),
+    /// The server accepts the token, and would not say when it ends: GitLab
+    /// refused the expiry lookup (a job token, say) and `/user` worked.
+    AcceptedUnread,
+}
+
+/// How [`own_expiries`] gets a transport for an account.
+pub type TransportFor = dyn Fn(&Account) -> Result<Arc<dyn Transport>, ClientError>;
+
+/// Each bound own token's [`OwnExpiry`], by account.
+pub type Expiries = std::collections::BTreeMap<String, OwnExpiry>;
+
+/// Ask the server for the expiry of every own token `status` will list
+/// that is bound to the account's server: one request each (GitLab's
+/// `/personal_access_tokens/self`, GitHub's `/user`, whose answer carries the
+/// expiry header). A 1.x value is not read: reading it would bind it.
+pub async fn own_expiries(
+    config: &Config,
+    only: Option<&str>,
+    store_provider: &dyn TokenProvider,
+    transport_for: &TransportFor,
+) -> Expiries {
+    let mut out = Expiries::new();
+    for (name, account) in &config.accounts {
+        if only.is_some_and(|o| o != name) || !matches!(account.token, TokenSource::Own(true)) {
+            continue;
+        }
+        if !matches!(
+            token::own_token_status(name, account, store_provider),
+            Ok(OwnTokenStatus::Bound { .. })
+        ) {
+            continue;
+        }
+        let Ok(secret) = token::resolve(name, account, store_provider) else {
+            continue;
+        };
+        let answer = match transport_for(account).and_then(|t| {
+            bridgewatch_core::client::client_for(account, &secret, t, RequestRing::new(4))
+        }) {
+            Err(e) => OwnExpiry::Unread(e.to_string()),
+            Ok(client) => {
+                let mut read = client.read_token_expiry().await;
+                // GitLab's `/personal_access_tokens/self` refusing says nothing
+                // about the token itself (a job token is refused there too),
+                // so the core does not count it; ask `/user`, which every
+                // usable token may read, whether the token is refused. ⛔ Only
+                // a FAILED `/user` replaces the lookup's answer: an accepted
+                // one says the token works, and nothing about when it ends
+                // (cubic, #66).
+                let mut accepted_unread = false;
+                if matches!(read, Err(ClientError::Auth { .. }))
+                    && client.credential().refused.is_none()
+                {
+                    match client.current_user().await {
+                        Ok(_) => accepted_unread = true,
+                        Err(e) => read = Err(e),
+                    }
+                }
+                let seen = client.credential();
+                match (read, seen.refused, seen.expiry) {
+                    // `health::assess`'s rule: a bare refusal at or past a
+                    // stated expiry is the expiry (GitHub's 401 says only
+                    // "Bad credentials").
+                    (_, Some(Refusal::Invalid), Some(e))
+                        if e.at <= i64::try_from(oauth::now()).unwrap_or(i64::MAX) =>
+                    {
+                        OwnExpiry::Refused(Refusal::Expired)
+                    }
+                    (_, Some(why), _) => OwnExpiry::Refused(why),
+                    _ if accepted_unread => OwnExpiry::AcceptedUnread,
+                    (Ok(()), None, Some(e)) => OwnExpiry::At(e.at),
+                    (Ok(()), None, None) => match account.provider {
+                        Provider::Gitlab => OwnExpiry::Never,
+                        Provider::Github => OwnExpiry::NotStated,
+                    },
+                    (Err(e), None, _) => OwnExpiry::Unread(e.to_string()),
+                }
+            }
+        };
+        out.insert(name.clone(), answer);
+    }
+    out
+}
+
+/// One own-token account's `auth status` line, after the name and host, and
+/// whether the poller would send its token.
+fn own_line(
+    name: &str,
+    account: &Account,
+    store_provider: &dyn TokenProvider,
+    expiry: Option<&OwnExpiry>,
+    now: u64,
+) -> (bool, String) {
+    match token::own_token_status(name, account, store_provider) {
+        Ok(OwnTokenStatus::Bound { origin }) => {
+            let bound = format!("own token, bound to {origin}");
+            let now = i64::try_from(now).unwrap_or(i64::MAX);
+            match expiry {
+                None => (true, bound),
+                Some(OwnExpiry::At(at)) if *at > now => {
+                    let left = (*at - now).unsigned_abs();
+                    let soon = if left <= WARN_SECS {
+                        ": save a new one in Settings before then"
+                    } else {
+                        ""
+                    };
+                    (
+                        true,
+                        format!(
+                            "{bound}; it expires in {} ({}){soon}",
+                            span(left),
+                            stamp(at.unsigned_abs())
+                        ),
+                    )
+                }
+                Some(OwnExpiry::At(at)) => (
+                    true,
+                    format!(
+                        "{bound}; it expires now ({}): save a new one in Settings",
+                        stamp(at.unsigned_abs())
+                    ),
+                ),
+                Some(OwnExpiry::Never) => (true, format!("{bound}; it does not expire")),
+                Some(OwnExpiry::NotStated) => (
+                    true,
+                    format!("{bound}; GitHub stated no usable expiry for it"),
+                ),
+                Some(OwnExpiry::Refused(why)) => {
+                    let why = match why {
+                        Refusal::Revoked => "it was revoked",
+                        Refusal::Expired | Refusal::SignInEnded => "it has expired",
+                        Refusal::Invalid => "it is not accepted (401)",
+                    };
+                    (
+                        false,
+                        format!(
+                            "{bound}; the server refuses it: {why}; save a new one in Settings"
+                        ),
+                    )
+                }
+                Some(OwnExpiry::AcceptedUnread) => (
+                    true,
+                    format!("{bound}; the server accepts it; its expiry could not be read"),
+                ),
+                Some(OwnExpiry::Unread(e)) => {
+                    (true, format!("{bound}; its expiry could not be read ({e})"))
+                }
+            }
+        }
+        // ⛔ Usable only when there is a server to bind it to: `resolve` refuses
+        // a 1.x value on a base_url with no origin, so this must not say "ok".
+        Ok(OwnTokenStatus::Legacy) => match oauth::origin_of(&account.base_url) {
+            Some(origin) => (
+                true,
+                format!(
+                    "own token stored by bridgewatch 1.x, not yet tied to a server; it is bound \
+                     to {origin} the first time it is used"
+                ),
+            ),
+            None => (
+                false,
+                "own token stored by bridgewatch 1.x, and the account's base_url is not an \
+                 http(s) URL, so it cannot be tied to a server and is not sent"
+                    .to_string(),
+            ),
+        },
+        Ok(OwnTokenStatus::Mismatch { stored, expected }) => {
+            let expected =
+                expected.unwrap_or_else(|| "an address that is not an http(s) URL".into());
+            (
+                false,
+                format!(
+                    "own token saved for {stored}, not {expected}, so it is not sent; save a \
+                     token for {expected} in Settings, or put base_url back"
+                ),
+            )
+        }
+        Ok(OwnTokenStatus::None) => (
+            false,
+            "no own token stored; save one in Settings (Accounts, Token source)".to_string(),
+        ),
+        Err(e) => (false, e.to_string()),
+    }
 }
 
 /// A duration in words: `7h 12m`, `14m`, `45s`.
@@ -308,7 +664,7 @@ fn chrono_like(secs: i64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
@@ -318,8 +674,9 @@ mod tests {
     use super::*;
 
     /// A credential store in memory. Nothing here reaches the real keychain.
+    /// `fixture record`'s tests in `main.rs` use it too.
     #[derive(Default)]
-    struct Memory(Mutex<BTreeMap<(String, String), String>>);
+    pub(crate) struct Memory(Mutex<BTreeMap<(String, String), String>>);
 
     impl TokenProvider for Memory {
         fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
@@ -552,7 +909,16 @@ mod tests {
         .unwrap();
 
         let mut out = Vec::new();
-        let code = status(&github(), None, &store, 1_000 + 3600, &mut out).unwrap();
+        let code = status(
+            &github(),
+            None,
+            &store,
+            &BUILTIN,
+            &Expiries::new(),
+            1_000 + 3600,
+            &mut out,
+        )
+        .unwrap();
         let text = String::from_utf8(out).unwrap();
         assert_eq!(code, exit::OK, "{text}");
         assert!(
@@ -572,11 +938,508 @@ mod tests {
         let mut out = Vec::new();
         logout(&github(), "gh", &store, &mut out).unwrap();
         let mut out = Vec::new();
-        let code = status(&github(), Some("gh"), &store, 0, &mut out).unwrap();
+        let code = status(
+            &github(),
+            Some("gh"),
+            &store,
+            &BUILTIN,
+            &Expiries::new(),
+            0,
+            &mut out,
+        )
+        .unwrap();
         let text = String::from_utf8(out).unwrap();
         assert_eq!(code, exit::ERROR, "{text}");
         assert!(
             text.contains("not signed in; run bridgewatch auth login --account gh"),
+            "{text}"
+        );
+    }
+
+    /// A sign-in stored by `gl` while it pointed elsewhere.
+    fn issued_by(base_url: &str, client_id: &str) -> oauth::TokenSet {
+        oauth::TokenSet {
+            access_token: bridgewatch_core::token::Secret::new("glpat-OAUTH-A"),
+            refresh_token: Some(bridgewatch_core::token::Secret::new("glrt-REFRESH-A")),
+            expires_at: Some(10_000),
+            refresh_expires_at: None,
+            scopes: vec!["read_api".into()],
+            login: Some("alice".into()),
+            client_id: client_id.into(),
+            base_url: base_url.into(),
+            obtained_at: 1,
+        }
+    }
+
+    fn self_managed() -> Config {
+        config(
+            "[accounts.gl]\nbase_url = \"https://gitlab.example.com\"\n\
+             token = { oauth = { client_id = \"self-app\" } }\n",
+        )
+    }
+
+    /// ⛔ The poller never sends a sign-in issued by another instance, so
+    /// `auth status` must not call it signed in: it used to print "signed in
+    /// as @alice" for a set that every poll then ignored.
+    #[test]
+    fn status_of_a_sign_in_from_another_instance_says_so_and_exits_70() {
+        let store = Memory::default();
+        store::save("gl", &issued_by("https://gitlab.com", "self-app"), &store).unwrap();
+        let mut out = Vec::new();
+        let code = status(
+            &self_managed(),
+            None,
+            &store,
+            &BUILTIN,
+            &Expiries::new(),
+            1_000,
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::ERROR, "{text}");
+        assert_eq!(
+            text,
+            "gl (gitlab.example.com): signed in for gitlab.com, not gitlab.example.com; \
+             run bridgewatch auth login --account gl\n"
+        );
+        for secret in ["glpat-OAUTH-A", "glrt-REFRESH-A", "@alice"] {
+            assert!(!text.contains(secret), "{text}");
+        }
+    }
+
+    /// The same for one issued by the right instance to another application.
+    #[test]
+    fn status_of_a_sign_in_for_another_application_says_so_and_exits_70() {
+        let store = Memory::default();
+        store::save(
+            "gl",
+            &issued_by("https://gitlab.example.com/", "other-app"),
+            &store,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let code = status(
+            &self_managed(),
+            Some("gl"),
+            &store,
+            &BUILTIN,
+            &Expiries::new(),
+            1_000,
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::ERROR, "{text}");
+        assert!(
+            text.contains(
+                "gl (gitlab.example.com): signed in with another application than this \
+                 account's client id; run bridgewatch auth login --account gl"
+            ),
+            "{text}"
+        );
+
+        // And the set that does fit is signed in, which is what proves the
+        // check is the origin and the application and nothing else.
+        store::save(
+            "gl",
+            &issued_by("https://GitLab.example.com:443/", "self-app"),
+            &store,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let code = status(
+            &self_managed(),
+            Some("gl"),
+            &store,
+            &BUILTIN,
+            &Expiries::new(),
+            1_000,
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::OK, "{text}");
+        assert!(
+            text.contains("gl (gitlab.example.com): signed in as @alice"),
+            "{text}"
+        );
+    }
+
+    /// ⛔ `auth status` lists own-token accounts too, by the binding the
+    /// poller enforces: bound, a 1.x value that binds on first use, saved for
+    /// another server, or nothing. Exit 70 unless every one is usable, and a
+    /// status binds nothing.
+    #[test]
+    fn status_lists_own_tokens_by_the_server_they_are_bound_to() {
+        let config = config(
+            "[accounts.bound]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\n\
+             [accounts.legacy]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\n\
+             [accounts.moved]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\n\
+             [accounts.none]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\n\
+             [accounts.env]\ntoken = { env = \"GL\" }\n",
+        );
+        let store = Memory::default();
+        let secret = bridgewatch_core::token::Secret::new("glpat-SECRET");
+        token::set_own_token("bound", "https://gitlab.example.com", &secret, &store).unwrap();
+        token::set_own_token("moved", "https://gitlab.com", &secret, &store).unwrap();
+        store
+            .keyring_set("bridgewatch:legacy", "token", "glpat-SECRET")
+            .unwrap();
+
+        let mut out = Vec::new();
+        let code = status(
+            &config,
+            None,
+            &store,
+            &BUILTIN,
+            &Expiries::new(),
+            0,
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::ERROR, "{text}");
+        assert_eq!(
+            text,
+            "bound (gitlab.example.com): own token, bound to https://gitlab.example.com\n\
+             legacy (gitlab.example.com): own token stored by bridgewatch 1.x, not yet tied to \
+             a server; it is bound to https://gitlab.example.com the first time it is used\n\
+             moved (gitlab.example.com): own token saved for https://gitlab.com, not \
+             https://gitlab.example.com, so it is not sent; save a token for \
+             https://gitlab.example.com in Settings, or put base_url back\n\
+             none (gitlab.example.com): no own token stored; save one in Settings (Accounts, \
+             Token source)\n"
+        );
+        assert!(!text.contains("glpat-SECRET"), "{text}");
+        assert_eq!(
+            store.keyring_get("bridgewatch:legacy", "token").unwrap(),
+            "glpat-SECRET",
+            "a status binds nothing"
+        );
+
+        // Every one usable (bound, or 1.x binding on first use): exit 0.
+        let mut out = Vec::new();
+        assert_eq!(
+            status(
+                &config,
+                Some("bound"),
+                &store,
+                &BUILTIN,
+                &Expiries::new(),
+                0,
+                &mut out
+            )
+            .unwrap(),
+            exit::OK
+        );
+        let mut out = Vec::new();
+        assert_eq!(
+            status(
+                &config,
+                Some("legacy"),
+                &store,
+                &BUILTIN,
+                &Expiries::new(),
+                0,
+                &mut out
+            )
+            .unwrap(),
+            exit::OK
+        );
+        let mut out = Vec::new();
+        assert_eq!(
+            status(
+                &config,
+                Some("moved"),
+                &store,
+                &BUILTIN,
+                &Expiries::new(),
+                0,
+                &mut out
+            )
+            .unwrap(),
+            exit::ERROR
+        );
+        // A 1.x value on a base_url with no origin is not usable: there is
+        // no server to bind it to, and `resolve` refuses it.
+        let mut odd = config.clone();
+        odd.accounts.get_mut("legacy").unwrap().base_url = "https://me@gitlab.example.com".into();
+        let mut out = Vec::new();
+        assert_eq!(
+            status(
+                &odd,
+                Some("legacy"),
+                &store,
+                &BUILTIN,
+                &Expiries::new(),
+                0,
+                &mut out
+            )
+            .unwrap(),
+            exit::ERROR
+        );
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("cannot be tied to a server"), "{text}");
+        assert!(
+            token::resolve("legacy", &odd.accounts["legacy"], &store).is_err(),
+            "and resolve agrees"
+        );
+        // An env account still has nothing to show.
+        assert_eq!(
+            status(
+                &config,
+                Some("env"),
+                &store,
+                &BUILTIN,
+                &Expiries::new(),
+                0,
+                &mut Vec::new()
+            )
+            .unwrap_err()
+            .code,
+            exit::CONFIG
+        );
+    }
+
+    /// F3: `auth status` shows each bound own token's expiry, read with one
+    /// request each (GitLab's `/personal_access_tokens/self`, GitHub's `/user`
+    /// and its expiry header), says what to do inside 72 h, and counts a
+    /// refused token as not usable. A 1.x value is not read: that would bind it.
+    #[tokio::test]
+    async fn status_shows_each_bound_own_tokens_expiry() {
+        let config = config(
+            "[accounts.gh]\nprovider = \"github\"\ntoken = { own = true }\n\n\
+             [accounts.gone]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\n\
+             [accounts.lab]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\n\
+             [accounts.legacy]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n",
+        );
+        let store = Memory::default();
+        let secret = bridgewatch_core::token::Secret::new("tok-FIXTURE");
+        token::set_own_token("gh", "https://api.github.com", &secret, &store).unwrap();
+        token::set_own_token("gone", "https://gitlab.example.com", &secret, &store).unwrap();
+        token::set_own_token("lab", "https://gitlab.example.com", &secret, &store).unwrap();
+        store
+            .keyring_set("bridgewatch:legacy", "token", "tok-FIXTURE")
+            .unwrap();
+
+        let t = Arc::new(ScriptTransport::new());
+        let mut user =
+            bridgewatch_core::client::HttpResponse::plain(200, r#"{"login":"octocat","id":1}"#);
+        user.token_expiration = Some("2027-01-01 00:00:00 UTC".into());
+        t.reply_with("/user", user);
+        // gone's own /user, asked after its expiry lookup is refused.
+        t.reply(
+            "/user",
+            401,
+            r#"{"error":"invalid_token","error_description":"Token was revoked. You have to re-authorize from the user."}"#,
+        );
+        // In account order: gone, then lab.
+        t.reply(
+            "/personal_access_tokens/self",
+            401,
+            r#"{"error":"invalid_token","error_description":"Token was revoked. You have to re-authorize from the user."}"#,
+        );
+        t.reply(
+            "/personal_access_tokens/self",
+            200,
+            r#"{"id":9,"name":"bw","scopes":["read_api"],"expires_at":"2026-11-20","active":true,"revoked":false}"#,
+        );
+        let transport = t.clone();
+        let transport_for = move |_: &Account| Ok(transport.clone() as Arc<dyn Transport>);
+        let expiries = own_expiries(&config, None, &store, &transport_for).await;
+        assert_eq!(
+            t.requests()
+                .iter()
+                .map(|r| r.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "/user",
+                "/personal_access_tokens/self",
+                "/user",
+                "/personal_access_tokens/self"
+            ],
+            "one each, a /user for the refused one, and none for the 1.x value"
+        );
+
+        // 2026-11-18 00:00 UTC: lab has 48 h left.
+        let now = 1_795_132_800 - 48 * 3600;
+        let mut out = Vec::new();
+        let code = status(&config, None, &store, &BUILTIN, &expiries, now, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::ERROR, "{text}");
+        let line = |name: &str| {
+            text.lines()
+                .find(|l| l.starts_with(&format!("{name} (")))
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert!(
+            line("gh").ends_with("own token, bound to https://api.github.com; it expires in 44d 0h (2027-01-01T00:00:00Z)"),
+            "{text}"
+        );
+        assert!(
+            line("gone")
+                .ends_with("the server refuses it: it was revoked; save a new one in Settings"),
+            "{text}"
+        );
+        assert!(
+            line("lab").ends_with(
+                "it expires in 2d 0h (2026-11-20T00:00:00Z): save a new one in Settings before then"
+            ),
+            "{text}"
+        );
+        assert!(!line("legacy").contains("expires"), "{text}");
+        assert!(!text.contains("tok-FIXTURE"), "{text}");
+    }
+
+    /// GitLab refusing the expiry lookup while `/user` accepts the token (a CI
+    /// job token, say): the token is accepted, its expiry unknown. Never "does
+    /// not expire", never "refused", and the exit code is an accepted token's
+    /// (cubic, #66).
+    #[tokio::test]
+    async fn an_accepted_token_whose_expiry_lookup_is_refused_is_accepted_expiry_unknown() {
+        let config = config(
+            "[accounts.lab]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n",
+        );
+        let store = Memory::default();
+        let secret = bridgewatch_core::token::Secret::new("tok-FIXTURE");
+        token::set_own_token("lab", "https://gitlab.example.com", &secret, &store).unwrap();
+        let t = Arc::new(ScriptTransport::new());
+        t.reply(
+            "/personal_access_tokens/self",
+            401,
+            r#"{"message":"401 Unauthorized"}"#,
+        );
+        t.reply(
+            "/user",
+            200,
+            r#"{"id":7,"username":"ci-bot","name":"CI","bot":true}"#,
+        );
+        let transport = t.clone();
+        let transport_for = move |_: &Account| Ok(transport.clone() as Arc<dyn Transport>);
+        let expiries = own_expiries(&config, None, &store, &transport_for).await;
+        assert_eq!(expiries["lab"], OwnExpiry::AcceptedUnread);
+
+        let mut out = Vec::new();
+        let code = status(&config, None, &store, &BUILTIN, &expiries, 0, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::OK, "{text}");
+        assert_eq!(
+            text,
+            "lab (gitlab.example.com): own token, bound to https://gitlab.example.com; the \
+             server accepts it; its expiry could not be read\n"
+        );
+        for wrong in ["does not expire", "refuses", "not authorised", "invalid"] {
+            assert!(!text.contains(wrong), "{wrong}: {text}");
+        }
+    }
+
+    /// A GitHub token refused with a 401 after the expiry its own header
+    /// states is expired, not "not accepted": `health::assess`'s rule.
+    #[tokio::test]
+    async fn a_github_token_refused_past_its_stated_expiry_shows_as_expired() {
+        let config = config("[accounts.gh]\nprovider = \"github\"\ntoken = { own = true }\n");
+        let store = Memory::default();
+        let secret = bridgewatch_core::token::Secret::new("tok-FIXTURE");
+        token::set_own_token("gh", "https://api.github.com", &secret, &store).unwrap();
+        let t = Arc::new(ScriptTransport::new());
+        let mut refused =
+            bridgewatch_core::client::HttpResponse::plain(401, r#"{"message":"Bad credentials"}"#);
+        let past = i64::try_from(oauth::now()).unwrap() - 2 * 86_400;
+        refused.token_expiration =
+            Some(bridgewatch_core::health::stamp(past).replace(" UTC", ":00 UTC"));
+        t.reply_with("/user", refused);
+        let transport = t.clone();
+        let transport_for = move |_: &Account| Ok(transport.clone() as Arc<dyn Transport>);
+        let expiries = own_expiries(&config, None, &store, &transport_for).await;
+        assert_eq!(expiries["gh"], OwnExpiry::Refused(Refusal::Expired));
+
+        let mut out = Vec::new();
+        let code = status(&config, None, &store, &BUILTIN, &expiries, 0, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::ERROR, "{text}");
+        assert!(
+            text.ends_with("the server refuses it: it has expired; save a new one in Settings\n"),
+            "{text}"
+        );
+    }
+
+    /// One `auth status` run reads a bound own token's entry ONCE, through
+    /// [`ReadOnce`], for its expiry lookup and its line (cubic, #67).
+    #[tokio::test]
+    async fn status_reads_each_own_entry_from_the_store_once() {
+        struct Counting(Memory, std::sync::atomic::AtomicUsize);
+        impl TokenProvider for Counting {
+            fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+                self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.0.keyring_get(service, user)
+            }
+            fn keyring_set(&self, s: &str, u: &str, v: &str) -> Result<(), TokenError> {
+                self.0.keyring_set(s, u, v)
+            }
+            fn keyring_delete(&self, s: &str, u: &str) -> Result<(), TokenError> {
+                self.0.keyring_delete(s, u)
+            }
+            fn env(&self, n: &str) -> Option<String> {
+                self.0.env(n)
+            }
+            fn run(&self, a: &[String]) -> Result<String, TokenError> {
+                self.0.run(a)
+            }
+        }
+        let config = config(
+            "[accounts.lab]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n",
+        );
+        let store = Counting(Memory::default(), Default::default());
+        let secret = bridgewatch_core::token::Secret::new("tok-FIXTURE");
+        token::set_own_token("lab", "https://gitlab.example.com", &secret, &store.0).unwrap();
+        let t = Arc::new(ScriptTransport::new());
+        t.reply(
+            "/personal_access_tokens/self",
+            200,
+            r#"{"id":9,"name":"bw","scopes":["read_api"],"expires_at":null,"active":true}"#,
+        );
+        let transport = t.clone();
+        let transport_for = move |_: &Account| Ok(transport.clone() as Arc<dyn Transport>);
+        let once = ReadOnce::new(&store);
+        let expiries = own_expiries(&config, None, &once, &transport_for).await;
+        let mut out = Vec::new();
+        let code = status(&config, None, &once, &BUILTIN, &expiries, 0, &mut out).unwrap();
+        assert_eq!(code, exit::OK);
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .contains("it does not expire")
+        );
+        assert_eq!(
+            store.1.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one keyring read for the whole run"
+        );
+    }
+
+    /// A sign-in inside 72 h of its end says to sign in again.
+    #[test]
+    fn status_says_to_sign_in_again_before_a_sign_in_ends() {
+        let store = Memory::default();
+        let mut set = issued_by("https://gitlab.example.com", "self-app");
+        set.refresh_expires_at = Some(10_000 + 20 * 3600);
+        oauth::store::save("gl", &set, &store).unwrap();
+        let mut out = Vec::new();
+        status(
+            &self_managed(),
+            None,
+            &store,
+            &BUILTIN,
+            &Expiries::new(),
+            10_000,
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("the sign-in ends in 20h 0m: sign in again before then (bridgewatch auth login --account gl)"),
             "{text}"
         );
     }
@@ -587,6 +1450,8 @@ mod tests {
             &github(),
             Some("pat"),
             &Memory::default(),
+            &BUILTIN,
+            &Expiries::new(),
             0,
             &mut Vec::new(),
         )

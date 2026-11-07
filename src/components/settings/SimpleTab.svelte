@@ -4,14 +4,17 @@
   import type { Edit } from "../../lib/types";
   import Field from "./Field.svelte";
   import KeyValueField from "./KeyValueField.svelte";
+  import Section from "./Section.svelte";
 
   interface Props {
     tab: Tab;
+    /** The group's title in its pane. */
+    title: string;
     config: unknown;
     onedit: (edits: Edit[]) => void | Promise<void>;
   }
 
-  let { tab, config, onedit }: Props = $props();
+  let { tab, title, config, onedit }: Props = $props();
 
   // Every non-wildcard key on the tab, straight from the registry. Adding a
   // key to the schema and the registry makes it appear here with no component
@@ -26,17 +29,19 @@
   }
 </script>
 
-{#each fields as entry (entry.path)}
-  <Field {entry} path={entry.path} value={getAt(config, entry.path)} {onedit} />
-{/each}
+<Section {title}>
+  {#each fields as entry (entry.path)}
+    <Field {entry} path={entry.path} value={getAt(config, entry.path)} {onedit} />
+  {/each}
 
-{#each maps as entry (entry.path)}
-  {@const table = entry.path.slice(0, -2)}
-  <KeyValueField
-    {entry}
-    path={table}
-    rows={rowsFor(table)}
-    keyPlaceholder="state"
-    {onedit}
-  />
-{/each}
+  {#each maps as entry (entry.path)}
+    {@const table = entry.path.slice(0, -2)}
+    <KeyValueField
+      {entry}
+      path={table}
+      rows={rowsFor(table)}
+      keyPlaceholder="state"
+      {onedit}
+    />
+  {/each}
+</Section>

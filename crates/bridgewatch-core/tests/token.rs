@@ -11,12 +11,27 @@ use std::sync::Mutex;
 use bridgewatch_core::config::TokenSource;
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider, TokenError, TokenProvider};
 
+/// `token::resolve` for an account whose only setting is `source`.
+fn resolve(
+    source: &TokenSource,
+    name: &str,
+    provider: &dyn TokenProvider,
+) -> Result<Secret, TokenError> {
+    let account = bridgewatch_core::config::Account {
+        token: source.clone(),
+        ..Default::default()
+    };
+    token::resolve(name, &account, provider)
+}
+
 #[derive(Default)]
 struct Fake {
     keyring: Mutex<BTreeMap<(String, String), String>>,
     env: BTreeMap<String, String>,
     commands: Mutex<BTreeMap<String, Result<String, String>>>,
     calls: Mutex<Vec<String>>,
+    /// Every `keyring_set` fails, as a locked or read-only store would.
+    refuse_writes: bool,
 }
 
 impl Fake {
@@ -64,6 +79,12 @@ impl TokenProvider for Fake {
             .lock()
             .unwrap()
             .push(format!("keyring_set {service}|{user}"));
+        if self.refuse_writes {
+            return Err(TokenError::Store {
+                service: service.into(),
+                message: "the store is read-only".into(),
+            });
+        }
         self.keyring
             .lock()
             .unwrap()
@@ -111,7 +132,7 @@ fn a_keyring_source_allows_an_empty_user() {
         user: String::new(),
     };
 
-    let secret = token::resolve(&source, "gitlab", &fake).expect("resolves");
+    let secret = resolve(&source, "gitlab", &fake).expect("resolves");
     assert_eq!(secret.expose(), "glpat-from-glab");
     assert_eq!(fake.calls(), ["keyring_get glab:gitlab.com:token|"]);
 }
@@ -125,7 +146,7 @@ fn a_missing_keyring_entry_names_the_address() {
         service: "glab:gitlab.example:token".into(),
         user: "sean".into(),
     };
-    let err = token::resolve(&source, "gitlab", &fake).unwrap_err();
+    let err = resolve(&source, "gitlab", &fake).unwrap_err();
     let message = err.to_string();
     assert!(message.contains("glab:gitlab.example:token"), "{message}");
     assert!(message.contains("sean"), "{message}");
@@ -138,20 +159,20 @@ fn an_env_source_reads_the_named_variable() {
     let source = TokenSource::Env("BRIDGEWATCH_TOKEN_GITLAB".into());
 
     assert_eq!(
-        token::resolve(&source, "gitlab", &fake).unwrap().expose(),
+        resolve(&source, "gitlab", &fake).unwrap().expose(),
         "glpat-env",
         "surrounding whitespace is trimmed, because a heredoc adds a newline"
     );
 
     let missing = TokenSource::Env("NOT_SET".into());
     assert!(matches!(
-        token::resolve(&missing, "gitlab", &fake),
+        resolve(&missing, "gitlab", &fake),
         Err(TokenError::MissingEnv(_))
     ));
 
     let empty = Fake::default().with_env("EMPTY", "");
     assert!(matches!(
-        token::resolve(&TokenSource::Env("EMPTY".into()), "gitlab", &empty),
+        resolve(&TokenSource::Env("EMPTY".into()), "gitlab", &empty),
         Err(TokenError::MissingEnv(_)),
         // An empty variable is not a token; treating it as one produces a 401
         // that reads like a scope problem.
@@ -167,12 +188,12 @@ fn a_command_source_trims_stdout_and_fails_on_a_bad_exit() {
 
     let source = TokenSource::Command(vec!["pass".into(), "gitlab/pat".into()]);
     assert_eq!(
-        token::resolve(&source, "gitlab", &fake).unwrap().expose(),
+        resolve(&source, "gitlab", &fake).unwrap().expose(),
         "glpat-from-pass"
     );
 
     let bad = TokenSource::Command(vec!["pass".into(), "missing".into()]);
-    let err = token::resolve(&bad, "gitlab", &fake).unwrap_err();
+    let err = resolve(&bad, "gitlab", &fake).unwrap_err();
     assert!(err.to_string().contains("no such entry"), "{err}");
 }
 
@@ -180,9 +201,15 @@ fn a_command_source_trims_stdout_and_fails_on_a_bad_exit() {
 #[test]
 fn the_own_source_addresses_bridgewatchs_own_entry() {
     let fake = Fake::default();
-    token::set_own_token("gitlab", &Secret::new("glpat-own"), &fake).expect("stores");
+    token::set_own_token(
+        "gitlab",
+        "https://gitlab.com",
+        &Secret::new("glpat-own"),
+        &fake,
+    )
+    .expect("stores");
 
-    let secret = token::resolve(&TokenSource::Own(true), "gitlab", &fake).expect("reads back");
+    let secret = resolve(&TokenSource::Own(true), "gitlab", &fake).expect("reads back");
     assert_eq!(secret.expose(), "glpat-own");
     assert_eq!(
         fake.calls(),
@@ -198,7 +225,7 @@ fn the_own_source_addresses_bridgewatchs_own_entry() {
     );
 
     token::clear_own_token("gitlab", &fake).expect("clears");
-    assert!(token::resolve(&TokenSource::Own(true), "gitlab", &fake).is_err());
+    assert!(resolve(&TokenSource::Own(true), "gitlab", &fake).is_err());
 }
 
 /// `own = false` selects nothing, and says so rather than silently sending an
@@ -207,7 +234,7 @@ fn the_own_source_addresses_bridgewatchs_own_entry() {
 fn own_false_is_not_a_source() {
     let fake = Fake::default();
     assert!(matches!(
-        token::resolve(&TokenSource::Own(false), "gitlab", &fake),
+        resolve(&TokenSource::Own(false), "gitlab", &fake),
         Err(TokenError::NotConfigured(_))
     ));
 }
@@ -221,7 +248,7 @@ fn a_whitespace_only_token_is_refused() {
         user: "u".into(),
     };
     assert!(matches!(
-        token::resolve(&source, "a", &fake),
+        resolve(&source, "a", &fake),
         Err(TokenError::Empty)
     ));
 }
@@ -243,7 +270,7 @@ fn no_error_message_leaks_a_token() {
         TokenSource::Env("V".into()),
         TokenSource::Command(vec!["prog".into()]),
     ] {
-        let secret = token::resolve(&source, "a", &fake).unwrap();
+        let secret = resolve(&source, "a", &fake).unwrap();
         seen.borrow_mut().push(format!("{secret} {secret:?}"));
     }
     for rendered in seen.borrow().iter() {
@@ -261,7 +288,7 @@ fn a_token_that_cannot_be_a_header_is_refused_with_advice() {
     // A credential store entry with a non-ASCII character in it: nothing can
     // make this a header value, and there is no line to fall back to.
     let fake = Fake::default().with_env("TOK", "glpat-real\u{a0}token");
-    let err = token::resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake)
+    let err = resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake)
         .expect_err("must not reach reqwest");
     let message = err.to_string();
     assert!(matches!(err, TokenError::Malformed { .. }), "{err:?}");
@@ -294,13 +321,13 @@ fn a_command_source_reads_the_first_line_and_ignores_the_rest() {
         "token".into(),
     ]);
     assert_eq!(
-        token::resolve(&source, "gitlab", &fake).unwrap().expose(),
+        resolve(&source, "gitlab", &fake).unwrap().expose(),
         "glpat-real-token"
     );
 
     let pass = TokenSource::Command(vec!["pass".into(), "gitlab/pat".into()]);
     assert_eq!(
-        token::resolve(&pass, "gitlab", &fake).unwrap().expose(),
+        resolve(&pass, "gitlab", &fake).unwrap().expose(),
         "glpat-padded",
         "the line is trimmed, so a padded field is still a token"
     );
@@ -308,7 +335,7 @@ fn a_command_source_reads_the_first_line_and_ignores_the_rest() {
     // An empty first line is still nothing, and says so rather than sending "".
     let empty = TokenSource::Command(vec!["prints".into(), "nothing".into()]);
     assert!(matches!(
-        token::resolve(&empty, "gitlab", &fake),
+        resolve(&empty, "gitlab", &fake),
         Err(TokenError::Empty)
     ));
 }
@@ -369,7 +396,7 @@ fn a_chatty_token_command_is_bounded_but_still_works() {
         .expect("it exits, so it succeeds");
     assert!(out.len() <= 4096, "stdout is capped: {} bytes", out.len());
     assert_eq!(
-        token::resolve(
+        resolve(
             &TokenSource::Command(argv.clone()),
             "gitlab",
             &bridgewatch_core::token::SystemTokenProvider
@@ -535,13 +562,13 @@ fn resolve_unwraps_an_envelope_from_any_source() {
         "-w".into(),
     ]);
     assert_eq!(
-        token::resolve(&source, "gitlab", &fake).unwrap().expose(),
+        resolve(&source, "gitlab", &fake).unwrap().expose(),
         "glpat-abcdefghijklmnop",
         "and NOT the 102-character enveloped string, which is a 401"
     );
 
     assert_eq!(
-        token::resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake)
+        resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake)
             .unwrap()
             .expose(),
         "glpat-abcdefghijklmnop"
@@ -553,10 +580,338 @@ fn resolve_unwraps_an_envelope_from_any_source() {
 #[test]
 fn resolve_refuses_a_malformed_envelope() {
     let fake = Fake::default().with_env("TOK", "go-keyring-base64:!!!nope!!!");
-    let err = token::resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake).unwrap_err();
+    let err = resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake).unwrap_err();
     assert!(matches!(err, TokenError::Envelope { .. }), "{err:?}");
     assert!(
         !err.to_string().contains("nope"),
         "no payload in the message: {err}"
     );
+}
+
+// --- an own token stays with its server --------------------------------------
+
+/// An account named `gl` on `base_url`, reading its own entry.
+fn own_on(base_url: &str) -> bridgewatch_core::config::Account {
+    bridgewatch_core::config::Account {
+        base_url: base_url.into(),
+        token: TokenSource::Own(true),
+        ..Default::default()
+    }
+}
+
+/// What the store holds under `bridgewatch:gl`.
+fn stored(fake: &Fake) -> Option<String> {
+    fake.keyring
+        .lock()
+        .unwrap()
+        .get(&("bridgewatch:gl".to_string(), "token".to_string()))
+        .cloned()
+}
+
+/// A saved token is stored with the origin it was saved for, and read back
+/// for that origin.
+#[test]
+fn an_own_token_is_stored_bound_to_its_server_and_read_back_there() {
+    let fake = Fake::default();
+    token::set_own_token(
+        "gl",
+        "https://gitlab.example.com",
+        &Secret::new("glpat-A"),
+        &fake,
+    )
+    .expect("stores");
+    let raw = stored(&fake).expect("written");
+    assert!(raw.starts_with(token::BOUND_V1), "{raw:?}");
+    assert!(
+        raw.ends_with(r#"{"version":1,"token":"glpat-A","origin":"https://gitlab.example.com"}"#),
+        "{raw:?}"
+    );
+
+    let secret = token::resolve("gl", &own_on("https://gitlab.example.com"), &fake).unwrap();
+    assert_eq!(secret.expose(), "glpat-A");
+    assert_eq!(
+        token::own_token_status("gl", &own_on("https://gitlab.example.com"), &fake).unwrap(),
+        token::OwnTokenStatus::Bound {
+            origin: "https://gitlab.example.com".into()
+        }
+    );
+}
+
+/// ⛔ The bug: a token saved for A, and the account's `base_url` since moved
+/// to B. It is refused before any request: the client cannot even be built,
+/// and the transport has seen nothing.
+#[test]
+fn an_own_token_saved_for_another_server_is_refused_and_nothing_is_sent() {
+    let fake = std::sync::Arc::new(Fake::default());
+    token::set_own_token(
+        "gl",
+        "https://gitlab.com",
+        &Secret::new("glpat-A"),
+        fake.as_ref(),
+    )
+    .unwrap();
+    let moved = own_on("https://gitlab.example.com");
+
+    let err = token::resolve("gl", &moved, fake.as_ref()).unwrap_err();
+    assert!(matches!(err, TokenError::BoundElsewhere { .. }), "{err:?}");
+    assert_eq!(
+        err.to_string(),
+        "the stored token of account \"gl\" was saved for https://gitlab.com, and the account \
+         now points at https://gitlab.example.com, so it is not sent. Save a token for \
+         https://gitlab.example.com in Settings, or put base_url back"
+    );
+    assert!(!err.to_string().contains("glpat-A"));
+
+    let transport = std::sync::Arc::new(bridgewatch_core::client::ScriptTransport::new());
+    let built = bridgewatch_core::poll::client_for_account_on(
+        "gl",
+        &moved,
+        None,
+        fake.clone(),
+        transport.clone(),
+        bridgewatch_core::client::RequestRing::new(4),
+    );
+    assert!(
+        matches!(
+            built,
+            Err(bridgewatch_core::poll::PollerError::Token(
+                _,
+                TokenError::BoundElsewhere { .. }
+            ))
+        ),
+        "the client is not built"
+    );
+    assert!(transport.requests().is_empty(), "nothing was sent");
+    assert_eq!(
+        token::own_token_status("gl", &moved, fake.as_ref()).unwrap(),
+        token::OwnTokenStatus::Mismatch {
+            stored: "https://gitlab.com".into(),
+            expected: Some("https://gitlab.example.com".into()),
+        }
+    );
+    // And the entry is left exactly as it was: a refusal rewrites nothing.
+    assert!(
+        !fake
+            .calls()
+            .iter()
+            .skip(1)
+            .any(|c| c.starts_with("keyring_set"))
+    );
+}
+
+/// A 1.x value (bare) is bound to the account's origin at that moment, in
+/// the order read, write, then send; from then on it is a bound entry like
+/// any other, and a later move is refused.
+#[test]
+fn a_1x_value_is_bound_on_first_use_then_used() {
+    let fake = Fake::default().with_keyring("bridgewatch:gl", "token", "glpat-legacy\n");
+    let account = own_on("https://gitlab.example.com");
+    assert_eq!(
+        token::own_token_status("gl", &account, &fake).unwrap(),
+        token::OwnTokenStatus::Legacy
+    );
+    assert_eq!(
+        fake.calls(),
+        ["keyring_get bridgewatch:gl|token"],
+        "a status binds nothing"
+    );
+
+    let secret = token::resolve("gl", &account, &fake).expect("binds and resolves");
+    assert_eq!(secret.expose(), "glpat-legacy");
+    assert_eq!(
+        fake.calls()[1..],
+        [
+            "keyring_get bridgewatch:gl|token",
+            "keyring_set bridgewatch:gl|token"
+        ],
+        "read, then the bound form written, before the token is handed out"
+    );
+    let raw = stored(&fake).unwrap();
+    assert!(
+        raw.starts_with(token::BOUND_V1)
+            && raw.contains(r#""origin":"https://gitlab.example.com""#),
+        "{raw:?}"
+    );
+
+    // Bound now: read again without another write.
+    assert_eq!(
+        token::resolve("gl", &account, &fake).unwrap().expose(),
+        "glpat-legacy"
+    );
+    assert_eq!(fake.calls().len(), 4, "{:?}", fake.calls());
+
+    // And a move after the bind is refused like any other.
+    let err = token::resolve("gl", &own_on("https://gitlab.com"), &fake).unwrap_err();
+    assert!(matches!(err, TokenError::BoundElsewhere { .. }), "{err:?}");
+}
+
+/// ⛔ A 1.x value whose bind cannot be written is not used: nothing is sent.
+#[test]
+fn a_1x_value_whose_bind_fails_is_not_sent() {
+    let fake = std::sync::Arc::new(Fake {
+        refuse_writes: true,
+        ..Fake::default().with_keyring("bridgewatch:gl", "token", "glpat-legacy")
+    });
+    let account = own_on("https://gitlab.example.com");
+    let err = token::resolve("gl", &account, fake.as_ref()).unwrap_err();
+    assert!(matches!(err, TokenError::Store { .. }), "{err:?}");
+    assert!(!err.to_string().contains("glpat-legacy"), "{err}");
+
+    let transport = std::sync::Arc::new(bridgewatch_core::client::ScriptTransport::new());
+    let built = bridgewatch_core::poll::client_for_account_on(
+        "gl",
+        &account,
+        None,
+        fake.clone(),
+        transport.clone(),
+        bridgewatch_core::client::RequestRing::new(4),
+    );
+    assert!(built.is_err(), "no client for an unbound value");
+    assert!(transport.requests().is_empty(), "nothing was sent");
+    assert_eq!(
+        stored(&fake).as_deref(),
+        Some("glpat-legacy"),
+        "and the entry is untouched"
+    );
+}
+
+/// A 1.x value on an account whose base_url has no origin has nothing to be
+/// bound to, and is not sent.
+#[test]
+fn a_1x_value_on_a_base_url_with_no_origin_is_not_bound_or_sent() {
+    let fake = Fake::default().with_keyring("bridgewatch:gl", "token", "glpat-legacy");
+    let err = token::resolve("gl", &own_on("gitlab.example.com"), &fake).unwrap_err();
+    assert!(matches!(err, TokenError::Store { .. }), "{err:?}");
+    assert!(
+        !fake.calls().iter().any(|c| c.starts_with("keyring_set")),
+        "{:?}",
+        fake.calls()
+    );
+    // Nor is a token SAVED for such an address.
+    assert!(token::set_own_token("gl", "ftp://x", &Secret::new("glpat-B"), &fake).is_err());
+    assert_eq!(stored(&fake).as_deref(), Some("glpat-legacy"));
+}
+
+/// ⛔ A bound entry whose stored origin is not an origin matches nothing, and
+/// is never echoed: an edit could have put a credential in it.
+#[test]
+fn a_bound_entry_with_no_usable_origin_matches_nothing() {
+    let doc = format!(
+        "{}{}",
+        token::BOUND_V1,
+        r#"{"version":1,"token":"glpat-A","origin":"https://me:hunter2@gitlab.com"}"#
+    );
+    let fake = Fake::default().with_keyring("bridgewatch:gl", "token", &doc);
+    let err = token::resolve("gl", &own_on("https://gitlab.com"), &fake).unwrap_err();
+    assert!(matches!(err, TokenError::BoundElsewhere { .. }), "{err:?}");
+    assert!(!err.to_string().contains("hunter2"), "{err}");
+
+    // Nor does an account whose own base_url has none.
+    let fake = Fake::default();
+    token::set_own_token("gl", "https://gitlab.com", &Secret::new("glpat-A"), &fake).unwrap();
+    let err = token::resolve("gl", &own_on("not a url"), &fake).unwrap_err();
+    assert!(
+        matches!(err, TokenError::BoundElsewhere { expected: None, .. }),
+        "{err:?}"
+    );
+}
+
+/// The origin is compared as the sign-in compares it: case, the default port
+/// and a trailing slash or path make no difference; scheme and port do.
+#[test]
+fn an_own_tokens_origin_is_normalised_like_a_sign_ins() {
+    let fake = Fake::default();
+    token::set_own_token(
+        "gl",
+        "https://GitLab.com:443/",
+        &Secret::new("glpat-A"),
+        &fake,
+    )
+    .unwrap();
+    assert!(
+        stored(&fake)
+            .unwrap()
+            .contains(r#""origin":"https://gitlab.com""#)
+    );
+    for same in [
+        "https://gitlab.com",
+        "https://gitlab.com/",
+        "HTTPS://gitlab.COM:443",
+    ] {
+        assert_eq!(
+            token::resolve("gl", &own_on(same), &fake).unwrap().expose(),
+            "glpat-A",
+            "{same}"
+        );
+    }
+    for other in ["http://gitlab.com", "https://gitlab.com:8443"] {
+        assert!(
+            matches!(
+                token::resolve("gl", &own_on(other), &fake),
+                Err(TokenError::BoundElsewhere { .. })
+            ),
+            "{other}"
+        );
+    }
+}
+
+/// ⛔ What 1.3 does with a 2.0 entry. The encoding carries a control
+/// character (the tab after the marker) that `decode_keyring_envelope` keeps,
+/// so 1.3's own path (decode, trim, refuse a control character) fails it
+/// locally as Malformed. Proven here on the same code: a source that hands the
+/// raw entry over, as 1.3's own arm did, refuses it before any request.
+#[test]
+fn a_bound_entry_read_as_a_bare_token_is_refused_as_malformed() {
+    let encoded = token::encode_bound(&Secret::new("glpat-A"), "https://gitlab.com").unwrap();
+    assert!(encoded.contains('\t'), "{encoded:?}");
+    assert_eq!(
+        token::decode_keyring_envelope(&encoded).unwrap(),
+        encoded,
+        "the envelope decoder leaves it whole, tab and all"
+    );
+    let fake = Fake::default().with_env("TOK", &encoded);
+    let err = resolve(&TokenSource::Env("TOK".into()), "gl", &fake).unwrap_err();
+    assert!(
+        matches!(&err, TokenError::Malformed { character, .. } if character == "'\\t'"),
+        "{err:?}"
+    );
+}
+
+/// A value that claims to be bound but is not a readable v1 document is an
+/// error, never a 1.x value to bind: it is neither sent nor rewritten.
+#[test]
+fn an_unreadable_or_newer_bound_entry_is_refused_not_rebound() {
+    for raw in [
+        "bw-bound-v2:\t{\"version\":2}".to_string(),
+        format!("{}not json", token::BOUND_V1),
+        format!(
+            "{}{}",
+            token::BOUND_V1,
+            r#"{"version":7,"token":"t","origin":"https://gitlab.com"}"#
+        ),
+    ] {
+        let fake = Fake::default().with_keyring("bridgewatch:gl", "token", &raw);
+        let err = token::resolve("gl", &own_on("https://gitlab.com"), &fake).unwrap_err();
+        assert!(matches!(err, TokenError::Store { .. }), "{raw:?}: {err:?}");
+        assert!(err.to_string().contains("not readable"), "{err}");
+        assert!(
+            !fake.calls().iter().any(|c| c.starts_with("keyring_set")),
+            "{raw:?}"
+        );
+        assert!(token::own_token_status("gl", &own_on("https://gitlab.com"), &fake).is_err());
+    }
+}
+
+/// Nothing stored is `None` to a status, and `NoEntry` to a resolve.
+#[test]
+fn an_account_with_no_own_token_says_none() {
+    let fake = Fake::default();
+    assert_eq!(
+        token::own_token_status("gl", &own_on("https://gitlab.com"), &fake).unwrap(),
+        token::OwnTokenStatus::None
+    );
+    assert!(matches!(
+        token::resolve("gl", &own_on("https://gitlab.com"), &fake),
+        Err(TokenError::NoEntry { .. })
+    ));
 }

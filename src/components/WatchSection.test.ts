@@ -191,3 +191,42 @@ describe("PipelineRow, the deploy ETA", () => {
     expect(host.querySelector(".row .eta")).toBe(null);
   });
 });
+
+describe("WatchSection, the layout", () => {
+  function primary(rows: PipelineView[], icon_state: WatchView["icon_state"] = "deployed"): WatchView {
+    return { id: "main-push", role: "primary", icon_state, rows, error: null };
+  }
+
+  it("is set apart by 16px of space, with no tinted band and no rule", () => {
+    render(primary([ROW]));
+    const section = host.querySelector<HTMLElement>("section.watch")!;
+    expect(section.classList).toContain("pt-4");
+    expect(section.className).not.toMatch(/border-b/);
+    expect(section.querySelector("header")!.className).not.toMatch(/bg-muted/);
+  });
+
+  it("says a row's state when the watch header does not already say it", () => {
+    // The second row failed under a deployed watch: its state is news.
+    const failed = { ...ROW, id: ROW.id - 1, state: "failed" as const, deploy: "absent" };
+    render(primary([{ ...ROW, state: "deployed" as const }, failed]));
+    const [first, second] = [...host.querySelectorAll(".row")];
+    expect(first.querySelector(".state")?.classList.contains("sr-only")).toBe(true);
+    expect(second.querySelector(".state")?.classList.contains("sr-only")).toBe(false);
+    expect(second.querySelector(".state")?.textContent?.trim()).toBe("failed");
+  });
+
+  it("shows the deploy pill when it adds something the state word does not", () => {
+    render(primary([{ ...ROW, state: "running" as const, deploy: "in_progress" }], "running"));
+    expect(host.querySelector(".row .deploy")?.textContent?.trim()).toBe("deploying");
+  });
+
+  it("truncates a long watch id instead of pushing the state off the line", () => {
+    const long = "a-watch-whose-name-is-much-longer-than-the-popover-is-wide";
+    render({ ...primary([ROW]), id: long });
+    const id = host.querySelector<HTMLElement>("header .id")!;
+    expect(id.classList).toContain("truncate");
+    expect(id.getAttribute("title")).toBe(long);
+    expect(host.querySelector("header [data-headline]")!.classList).toContain("shrink-0");
+  });
+});
+

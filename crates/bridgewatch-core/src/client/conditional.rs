@@ -247,6 +247,14 @@ fn key_of(request: &HttpRequest) -> String {
 
 #[async_trait::async_trait]
 impl Transport for ConditionalTransport {
+    fn sign_in(&self) -> Option<crate::health::SignInNote> {
+        self.inner.sign_in()
+    }
+
+    async fn signed_in_login(&self) -> Option<String> {
+        self.inner.signed_in_login().await
+    }
+
     async fn execute(&self, mut request: HttpRequest) -> Result<HttpResponse, ClientError> {
         // Only a GET is safe to replay, and it is the only method bridgewatch
         // issues; anything else passes through untouched.
@@ -307,6 +315,8 @@ impl Transport for ConditionalTransport {
                         .oauth_scopes
                         .clone()
                         .or_else(|| stored.oauth_scopes.clone()),
+                    // The 304's own: an absent one leaves the expiry already seen.
+                    token_expiration: response.token_expiration.clone(),
                     location: None,
                     truncated: false,
                 };

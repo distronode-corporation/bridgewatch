@@ -8,6 +8,7 @@
 
 mod auth;
 mod render;
+mod wait;
 
 use std::future::Future;
 use std::io::IsTerminal;
@@ -18,14 +19,13 @@ use anyhow::{Context, Result};
 use bridgewatch_core::actions::{self, JobAction, JobTarget};
 use bridgewatch_core::client::fixture::ScrubMode;
 use bridgewatch_core::client::{
-    CiClient, ClientError, FixtureTransport, GitLabClient, RequestRing, ReqwestTransport,
-    client_for,
+    CiClient, ClientError, FixtureTransport, RequestRing, ReqwestTransport, Transport, client_for,
 };
 use bridgewatch_core::config::{self, Config, ProjectRef};
 use bridgewatch_core::eta::EtaHistory;
 use bridgewatch_core::notify::NotifyLedger;
 use bridgewatch_core::poll::Poller;
-use bridgewatch_core::token::{self, Secret, SystemTokenProvider};
+use bridgewatch_core::token::{Secret, SystemTokenProvider, TokenProvider};
 use bridgewatch_core::verdict::{IconState, Snapshot};
 use clap::{Args, Parser, Subcommand};
 
@@ -38,7 +38,7 @@ use clap::{Args, Parser, Subcommand};
 /// tell a red pipeline from a typo in its own command line. The error codes
 /// are the BSD `sysexits.h` ones, which nothing here uses for a verdict.
 mod exit {
-    /// `check`/`watch`: deployed, or green with nothing to deploy. Every other
+    /// `check`/`watch`/`wait`: deployed, or green with nothing to deploy. Every other
     /// command: it did what it was asked.
     pub const OK: i32 = 0;
     /// `check`/`watch`: something failed. `fixture scrub --check`: a fixture
@@ -50,7 +50,9 @@ mod exit {
     /// `check`/`watch`: still in flight, parked at a gate, or cancelled.
     pub const PENDING: i32 = 3;
     /// `check`/`watch`: no verdict. Nothing matched, or a request failed with
-    /// nothing cached to fall back on; the errors are printed.
+    /// nothing cached to fall back on; the errors are printed. `wait`: the
+    /// commit's pipeline was skipped, it has none after the grace, or a
+    /// request was refused for good (401, 403, 404).
     pub const UNKNOWN: i32 = 4;
     /// The command line is wrong: clap's own errors, a `--watch` or
     /// `--account` naming nothing configured, or a `fixture scrub` directory
@@ -63,19 +65,23 @@ mod exit {
     /// The configuration file is missing, is not TOML, or does not describe a
     /// workable setup. `EX_CONFIG`.
     pub const CONFIG: i32 = 78;
+    /// `wait --timeout` ran out before the commit's pipeline had a verdict.
+    /// The number `timeout(1)` uses, so a script can treat both alike.
+    pub const TIMEOUT: i32 = 124;
 
     /// The table printed at the foot of `--help`, and the one the README
     /// quotes. A test holds it to the constants above.
     pub const HELP: &str = "\
 Exit codes:
-  0   check/watch: deployed or succeeded_no_deploy; any other command: success
-  1   check/watch: failed; fixture scrub --check: a fixture would change; retry/play: answered no
-  2   check/watch: deployed_with_failure
-  3   check/watch: running, parked_gate or canceled
-  4   check/watch: unknown (nothing matched, or a request failed; errors on stderr)
+  0   check/watch/wait: deployed or succeeded_no_deploy; any other command: success
+  1   check/watch/wait: failed; fixture scrub --check: a fixture would change; retry/play: answered no
+  2   check/watch/wait: deployed_with_failure
+  3   check/watch: running, parked_gate or canceled; wait: parked_gate or canceled, or interrupted
+  4   check/watch: unknown (nothing matched, or a request failed; errors on stderr); wait: skipped, no pipeline after --no-pipeline-grace, or a refused request (401, 403, 404)
   64  usage error: bad arguments, a --watch, --account or job URL that names nothing configured, a fixture scrub directory with no recordings, or retry/play with no terminal and no --yes
   70  any other error (token, fixture, recording, I/O, or a log or job request that failed)
-  78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true";
+  78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true
+  124 wait: --timeout ran out before the commit's pipeline had a verdict";
 }
 
 /// A failure, with the exit code it maps to.
@@ -153,6 +159,9 @@ enum Command {
     },
     /// Poll continuously, printing one line per change.
     Watch(WatchArgs),
+    /// Wait for one commit's pipeline on a watch to finish, then exit with its
+    /// verdict code. For scripts and coding agents. Read-only.
+    Wait(wait::WaitArgs),
     /// Sign in with GitHub or GitLab, sign out, or show who is signed in, for
     /// an account whose token source is token = { oauth = .. }.
     Auth {
@@ -176,8 +185,9 @@ enum Command {
     ///
     /// Non-interactive and offline: nothing is fetched, no token is read, and
     /// nothing is written. When the config file already exists it is EDITED
-    /// (comments and other watches kept) and the result printed; redirect it
-    /// yourself once it reads right.
+    /// (comments and other watches kept) and the result printed. Write it to a
+    /// NEW file, check it, then move it over the config: never redirect onto
+    /// the config itself, which the shell empties before init reads it.
     Init(Box<InitArgs>),
 }
 
@@ -248,6 +258,21 @@ struct InitArgs {
     /// Poll interval while a pipeline is live, in seconds.
     #[arg(long, value_name = "SECS")]
     live_secs: Option<u64>,
+    /// Sign in with GitHub or GitLab: token = { oauth = true }. With no token
+    /// flag, a new account on github.com or gitlab.com gets this, and an
+    /// account the file already has keeps its source. Sign in with
+    /// `bridgewatch auth login --account <name>` once the file is saved.
+    #[arg(long, group = "token")]
+    oauth: bool,
+    /// Sign in through an OAuth application of your own, as GitHub
+    /// Enterprise Server and self-managed GitLab need: token = { oauth = {
+    /// client_id = "..." } }. Implies --oauth.
+    #[arg(
+        long,
+        value_name = "ID",
+        conflicts_with_all = ["glab", "gh", "token_env", "token_keyring", "token_command"]
+    )]
+    oauth_client_id: Option<String>,
     /// Use glab's keyring item for this instance (glab:<host>:token).
     #[arg(long, group = "token")]
     glab: bool,
@@ -417,6 +442,7 @@ async fn run(cli: Cli) -> Outcome {
         Command::Config { action } => config_command(&config, action),
         Command::Check(args) => check(&config, args).await,
         Command::Watch(args) => watch(&config, args).await,
+        Command::Wait(args) => wait::run(&config, args).await,
         Command::Fixture { action } => fixture(&config, action).await,
         Command::Init(args) => init(&config, *args),
         Command::Auth { action } => auth_command(&config, action).await,
@@ -562,7 +588,7 @@ async fn job_action(config_args: &ConfigArgs, args: JobActionArgs, action: JobAc
 
 /// `bridgewatch init`: the wizard's `build_config`, answered from flags.
 fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
-    use bridgewatch_core::config::TokenSource;
+    use bridgewatch_core::config::{OAuthSource, TokenSource};
     use bridgewatch_core::wizard::{self, WizardAnswers, WizardError};
 
     let usage = |e: WizardError| Failure::new(exit::USAGE, e);
@@ -585,6 +611,74 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
             anyhow::anyhow!("--gh is github's keyring item; use --glab for a gitlab account"),
         ));
     }
+    let path = config::resolve_path(config_args.config.as_deref());
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(raw) => Some(raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(Failure::new(
+                exit::CONFIG,
+                anyhow::anyhow!("{}: {e}", path.display()),
+            ));
+        }
+    };
+    let named = args.account.is_some();
+    let account = args
+        .account
+        .unwrap_or_else(|| wizard::suggest_account_name(provider, &base_url));
+    // The account the file already has under that name, read leniently and
+    // without validation: one unknown key elsewhere in the file must not make
+    // it look absent. A file that does not parse at all is refused by
+    // `build_config` with its own message.
+    let current = existing
+        .as_deref()
+        .and_then(|raw| config::parse_lenient(raw, &path).ok())
+        .and_then(|(c, _)| c.accounts.get(&account).cloned());
+    let same_instance = current
+        .as_ref()
+        .is_some_and(|a| same_instance(a, provider, &base_url));
+    // ⛔ A derived name is the host's first label, so gitlab.com and
+    // gitlab.acme.com are both "gitlab". Repointing the existing account to
+    // another host silently is how one instance's token reaches the other;
+    // only an explicit --account may do it.
+    if let Some(a) = current.as_ref().filter(|_| !same_instance && !named) {
+        return Err(Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!(
+                "account {account:?} in {} is on {} ({}), and this init is for {} ({}). Pass \
+                 --account <new-name> to add a new account for {}, or edit the file to move \
+                 {account:?}",
+                path.display(),
+                a.base_url,
+                a.provider.as_str(),
+                base_url,
+                provider.as_str(),
+                base_url,
+            ),
+        ));
+    }
+    // An explicit --account moving an existing account: where it was.
+    let repointed_from = current
+        .as_ref()
+        .filter(|_| !same_instance)
+        .map(|a| a.base_url.clone());
+    // The source already in the file, on this same instance only: a token
+    // source never carries across hosts.
+    let kept_source = current
+        .as_ref()
+        .filter(|_| same_instance)
+        .map(|a| a.token.clone());
+    let any_flag = args.glab
+        || args.gh
+        || args.token_env.is_some()
+        || args.token_keyring.is_some()
+        || !args.token_command.is_empty()
+        || args.oauth
+        || args.oauth_client_id.is_some();
+    // Kept, not chosen now: the file accepted it, so it is not re-checked as
+    // though it had just been typed. `--oauth` alone on an account that already
+    // signs in keeps that source too, client id and all.
+    let mut kept = false;
     let token = if args.glab || args.gh {
         let service = wizard::cli_service_for(provider, &base_url)
             .ok_or_else(|| Failure::new(exit::USAGE, anyhow::anyhow!("--base-url has no host")))?;
@@ -601,17 +695,31 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         }
     } else if !args.token_command.is_empty() {
         TokenSource::Command(args.token_command)
+    } else if let Some(client_id) = args.oauth_client_id {
+        TokenSource::Oauth(OAuthSource {
+            client_id: Some(client_id),
+        })
+    } else if let Some(source @ TokenSource::Oauth(_)) = kept_source.clone().filter(|_| args.oauth)
+    {
+        kept = true;
+        source
+    } else if args.oauth {
+        TokenSource::Oauth(OAuthSource::default())
+    } else if let Some(source) = kept_source {
+        kept = true;
+        source
     } else {
-        TokenSource::Own(true)
+        default_token_source(provider, &base_url)
     };
+    // The sign-in step is printed when this run chose a sign-in: a flag, or the
+    // default for a new account. A source kept without any flag is as it was.
+    let announce = !(kept && !any_flag);
     let watch_id = args
         .watch_id
         .unwrap_or_else(|| wizard::suggest_watch_id(&project.to_string(), &args.ref_name));
     let answers = WizardAnswers {
         provider,
-        account: args
-            .account
-            .unwrap_or_else(|| wizard::suggest_account_name(provider, &base_url)),
+        account,
         base_url,
         token,
         project: Some(project),
@@ -626,23 +734,21 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         notify: None,
         launch_at_login: None,
         live_secs: args.live_secs,
+        watches: Vec::new(),
     };
 
-    let path = config::resolve_path(config_args.config.as_deref());
-    let existing = match std::fs::read_to_string(&path) {
-        Ok(raw) => Some(raw),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            return Err(Failure::new(
-                exit::CONFIG,
-                anyhow::anyhow!("{}: {e}", path.display()),
-            ));
-        }
+    let built = if kept {
+        wizard::build_config_keeping_token(&answers, existing.as_deref())
+    } else {
+        wizard::build_config(&answers, existing.as_deref())
     };
-    match wizard::build_config(&answers, existing.as_deref()) {
+    match built {
         Ok(built) => {
             for w in &built.warnings {
                 eprintln!("warning: {}: {}", w.path, w.message);
+            }
+            if let Some(note) = repoint_note(&answers, repointed_from.as_deref()) {
+                eprintln!("{note}");
             }
             if let Some(primary) = &built.secondary_because {
                 eprintln!(
@@ -661,6 +767,11 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
                 path.display()
             );
             print!("{}", built.toml);
+            if let Some(next) =
+                next_step(&answers, &path, config_args.config.is_some()).filter(|_| announce)
+            {
+                eprintln!("{next}");
+            }
             Ok(exit::OK)
         }
         Err(e @ WizardError::Answers(_)) => {
@@ -676,6 +787,102 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
             anyhow::Error::new(e).context(format!("cannot edit {}", path.display())),
         )),
         Err(e) => Err(Failure::new(exit::USAGE, e)),
+    }
+}
+
+/// The token source `init` writes when no token flag is given: sign-in where
+/// this build has a built-in application for the host (github.com and
+/// gitlab.com), the wizard's preselection too; bridgewatch's own credential
+/// entry anywhere else, where signing in would need a client id of the user's
+/// own and so cannot be the silent default.
+fn default_token_source(provider: config::Provider, base_url: &str) -> config::TokenSource {
+    let account = config::Account::for_instance(provider, base_url);
+    let builtin = bridgewatch_core::oauth::BuiltinClients::shipped();
+    if bridgewatch_core::oauth::builtin_client_id(&account, &builtin).is_some() {
+        config::TokenSource::Oauth(config::OAuthSource::default())
+    } else {
+        config::TokenSource::Own(true)
+    }
+}
+
+/// True when an account in the file is on the instance `init` was asked
+/// for: the same provider and the same base URL, compared as the core compares
+/// instances (lowercase scheme and host, no default port, no trailing slash).
+fn same_instance(account: &config::Account, provider: config::Provider, base_url: &str) -> bool {
+    let wanted = config::Account::for_instance(provider, base_url);
+    let key = |url: &str| {
+        let url = url.trim().trim_end_matches('/');
+        let origin = bridgewatch_core::oauth::origin_of(url);
+        let rest = url
+            .split_once("://")
+            .and_then(|(_, r)| r.find('/').map(|i| r[i..].to_string()))
+            .unwrap_or_default();
+        (origin, rest)
+    };
+    account.provider == provider && key(&account.base_url) == key(&wanted.base_url)
+}
+
+/// What `init` tells the user to do after saving the file, when there is
+/// something left: an account that signs in has no sign-in stored yet, and
+/// nothing reaches the provider until it has.
+fn next_step(
+    answers: &bridgewatch_core::wizard::WizardAnswers,
+    path: &std::path::Path,
+    explicit_config: bool,
+) -> Option<String> {
+    matches!(answers.token, config::TokenSource::Oauth(_)).then(|| {
+        // ⛔ Never `>` onto the config itself: the shell empties the file
+        // before init reads it, and what is printed is then the new account
+        // alone, with every other account, watch and comment gone.
+        let config = if explicit_config {
+            format!("--config {} ", shell_word(&path.display().to_string()))
+        } else {
+            String::new()
+        };
+        format!(
+            "next: write this output to a new file, check it, and move it over {} (never \
+             redirect it onto that file: the shell empties it before init reads it); then \
+             sign in: bridgewatch {config}auth login --account {}",
+            path.display(),
+            shell_word(&answers.account)
+        )
+    })
+}
+
+/// What `init` says when `--account` moves an account whose token is its own
+/// entry to another server: that token is bound to the old one and is not
+/// sent, so the account polls nothing until a token is saved for the new one.
+fn repoint_note(
+    answers: &bridgewatch_core::wizard::WizardAnswers,
+    from: Option<&str>,
+) -> Option<String> {
+    let from = from?;
+    matches!(answers.token, config::TokenSource::Own(true)).then(|| {
+        format!(
+            "note: account {:?} moves from {} to {}. A token it stored stays with {} and is \
+             not sent to {}: save a token for the new server in the app's Settings (Accounts, \
+             Token source) before checking it",
+            answers.account,
+            from.trim_end_matches('/'),
+            answers.base_url.trim_end_matches('/'),
+            bridgewatch_core::oauth::host_of(from).unwrap_or_else(|| "the old server".into()),
+            bridgewatch_core::oauth::host_of(&answers.base_url)
+                .unwrap_or_else(|| "the new one".into()),
+        )
+    })
+}
+
+/// A word a POSIX shell reads back as itself: bare when it is only safe
+/// characters, single-quoted otherwise.
+fn shell_word(text: &str) -> String {
+    let safe = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,".contains(c));
+    if safe {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
     }
 }
 
@@ -845,13 +1052,28 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
         auth::AuthAction::Logout { account } => {
             auth::logout(&config, &account, &store, &mut std::io::stdout())
         }
-        auth::AuthAction::Status { account } => auth::status(
-            &config,
-            account.as_deref(),
-            &store,
-            now,
-            &mut std::io::stdout(),
-        ),
+        auth::AuthAction::Status { account } => {
+            // One request per bound own token, for its expiry (F3).
+            let transport_for = |a: &config::Account| {
+                ReqwestTransport::new(std::time::Duration::from_secs(a.timeout_secs))
+                    .map(|t| Arc::new(t) as Arc<dyn bridgewatch_core::client::Transport>)
+            };
+            // One read per keyring item for the whole run: each can prompt.
+            let once = auth::ReadOnce::new(&store);
+            let expiries =
+                auth::own_expiries(&config, account.as_deref(), &once, &transport_for).await;
+            // Read the clock after the lookups, which can take a while each.
+            let now = bridgewatch_core::oauth::now();
+            auth::status(
+                &config,
+                account.as_deref(),
+                &once,
+                &bridgewatch_core::oauth::BuiltinClients::shipped(),
+                &expiries,
+                now,
+                &mut std::io::stdout(),
+            )
+        }
     }
 }
 
@@ -989,7 +1211,13 @@ fn apply_selection_state(snapshot: &mut Snapshot, selected: &[String]) {
 /// from every verdict and from every error, so a script can tell "could not
 /// see" from "saw green".
 fn exit_code(snapshot: &Snapshot) -> i32 {
-    match snapshot.icon_state {
+    code_for(snapshot.icon_state)
+}
+
+/// The verdict code for one state: what `check` exits with for the tray's
+/// state, and what `wait` exits with for one pipeline's.
+fn code_for(state: IconState) -> i32 {
+    match state {
         IconState::Deployed | IconState::SucceededNoDeploy => exit::OK,
         IconState::Failed => exit::FAILED,
         IconState::DeployedWithFailure => exit::DEPLOYED_WITH_FAILURE,
@@ -1075,7 +1303,16 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
             if args.json {
                 println!("{}", serde_json::json!({ "notify": n }));
             } else {
-                println!("notify [{}] {} — {}", n.kind.as_str(), n.title, n.body);
+                // One line per event: the default body's second line (the
+                // first failing line) joins the first with a `; `.
+                let body = n
+                    .body
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                println!("notify [{}] {} — {}", n.kind.as_str(), n.title, body);
             }
         }
 
@@ -1177,17 +1414,25 @@ async fn fixture(config_args: &ConfigArgs, action: FixtureAction) -> Outcome {
             })?,
     };
 
-    let token = token::resolve(&account_def.token, &account_name, &SystemTokenProvider)
-        .with_context(|| format!("cannot resolve the token for account {account_name:?}"))?;
     let transport =
         ReqwestTransport::new(std::time::Duration::from_secs(account_def.timeout_secs))?;
-    let ring = RequestRing::new(config.log.keep_requests);
-    let client = GitLabClient::new(account_def, &token, Arc::new(transport), ring);
+    let client = recording_client(
+        &account_name,
+        account_def,
+        Arc::new(SystemTokenProvider),
+        Arc::new(transport),
+        RequestRing::new(config.log.keep_requests),
+    )?;
 
-    let recorded =
-        bridgewatch_core::client::fixture::record(&client, &project_ref, pipeline_id, &out, list)
-            .await
-            .context("recording failed")?;
+    let recorded = bridgewatch_core::client::fixture::record(
+        client.as_ref(),
+        &project_ref,
+        pipeline_id,
+        &out,
+        list,
+    )
+    .await
+    .context("recording failed")?;
 
     println!("wrote {}:", recorded.dir.display());
     for f in &recorded.files {
@@ -1201,6 +1446,30 @@ async fn fixture(config_args: &ConfigArgs, action: FixtureAction) -> Outcome {
     }
     println!("\nNow write {}/expected.json.", recorded.dir.display());
     Ok(exit::OK)
+}
+
+/// The client `fixture record` records through: the poller's, so a sign-in
+/// goes through its guarded session.
+///
+/// ⛔ It used to resolve the token and build a GitLab client by hand. For an
+/// `oauth` account that sent the stored access token to whatever `base_url`
+/// the file named now, even one the sign-in was never issued by, and sent it
+/// as `PRIVATE-TOKEN`, which GitLab refuses for an OAuth token.
+fn recording_client(
+    name: &str,
+    account: &config::Account,
+    store: Arc<dyn TokenProvider>,
+    transport: Arc<dyn Transport>,
+    ring: RequestRing,
+) -> std::result::Result<Arc<dyn CiClient>, Failure> {
+    bridgewatch_core::poll::client_for_account_on(name, account, None, store, transport, ring)
+        .map_err(|e| {
+            Failure::new(
+                exit::ERROR,
+                anyhow::Error::new(e)
+                    .context(format!("cannot resolve the token for account {name:?}")),
+            )
+        })
 }
 
 /// Re-apply the recording allow-list to fixture directories.
@@ -1277,6 +1546,108 @@ fn scrub_fixtures(dirs: &[PathBuf], check: bool) -> Outcome {
 mod tests {
     use super::{OWN_CRATES, exit, tracing_filter};
 
+    mod fixture_record {
+        use std::sync::Arc;
+
+        use bridgewatch_core::client::{
+            ClientError, HttpRequest, RequestRing, ScriptTransport, Transport,
+        };
+        use bridgewatch_core::config::{Account, OAuthSource, ProjectRef, Provider, TokenSource};
+        use bridgewatch_core::oauth::{TokenSet, store};
+        use bridgewatch_core::token::{Secret, TokenProvider};
+
+        use super::super::recording_client;
+        use crate::auth::tests::Memory;
+
+        fn account(base_url: &str) -> Account {
+            let mut account = Account::for_provider(Provider::Gitlab);
+            account.base_url = base_url.into();
+            account.token = TokenSource::Oauth(OAuthSource {
+                client_id: Some("self-app".into()),
+            });
+            account
+        }
+
+        /// What `gl` stored when it signed in to gitlab.com.
+        fn store_issued_by_gitlab_com() -> Arc<Memory> {
+            let memory = Arc::new(Memory::default());
+            let set = TokenSet {
+                access_token: Secret::new("gl-OAUTH-A"),
+                refresh_token: None,
+                expires_at: None,
+                refresh_expires_at: None,
+                scopes: vec!["read_api".into()],
+                login: Some("alice".into()),
+                client_id: "self-app".into(),
+                base_url: "https://gitlab.com".into(),
+                obtained_at: 1,
+            };
+            store::save("gl", &set, memory.as_ref()).unwrap();
+            memory
+        }
+
+        fn header(request: &HttpRequest, name: &str) -> Option<String> {
+            request
+                .headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.clone())
+        }
+
+        const PIPELINE_7: &str = r#"{"id":7,"iid":1,"project_id":1,"ref":"main","sha":"abc","status":"success","source":"push","web_url":"https://gitlab.com/a/b/-/pipelines/7","created_at":"2026-09-17T18:07:10Z","updated_at":"2026-09-17T18:15:12Z"}"#;
+
+        /// ⛔ A sign-in is recorded with as `Authorization: Bearer`. It went
+        /// as `PRIVATE-TOKEN`, which GitLab refuses for an OAuth token.
+        #[tokio::test]
+        async fn a_sign_in_is_sent_as_a_bearer_token() {
+            let t = Arc::new(ScriptTransport::new());
+            t.reply("/pipelines/7", 200, PIPELINE_7);
+            let memory: Arc<dyn TokenProvider> = store_issued_by_gitlab_com();
+            let client = recording_client(
+                "gl",
+                &account("https://gitlab.com"),
+                memory,
+                t.clone() as Arc<dyn Transport>,
+                RequestRing::new(4),
+            )
+            .unwrap_or_else(|f| panic!("{}", f.error));
+            client
+                .get_pipeline(&ProjectRef::Id(1), 7)
+                .await
+                .expect("fetches");
+            let sent = t.requests();
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            assert_eq!(
+                header(&sent[0], "authorization").as_deref(),
+                Some("Bearer gl-OAUTH-A")
+            );
+            assert_eq!(header(&sent[0], "private-token"), None);
+        }
+
+        /// ⛔ The repro: signed in to gitlab.com, then `base_url` changed.
+        /// The token went to the new host; now nothing is sent at all.
+        #[tokio::test]
+        async fn a_sign_in_issued_by_another_instance_is_not_sent() {
+            let t = Arc::new(ScriptTransport::new());
+            t.reply("/pipelines/7", 200, PIPELINE_7);
+            let memory: Arc<dyn TokenProvider> = store_issued_by_gitlab_com();
+            let client = recording_client(
+                "gl",
+                &account("https://gitlab.example.com"),
+                memory,
+                t.clone() as Arc<dyn Transport>,
+                RequestRing::new(4),
+            )
+            .unwrap_or_else(|f| panic!("{}", f.error));
+            let err = client
+                .get_pipeline(&ProjectRef::Id(1), 7)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ClientError::SignInAgain { .. }), "{err}");
+            assert!(t.requests().is_empty(), "{:?}", t.requests());
+        }
+    }
+
     /// The `--help` table is prose, so nothing ties it to the constants but
     /// this: every constant has exactly one row, and every row is a constant.
     #[test]
@@ -1301,6 +1672,7 @@ mod tests {
             exit::USAGE,
             exit::ERROR,
             exit::CONFIG,
+            exit::TIMEOUT,
         ];
         defined.sort_unstable();
         assert_eq!(documented, defined);

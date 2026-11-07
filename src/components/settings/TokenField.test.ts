@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { reactive } from "../../lib/__tests__/props.svelte";
 import type { OAuthApi, SignInStatus } from "../../lib/oauth";
+import type { OwnTokenStatus } from "../../lib/own-token";
 import type { Edit } from "../../lib/types";
 import { formatCommand, parseCommand } from "../wizard/model";
 import TokenField from "./TokenField.svelte";
@@ -491,7 +492,8 @@ describe("TokenField, sign in", () => {
       client_id: null,
     });
     expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("@octocat");
-    expect(host.textContent).toContain("Signed in as @octocat.");
+    // Said once, by the status line.
+    expect(host.textContent?.match(/Signed in as/g)).toHaveLength(1);
   });
 
   it("switches an account that used another source to the sign-in once it succeeds", async () => {
@@ -504,7 +506,8 @@ describe("TokenField, sign in", () => {
     expect(edits).toHaveLength(1);
     expect(edits[0]).toContainEqual({ op: "unset", path: "accounts.gh.token.keyring" });
     expect(edits[0]).toContainEqual({ op: "set", path: "accounts.gh.token.oauth", value: { boolean: true } });
-    expect(host.textContent).toContain("Signed in as @octocat. This account now uses the sign-in.");
+    expect(host.textContent).toContain("This account now uses the sign-in.");
+    expect(host.textContent?.match(/Signed in as/g)).toHaveLength(1);
   });
 
   it("does not rewrite the file when the account already signs in", async () => {
@@ -513,6 +516,55 @@ describe("TokenField, sign in", () => {
     oauth.status.mockResolvedValue(SIGNED_IN);
     await press('[data-action="oauth-sign-in"]');
     expect(edits).toEqual([]);
+  });
+
+  it("offers no Use this source for the sign-in the file already uses, and does again for a new client id", async () => {
+    await renderWith(fake(true), { oauth: true });
+    expect(host.querySelector("button.apply")).toBeNull();
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="OAuth client id"]')!;
+    input.value = "Iv23liMINE";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    expect(host.querySelector("button.apply")).not.toBeNull();
+  });
+
+  it("writes a newly typed client id when the sign-in through it succeeds", async () => {
+    const oauth = fake(true);
+    const edits = await renderWith(oauth, { oauth: true });
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="OAuth client id"]')!;
+    input.value = "Iv23liMINE";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    oauth.status.mockResolvedValue(SIGNED_IN);
+    await press('[data-action="oauth-sign-in"]');
+    expect(oauth.start.mock.calls[0][0]).toMatchObject({ client_id: "Iv23liMINE" });
+    expect(edits).toHaveLength(1);
+    expect(edits[0].at(-1)).toEqual({ op: "set", path: "accounts.gh.token.oauth.client_id", value: { string: "Iv23liMINE" } });
+    expect(host.textContent).toContain("This account now uses the sign-in.");
+  });
+
+  it("writes the client id the sign-in started with, whatever the box says when it finishes", async () => {
+    const oauth = fake(true);
+    let approve: (s: unknown) => void = () => {};
+    oauth.wait.mockImplementation(() => new Promise((r) => (approve = r)));
+    const edits = await renderWith(oauth, { own: true });
+    await pick("oauth");
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="OAuth client id"]')!;
+    input.value = "Iv23liSTART";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    await press('[data-action="oauth-sign-in"]');
+    expect(oauth.start.mock.calls[0][0]).toMatchObject({ client_id: "Iv23liSTART" });
+    // Edited while the code is pending.
+    input.value = "Iv23liLATER";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    oauth.status.mockResolvedValue(SIGNED_IN);
+    approve({ login: "octocat", scopes: [], expires_at: null });
+    await settle();
+    expect(edits).toHaveLength(1);
+    expect(edits[0].at(-1)).toEqual({ op: "set", path: "accounts.gh.token.oauth.client_id", value: { string: "Iv23liSTART" } });
+    expect(JSON.stringify(edits)).not.toContain("Iv23liLATER");
   });
 
   it("shows the stored sign-in, signs out, and links the app's install page", async () => {
@@ -526,6 +578,39 @@ describe("TokenField, sign in", () => {
     expect(oauth.signOut).toHaveBeenCalledWith("gh");
     expect(host.textContent).toContain("Signed out.");
     expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("Not signed in");
+  });
+
+  it("says a sign-in issued by another server is not used, rather than signed in", async () => {
+    // ⛔ The poller never sends a sign-in issued by another instance, and this
+    // line said "Signed in as @octocat" for it all the same.
+    const oauth = fake(true, {
+      ...SIGNED_IN,
+      mismatch: { kind: "other_instance", issued: "github.com", expected: "ghe.acme.com" },
+    });
+    await renderWith(oauth, { oauth: true }, "https://ghe.acme.com");
+    const line = host.querySelector('[data-slot="oauth-status"]');
+    expect(line?.getAttribute("role")).toBe("alert");
+    expect(line?.textContent?.trim()).toBe(
+      "Signed in for github.com, not ghe.acme.com, so the sign-in is not used. Sign in again.",
+    );
+    expect(host.textContent).not.toContain("Signed in as");
+    expect(host.querySelector('[data-action="oauth-sign-in"]')?.textContent?.trim()).toBe("Sign in again");
+    // It can still be removed.
+    expect(host.querySelector("button.sign-out")).not.toBeNull();
+  });
+
+  it("says a sign-in for another application is not used", async () => {
+    const oauth = fake(true, { ...SIGNED_IN, mismatch: { kind: "other_application" } });
+    await renderWith(oauth, { oauth: { client_id: "Iv23liMINE" } });
+    expect(host.querySelector('[data-slot="oauth-status"]')?.textContent?.trim()).toBe(
+      "Signed in with another application than this account's client id, so the sign-in is not used. Sign in again.",
+    );
+  });
+
+  it("shows a sign-in whose mismatch is null as signed in", async () => {
+    const oauth = fake(true, { ...SIGNED_IN, mismatch: null });
+    await renderWith(oauth, { oauth: true });
+    expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("Signed in as @octocat");
   });
 
   it("says the sign-in could not be read, rather than that there is none", async () => {
@@ -565,5 +650,131 @@ describe("TokenField, sign in", () => {
     await press("button.apply");
     expect(edits[0]).toContainEqual({ op: "unset", path: "accounts.gh.token.oauth" });
     expect(edits[0]).toContainEqual({ op: "set", path: "accounts.gh.token.env", value: { string: "GH" } });
+  });
+});
+
+describe("TokenField, the server an own token is stored for", () => {
+  /** `own_token_status`, scripted per call. */
+  function renderOwn(answers: OwnTokenStatus[], baseUrl = "https://gitlab.example.com") {
+    host = document.createElement("div");
+    document.body.append(host);
+    const ownStatus = vi.fn(async (_account: string) => answers.shift() ?? { kind: "none" as const });
+    const props = reactive({
+      account: "work",
+      value: { own: true },
+      onedit: () => Promise.resolve(),
+      baseUrl,
+      ownStatus,
+    }) as ComponentProps<typeof TokenField>;
+    component = mount(TokenField, { target: host, props });
+    flushSync();
+    return { props, ownStatus };
+  }
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) {
+      await Promise.resolve();
+      flushSync();
+    }
+  };
+  const line = () => host.querySelector('[data-slot="own-status"]');
+
+  it("says which server the stored token is for", async () => {
+    const h = renderOwn([{ kind: "bound", origin: "https://gitlab.example.com" }]);
+    await settle();
+    expect(h.ownStatus).toHaveBeenCalledWith("work");
+    expect(line()?.textContent).toBe("Stored for https://gitlab.example.com.");
+    expect(line()?.getAttribute("role")).toBeNull();
+  });
+
+  it("says 'stored for X; paste one for Y' once the account points elsewhere, and asks again when it moves", async () => {
+    const h = renderOwn([
+      { kind: "bound", origin: "https://gitlab.example.com" },
+      { kind: "mismatch", stored: "https://gitlab.example.com", expected: "https://gitlab.other.example" },
+    ]);
+    await settle();
+    expect(line()?.textContent).toBe("Stored for https://gitlab.example.com.");
+
+    // The file was saved with another base_url: the parent re-renders with it.
+    h.props.baseUrl = "https://gitlab.other.example";
+    flushSync();
+    await settle();
+    expect(h.ownStatus).toHaveBeenCalledTimes(2);
+    expect(line()?.textContent).toBe(
+      "Stored for https://gitlab.example.com; paste one for https://gitlab.other.example. The stored token is not sent there.",
+    );
+    expect(line()?.getAttribute("role")).toBe("alert");
+  });
+
+  it("names a 1.x value and nothing stored, and reads again after a save", async () => {
+    const h = renderOwn([{ kind: "legacy" }, { kind: "bound", origin: "https://gitlab.example.com" }]);
+    await settle();
+    expect(line()?.textContent).toBe(
+      "A token saved by bridgewatch 1.x is stored. It is tied to https://gitlab.example.com the first time it is used.",
+    );
+    const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
+    input.value = "glpat-new";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save token")!.click();
+    await settle();
+    expect(store.setOwnToken).toHaveBeenCalledWith("work", "glpat-new");
+    expect(h.ownStatus).toHaveBeenCalledTimes(2);
+    expect(line()?.textContent).toBe("Stored for https://gitlab.example.com.");
+  });
+
+  it("says a failed read is a failed read, not 'nothing stored'", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    const props = reactive({
+      account: "work",
+      value: { own: true },
+      onedit: () => Promise.resolve(),
+      ownStatus: () => Promise.reject(new Error("the keychain is locked")),
+    }) as ComponentProps<typeof TokenField>;
+    component = mount(TokenField, { target: host, props });
+    flushSync();
+    await settle();
+    expect(line()?.textContent).toBe("Could not read the stored token: the keychain is locked");
+    expect(line()?.getAttribute("role")).toBe("alert");
+  });
+});
+
+describe("TokenField, the inset panel and one action row (L2)", () => {
+  it("puts the chosen method's details in the panel and every button in one row after it", () => {
+    const h = render("work", { keyring: { service: "glab:gitlab.com", user: "" } });
+    const panel = () => host.querySelector('[data-slot="token-panel"]')!;
+    const actions = () => host.querySelector('[data-slot="token-actions"]')!;
+    const labels = () => [...actions().querySelectorAll("button")].map((b) => b.textContent?.trim());
+    expect(panel().getAttribute("data-kind")).toBe("keyring");
+    expect(panel().querySelector('input[aria-label="Keyring service"]')).toBeTruthy();
+    expect(panel().querySelector("button")).toBe(null);
+    // The panel comes first, then the row, and the row is the only place with buttons.
+    expect(panel().compareDocumentPosition(actions()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(labels().at(-1)).toBe("Use this source");
+    h.pick("own");
+    expect(panel().getAttribute("data-kind")).toBe("own");
+    expect(panel().querySelector('input[type="password"]')).toBeTruthy();
+    expect(labels()).toEqual(["Save token", "Forget", "Use this source"]);
+    h.pick("env");
+    expect(labels()).toEqual(["Use this source"]);
+  });
+
+  it("shows P2's stored-for line inside the panel", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    const props = reactive({
+      account: "work",
+      value: { own: true },
+      baseUrl: "https://gitlab.example.com",
+      onedit: () => Promise.resolve(),
+      ownStatus: () => Promise.resolve({ kind: "bound" as const, origin: "https://gitlab.example.com" }),
+    }) as ComponentProps<typeof TokenField>;
+    component = mount(TokenField, { target: host, props });
+    flushSync();
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    flushSync();
+    const line = host.querySelector('[data-slot="own-status"]');
+    expect(line).toBeTruthy();
+    expect(line!.closest('[data-slot="token-panel"]')).toBeTruthy();
   });
 });

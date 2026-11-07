@@ -850,6 +850,425 @@ fn init_prints_a_config_that_validates_and_writes_nothing() {
     assert_eq!(code(&check), 0, "{}", stderr(&check));
 }
 
+/// With no token flag, github.com and gitlab.com sign in (the wizard's
+/// preselection too), and the next step is printed: the exact `auth login`
+/// command for the account written. The file it prints validates.
+#[test]
+fn init_signs_in_by_default_on_the_hosted_instances_and_says_what_is_next() {
+    let dir = TempDir::new("init-oauth-default");
+    let path = dir.0.join("config.toml");
+    for (provider, project, account) in [
+        ("github", "owner/repo", "github"),
+        ("gitlab", "group/app", "gitlab"),
+    ] {
+        let out = run(bin().args(["--config"]).arg(&path).args([
+            "init",
+            "--provider",
+            provider,
+            "--project",
+            project,
+        ]));
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(!path.exists(), "init prints; it never writes");
+        let text = stdout(&out);
+        assert!(text.contains("token = { oauth = true }"), "{text}");
+        assert!(!text.contains("own = true"), "{text}");
+        let err = stderr(&out);
+        assert!(
+            err.contains(&format!(
+                "then sign in: bridgewatch --config {} auth login --account {account}",
+                path.display()
+            )),
+            "{err}"
+        );
+        assert!(err.contains(&path.display().to_string()), "{err}");
+
+        let written = dir.write("printed.toml", &text);
+        let check = run(bin()
+            .args(["--config"])
+            .arg(&written)
+            .args(["config", "validate"]));
+        assert_eq!(code(&check), 0, "{}", stderr(&check));
+    }
+}
+
+/// Where this build has no built-in application (a self-managed GitLab,
+/// GitHub Enterprise), no flag keeps bridgewatch's own entry, as before, and
+/// there is no sign-in step to print.
+#[test]
+fn init_keeps_its_own_entry_by_default_where_sign_in_needs_a_client_id() {
+    let dir = TempDir::new("init-own-default");
+    let path = dir.0.join("config.toml");
+    for (provider, base_url) in [
+        ("gitlab", "https://gitlab.example.com"),
+        ("github", "https://ghe.example.com"),
+    ] {
+        let out = run(bin().args(["--config"]).arg(&path).args([
+            "init",
+            "--provider",
+            provider,
+            "--base-url",
+            base_url,
+            "--project",
+            "group/app",
+        ]));
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let text = stdout(&out);
+        assert!(text.contains("token = { own = true }"), "{text}");
+        assert!(!stderr(&out).contains("auth login"), "{}", stderr(&out));
+    }
+}
+
+/// With no token flag, an account the file already has keeps its token
+/// source (as a re-run of the wizard does) and no sign-in step is printed; a
+/// new account in the same file takes the default; an explicit flag still
+/// changes an existing account's source.
+#[test]
+fn init_keeps_an_existing_accounts_token_source_unless_a_flag_says_otherwise() {
+    let dir = TempDir::new("init-keep-token");
+    let path = dir.write(
+        "config.toml",
+        "[accounts.gitlab]\ntoken = { env = \"MY_GITLAB_TOKEN\" }\n\n\
+         [[watches]]\nid = \"main\"\naccount = \"gitlab\"\nproject = \"group/app\"\n\
+         deploy_markers = [\"deploy\"]\n",
+    );
+    let original = std::fs::read_to_string(&path).unwrap();
+
+    // Existing account, no flag: its source is kept, nothing else to do.
+    let out = run(bin()
+        .arg("--config")
+        .arg(&path)
+        .args(["init", "--project", "group/other"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("token = { env = \"MY_GITLAB_TOKEN\" }"),
+        "{text}"
+    );
+    assert!(!text.contains("oauth"), "{text}");
+    assert!(!stderr(&out).contains("auth login"), "{}", stderr(&out));
+
+    // A new account in the same file takes the default for its host.
+    let out = run(bin().arg("--config").arg(&path).args([
+        "init",
+        "--provider",
+        "github",
+        "--project",
+        "owner/repo",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("token = { env = \"MY_GITLAB_TOKEN\" }"),
+        "{text}"
+    );
+    assert!(text.contains("[accounts.github]"), "{text}");
+    let github = text.split("[accounts.github]").nth(1).unwrap();
+    assert!(github.contains("token = { oauth = true }"), "{text}");
+    assert!(
+        stderr(&out).contains("auth login --account github"),
+        "{}",
+        stderr(&out)
+    );
+
+    // An explicit flag still changes the existing account's source.
+    let out =
+        run(bin()
+            .arg("--config")
+            .arg(&path)
+            .args(["init", "--project", "group/other", "--oauth"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("token = { oauth = true }"), "{text}");
+    assert!(!text.contains("MY_GITLAB_TOKEN"), "{text}");
+    assert!(
+        stderr(&out).contains("auth login --account gitlab"),
+        "{}",
+        stderr(&out)
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        original,
+        "disk untouched"
+    );
+}
+
+/// The printed next step never suggests redirecting onto the config itself,
+/// and names `--config` only when it was given.
+#[test]
+fn init_next_step_says_never_to_redirect_onto_the_config_and_carries_config() {
+    let dir = TempDir::new("init-next-step");
+    let path = dir.0.join("config.toml");
+    let out = run(bin()
+        .arg("--config")
+        .arg(&path)
+        .args(["init", "--project", "group/app"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("write this output to a new file"), "{err}");
+    assert!(err.contains("never redirect it onto that file"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "bridgewatch --config {} auth login --account gitlab",
+            path.display()
+        )),
+        "{err}"
+    );
+
+    // Without --config (the default path, here pointed at by the variable),
+    // the command is the plain one.
+    let out = run(bin()
+        .env("BRIDGEWATCH_CONFIG", &path)
+        .args(["init", "--project", "group/app"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("then sign in: bridgewatch auth login --account gitlab"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// The printed next step is a command the shell reads back as written: an
+/// account name with a space is quoted, as the config path is.
+#[test]
+fn init_next_step_quotes_an_account_name_with_a_space() {
+    let dir = TempDir::new("init-next-step-space");
+    let path = dir.0.join("config.toml");
+    let out = run(bin().arg("--config").arg(&path).args([
+        "init",
+        "--account",
+        "my team",
+        "--project",
+        "group/app",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("auth login --account 'my team'"), "{err}");
+}
+
+/// ⛔ A token source never crosses hosts. Moving an account to another
+/// instance with an explicit --account takes the new host's default, in both
+/// directions; without --account, init refuses to repoint it at all and says
+/// how to proceed.
+#[test]
+fn init_never_carries_a_token_source_to_another_host() {
+    let dir = TempDir::new("init-cross-host");
+    let lab = dir.write(
+        "lab.toml",
+        "[accounts.gitlab]\ntoken = { keyring = { service = \"glab:gitlab.com:token\", user = \"\" } }\n",
+    );
+    let ghe = dir.write(
+        "ghe.toml",
+        "[accounts.ghe]\nprovider = \"github\"\nbase_url = \"https://ghe.acme.com\"\n\
+         api_path = \"/api/v3\"\ntoken = { oauth = { client_id = \"Iv1.ghe0000000000\" } }\n",
+    );
+
+    // gitlab.com -> self-managed, named explicitly: the new host's default.
+    let out = run(bin().arg("--config").arg(&lab).args([
+        "init",
+        "--base-url",
+        "https://gitlab.acme.com",
+        "--account",
+        "gitlab",
+        "--project",
+        "team/app",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains("glab:gitlab.com:token"), "{text}");
+    assert!(text.contains("token = { own = true }"), "{text}");
+    // ⛔ The exact path of the 1.x bug: a repointed own account. Its stored
+    // token is bound to the old server now, and init says so.
+    assert!(
+        stderr(&out).contains(
+            "note: account \"gitlab\" moves from https://gitlab.com to https://gitlab.acme.com. \
+             A token it stored stays with gitlab.com and is not sent to gitlab.acme.com"
+        ),
+        "{}",
+        stderr(&out)
+    );
+
+    // Enterprise -> github.com, named explicitly: the built-in sign-in, not
+    // the Enterprise application.
+    let out = run(bin().arg("--config").arg(&ghe).args([
+        "init",
+        "--provider",
+        "github",
+        "--account",
+        "ghe",
+        "--project",
+        "owner/repo",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains("Iv1.ghe0000000000"), "{text}");
+    assert!(text.contains("token = { oauth = true }"), "{text}");
+
+    // Without --account, the derived name matches and init refuses.
+    let out = run(bin().arg("--config").arg(&lab).args([
+        "init",
+        "--base-url",
+        "https://gitlab.acme.com",
+        "--project",
+        "team/app",
+    ]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    let err = stderr(&out);
+    for wanted in [
+        "account \"gitlab\"",
+        "https://gitlab.com",
+        "https://gitlab.acme.com",
+        "--account <new-name>",
+    ] {
+        assert!(err.contains(wanted), "{wanted} missing: {err}");
+    }
+    assert!(stdout(&out).is_empty());
+}
+
+/// An unknown key elsewhere in the file does not hide the account: its
+/// source is still kept. And a kept source is not re-checked as though it had
+/// just been typed: an env name `config validate` accepts stays.
+#[test]
+fn init_keeps_a_source_despite_an_unknown_key_and_does_not_recheck_it() {
+    let dir = TempDir::new("init-lenient");
+    let path = dir.write(
+        "config.toml",
+        "[ui]\nfuture_key = true\n\n[accounts.gitlab]\ntoken = { env = \"MY-TOKEN\" }\n",
+    );
+    let check = run(bin()
+        .arg("--config")
+        .arg(&path)
+        .args(["config", "validate"]));
+    assert_eq!(code(&check), 0, "the file loads: {}", stderr(&check));
+
+    let out = run(bin()
+        .arg("--config")
+        .arg(&path)
+        .args(["init", "--project", "group/app"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("token = { env = \"MY-TOKEN\" }"), "{text}");
+    assert!(!text.contains("oauth"), "{text}");
+    assert!(!stderr(&out).contains("auth login"), "{}", stderr(&out));
+}
+
+/// `--oauth` alone on an account that already signs in keeps its client id:
+/// on Enterprise dropping it would not load, and on github.com it would strand
+/// the stored sign-in on another application.
+#[test]
+fn init_oauth_on_an_account_that_signs_in_keeps_its_client_id() {
+    let dir = TempDir::new("init-oauth-keep");
+    for (file, extra) in [
+        (
+            "[accounts.ghe]\nprovider = \"github\"\nbase_url = \"https://ghe.acme.com\"\n\
+             api_path = \"/api/v3\"\ntoken = { oauth = { client_id = \"Iv1.mine00000000\" } }\n",
+            &["--base-url", "https://ghe.acme.com", "--account", "ghe"][..],
+        ),
+        (
+            "[accounts.github]\nprovider = \"github\"\n\
+             token = { oauth = { client_id = \"Iv1.mine00000000\" } }\n",
+            &[][..],
+        ),
+    ] {
+        let path = dir.write("config.toml", file);
+        let out = run(bin()
+            .arg("--config")
+            .arg(&path)
+            .args([
+                "init",
+                "--provider",
+                "github",
+                "--project",
+                "owner/repo",
+                "--oauth",
+            ])
+            .args(extra));
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let text = stdout(&out);
+        assert!(
+            text.contains(r#"token = { oauth = { client_id = "Iv1.mine00000000" } }"#),
+            "{text}"
+        );
+    }
+}
+
+/// `--oauth` asks for sign-in outright, and `--oauth-client-id` names an
+/// application of the user's own, which a self-managed instance needs; without
+/// one there, the answer is refused with what to register.
+#[test]
+fn init_oauth_flags_write_the_sign_in_source() {
+    let dir = TempDir::new("init-oauth-flags");
+    let path = dir.0.join("config.toml");
+
+    let out = run(bin().args(["--config"]).arg(&path).args([
+        "init",
+        "--project",
+        "group/app",
+        "--oauth",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("token = { oauth = true }"));
+
+    let out = run(bin().args(["--config"]).arg(&path).args([
+        "init",
+        "--provider",
+        "github",
+        "--base-url",
+        "https://ghe.example.com",
+        "--project",
+        "platform/api",
+        "--oauth-client-id",
+        "Iv1.0123456789abcdef",
+    ]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains(r#"token = { oauth = { client_id = "Iv1.0123456789abcdef" } }"#),
+        "{text}"
+    );
+    assert!(
+        stderr(&out).contains("auth login --account ghe"),
+        "{}",
+        stderr(&out)
+    );
+    let written = dir.write("printed.toml", &text);
+    let check = run(bin()
+        .args(["--config"])
+        .arg(&written)
+        .args(["config", "validate"]));
+    assert_eq!(code(&check), 0, "{}", stderr(&check));
+
+    let out = run(bin().args(["--config"]).arg(&path).args([
+        "init",
+        "--base-url",
+        "https://gitlab.example.com",
+        "--project",
+        "group/app",
+        "--oauth",
+    ]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("that server's own application"),
+        "{}",
+        stderr(&out)
+    );
+
+    // Sign-in is one token source among the others, never two at once.
+    for extra in [
+        &["--oauth", "--glab"][..],
+        &["--oauth-client-id", "x", "--token-env", "T"][..],
+    ] {
+        let out = run(bin()
+            .args(["--config"])
+            .arg(&path)
+            .args(["init", "--project", "group/app"])
+            .args(extra));
+        assert_eq!(code(&out), 64, "{extra:?}: {}", stderr(&out));
+    }
+    assert!(!path.exists());
+}
+
 /// ⛔ `--token-command` takes arguments that start with '-'. The README's GHES
 /// recipe, `gh auth token --hostname <host>`, was refused by clap as an
 /// unexpected argument.

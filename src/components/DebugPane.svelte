@@ -7,11 +7,18 @@
   interface Props {
     snapshot: Snapshot;
     status: Status | null;
+    /**
+     * Shown or hidden. The toggle is the popover footer's "Debug" button,
+     * which points here with `aria-controls={id}`.
+     *
+     * ⚠ Hidden with the `hidden` attribute, not unmounted: what is in the pane
+     * stays in the DOM, exactly as it did inside the old `<details>`.
+     */
+    open?: boolean;
+    id?: string;
   }
 
-  let { snapshot, status }: Props = $props();
-
-  let open = $state(false);
+  let { snapshot, status, open = false, id = "popover-debug" }: Props = $props();
   let copied = $state<"" | "ok" | "failed">("");
 
   async function copyVerdict() {
@@ -21,10 +28,14 @@
   }
 </script>
 
-<details class="debug border-border text-muted-foreground border-t px-3 pt-1.5 pb-2.5 text-[11px]" bind:open>
-  <summary class="hover:text-foreground cursor-pointer py-0.5">Debug</summary>
-
-  <div class="meta my-1.5 grid gap-0.5">
+<div
+  {id}
+  class="debug border-border text-muted-foreground text-ui-badge max-h-[45vh] overflow-y-auto border-t px-3 pt-2 pb-2"
+  role="region"
+  aria-label="Debug"
+  hidden={!open}
+>
+  <div class="meta mb-2 grid gap-1">
     <div>
       <span class="inline-block min-w-16">config</span>
       <span class="text-foreground font-mono break-all">{status?.configPath ?? "—"}</span>
@@ -51,7 +62,7 @@
     got longer.
   -->
   {#if snapshot.request_log.length > 0}
-    <table class="requests w-full table-fixed border-collapse font-mono text-[10px]">
+    <table class="requests w-full table-fixed border-collapse font-mono text-ui-badge">
       <thead>
         <tr class="border-border border-b text-left">
           <th class="px-1 font-normal">method</th>
@@ -76,6 +87,6 @@
       </tbody>
     </table>
   {:else}
-    <p class="mt-1.5 mb-0">No requests recorded. `[log].keep_requests = 0` disables the ring.</p>
+    <p class="m-0">No requests recorded. `[log].keep_requests = 0` disables the ring.</p>
   {/if}
-</details>
+</div>

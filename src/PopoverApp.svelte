@@ -16,6 +16,7 @@
     quit,
     refreshNow,
     resizePopover,
+    resumeNotifications,
   } from "./lib/ipc";
   import { crashReportsAnswer, shouldAskAboutCrashReports } from "./lib/crash-reports";
   import { messageOf } from "./lib/format";
@@ -166,18 +167,48 @@
    * ⛔ `document.documentElement.scrollHeight` is the obvious measurement and
    * it is WRONG here: the popover is `height: 100vh`, so that number is always
    * exactly the current window height and the window can never shrink or grow.
-   * The natural height is the chrome plus the LIST's scroll height, which is
-   * what this reconstructs — and unlike the element's own height it is not
-   * clamped by the window it is trying to size.
+   * The natural height is the chrome plus the list's CONTENT, which is what
+   * this reconstructs.
+   *
+   * ⛔ Not the list's `scrollHeight` either: the list is `flex-1`, so its box
+   * is whatever the current window leaves it, and `scrollHeight` is never less
+   * than that box. It grew the window and could never bring it back down once
+   * a watch collapsed. The rows' own extent is not clamped by the window. The
+   * shell caps the height at `ui.popover.max_height`.
    */
   let lastHeight = 0;
+
+  /** The height of what is in the list, its own padding included, whatever its box. */
+  function contentHeight(list: HTMLElement): number {
+    let top = Infinity;
+    let bottom = -Infinity;
+    let first: Element | null = null;
+    let last: Element | null = null;
+    for (const child of list.children) {
+      const r = child.getBoundingClientRect();
+      // Nothing drawn (`display: none`) reports a zero rect at the origin.
+      if (r.height <= 0) continue;
+      if (r.top < top) [top, first] = [r.top, child];
+      if (r.bottom > bottom) [bottom, last] = [r.bottom, child];
+    }
+    const style = getComputedStyle(list);
+    const px = (value: string) => parseFloat(value) || 0;
+    const padding = px(style.paddingTop) + px(style.paddingBottom);
+    if (!first || !last) return padding;
+    // The list scrolls, so its children's margins do not collapse through it.
+    const margins = px(getComputedStyle(first).marginTop) + px(getComputedStyle(last).marginBottom);
+    return bottom - top + margins + padding;
+  }
 
   function measureAndResize() {
     const root = document.querySelector<HTMLElement>("[data-popover]");
     const list = document.querySelector<HTMLElement>("[data-scroll]");
     if (!root || !list) return;
+    // Everything that is not the list's box: the header, notices, the debug
+    // pane, the footer and the border. Resizing the window changes the box,
+    // not this, so a resize cannot feed back into the next measurement.
     const chrome = root.getBoundingClientRect().height - list.clientHeight;
-    const natural = Math.ceil(chrome + list.scrollHeight);
+    const natural = Math.ceil(chrome + contentHeight(list));
     // A pixel of hysteresis: sub-pixel layout would otherwise send a command
     // every animation frame forever.
     if (natural > 0 && Math.abs(natural - lastHeight) > 1) {
@@ -191,6 +222,26 @@
     void snapshot;
     if (inTauri()) requestAnimationFrame(measureAndResize);
   });
+
+  /**
+   * End a notification pause, then re-read the status so the strip goes at
+   * once. ⛔ One request at a time: two clicks before the re-render would
+   * otherwise send two.
+   */
+  let resuming = false;
+  async function resume() {
+    if (resuming) return;
+    resuming = true;
+    notice = "";
+    try {
+      await resumeNotifications();
+      status = await getStatus();
+    } catch (error) {
+      notice = `Could not resume notifications: ${messageOf(error)}`;
+    } finally {
+      resuming = false;
+    }
+  }
 
   /**
    * Ask the shell to open something; say why when it could not.
@@ -228,4 +279,5 @@
   onsetup={() => openOrSay("the setup wizard", openWizard)}
   {askCrashReports}
   oncrashreports={(send) => void answerCrashReports(send)}
+  onresume={() => void resume()}
 />

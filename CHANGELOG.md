@@ -13,6 +13,295 @@ body line with a bracket.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-07
+
+bridgewatch 2.0 signs in instead of asking for a token, keeps every stored token with the
+server it was saved for, and says more with less noise. A new github.com or gitlab.com
+account starts on **Sign in**, and one-click setup then offers your most recently active
+projects with the top three ticked. `bridgewatch wait` blocks until a commit's pipeline has
+a verdict and exits with its code, for scripts and coding agents. A failure notification
+names the first failing line and opens the failed job when clicked; a failing pipeline is
+announced once, a burst arrives as one, and a fix says "fixed again". `mine = true` shows
+only your own pipelines, and token health warns before a token or sign-in expires. The
+popover, Settings and the setup wizard have new layouts. Upgrading from 1.x: read
+Breaking first, and the README's "Upgrading from 1.x".
+
+### Breaking
+
+- **Own tokens are bound to their server, and a changed `base_url` needs a new token.**
+  A token saved for an account (`token = { own = true }`, from Settings or the wizard) is
+  now stored with the server it was saved for and is sent to that server only. Before,
+  changing an account's `base_url` (by hand, or with `bridgewatch init --account`) sent
+  the stored token to the new host on the next poll. Now it is not sent: `check`, `watch`,
+  `wait`, `log`, `retry` and `play` exit 70 and say which server the token belongs to, and
+  in the app only that account's watches show the error.
+- **1.x entries bind on first use.** A token stored by bridgewatch 1.x is tied to the
+  server the account names the first time 2.0 uses it, before anything is sent. If that
+  write fails, nothing is sent. The CLI binds too.
+- **1.3 cannot read 2.0 entries, and refuses them without sending.** After a downgrade,
+  paste the token again in 1.3's Settings; 2.0 binds it again later.
+- **Sign-in is the default for new github.com and gitlab.com accounts** (see Changed).
+  `bridgewatch init` with no token flag writes `token = { oauth = true }` for a new
+  account there, where 1.x wrote `own = true`, and an account the file already has keeps
+  its source instead of being rewritten to `own = true`.
+- **`bridgewatch init` refuses to repoint an existing account to another host** unless
+  `--account` names it (see Fixed). A script that relied on the derived account name
+  being rewritten now gets an error.
+- **`bridgewatch auth status` lists own-token accounts and exits 70 unless every account
+  it lists is usable.** In 1.x it spoke only of sign-ins, so a file with an own token that
+  is missing, or saved for another server, now makes it exit 70.
+- **A failing pipeline is announced once.** "finished: failed" is no longer sent after
+  its blocking-failure notice, and more jobs failing in the same pipeline say nothing
+  more.
+- **"Fixed again" replaces a push's other notifications** (`notify.recovered`, on by
+  default): the first passing push after a failure sends one "fixed again" notification
+  in place of its deploy and finish notifications. On a failing watch, a deploy is
+  announced when its pipeline settles, not while post-deploy jobs still run. Set
+  `notify.recovered = false` on a watch to keep 1.x's deploy and finish notifications
+  for it.
+- **More than three notifications in one poll arrive as one** in the app, titled
+  "bridgewatch: N updates". `bridgewatch watch` still prints every one.
+- **The default notification body and title change.** The body adds the first failing
+  line as a second line, and the title ends in ", fixed again" for the new kind. A custom
+  `notify.title` or `notify.body` is unchanged. `bridgewatch watch` prints the body's lines
+  as one, joined by `; `, so a script matching its text output sees the longer line.
+- **`bridgewatch watch` can print new notification kinds**, `recovered` and `token`, in
+  its text lines and in `watch --json`.
+- **Settings has five panes instead of seven tabs**, and the popover's **Debug**,
+  **Settings…** and **Quit** moved to a footer (see Changed). Nothing in the file moves.
+- **The `bridgewatch-core` API changes.** `token::set_own_token` takes the server's
+  `base_url`, `token::TokenError` has a new `BoundElsewhere` variant and `ClientError` a
+  new `Token` variant, and a stored own entry is a small document rather than the bare
+  token, so a script that reads the keychain item sees the document.
+
+### Added
+
+- **`bridgewatch init --oauth` and `--oauth-client-id <id>`.** The second names an
+  application of your own, as GitHub Enterprise Server and a self-managed GitLab need.
+  When the file signs in, `init` ends by printing the next step,
+  `bridgewatch auth login --account <name>`.
+- **`bridgewatch wait`.** It waits until the pipeline for one commit has a final verdict,
+  then exits with the same codes as `check`. `--sha` defaults to the current directory's
+  `HEAD`. `--watch` can be left out when only one watch is configured, or only one is
+  primary. `--timeout 10m` gives up and exits 124. `--json` prints the verdict as one
+  object. A verdict is final only once nothing is in flight, because a post-deploy failure
+  can still downgrade a deploy. A parked gate is final too, because only a person moves it.
+  A commit that is not among the watch's rows is looked up directly by its sha. A skipped
+  pipeline exits 4 at once, and an older pipeline is judged like any row. A commit with no
+  pipeline yet is waited for, up to `--no-pipeline-grace` (10 minutes), then exits 4. A
+  401, 403 or 404 exits 4 at once, the code `check` gives it, naming the account and the
+  status. A 429, a 5xx or a dropped connection is retried on the usual backoff. Both
+  durations are at most 365 days; a longer one is a usage error.
+- **A "fixed again" notification** (`notify.recovered`, on by default). When a watch that
+  was failing passes again, you get one notification that says so, in place of that
+  push's deploy and finish notifications. While a watch is failing, its next deploy is
+  announced when the pipeline settles, not while post-deploy jobs still run. While a newer
+  pipeline is still running, a new push or a failed one being retried, an older green
+  pipeline does not count as the fix; a failure that settles meanwhile still counts.
+- **More than three notifications at once arrive as one.** It lists the first three
+  titles, then "and N more"; the popover has the rest.
+- **Pause notifications** in the tray menu, for one hour or until resumed. While notifications
+  are paused, the popover says so and offers **Resume**. A pause lasts until the app quits.
+- **Clicking a failure notification opens the failed job's page** (`notify.click`, which
+  was computed but never delivered). macOS reports the click, and so does a Linux desktop
+  whose notification server offers actions; Windows only while the toast is on screen,
+  not from the Action Center. The link goes through the same host check as every other
+  link the app opens.
+- **The first failing line.** A failed job says why: GitLab's failure reason in words
+  ("script failure"), or on GitHub the first failure annotation of the job's check run
+  (`src/parser.rs:142: assertion failed`). It is the second line of a failure
+  notification (`{{failure_line}}` in templates), and it is shown under the failed job in
+  the popover. On GitHub it costs one request per failed run, for its first blocking
+  failure under `[watches.jobs]`, and nothing for a passing run or on later polls. A fine-grained token needs Checks: read
+  for it; without it the line is left out and nothing else changes.
+- **Copy failure as Markdown** on a failed job in the popover: the job, where it ran, the
+  first failing line in a code block, and the link.
+- **My builds: `mine = true` on a watch** shows only the pipelines (GitLab) or workflow
+  runs (GitHub) you started. GitLab is asked with `username=`, GitHub with `actor=`. You
+  are the signed-in user, or for a token the token's owner, asked once with `GET /user`
+  and remembered (a sign-in that names its user needs no request). The Settings toggle,
+  "Only my pipelines", is in the watch's Source group.
+- **Token health.** bridgewatch tells an expiring token from an expired, a revoked and an
+  invalid one, and warns 72 hours and again 24 hours before an expiry, each warning once
+  as a notification, and in a strip in the popover for as long as it is true. The expiry
+  is GitLab's `expires_at` (`GET /personal_access_tokens/self`, asked once per token
+  each time a poller starts), GitHub's `github-authentication-token-expiration` header
+  (on every response, so no request of its own), or a sign-in's refresh-token expiry
+  (the access token's for a sign-in that cannot renew). GitLab's 401 says whether a
+  token was revoked or has expired; GitHub's does not, so a GitHub 401 reads as expired
+  only past a known expiry. `bridgewatch auth status` shows each bound own token's
+  expiry (one expiry lookup each) and says when a sign-in ends within 72 hours.
+- **One-click setup in the wizard.** Once a sign-in or **Test connection** succeeds, the
+  Account step lists your ten most recently active projects (GitLab `last_activity_at`) or
+  repositories (GitHub `pushed_at`), newest first, with an optional "active 3h ago" label,
+  and ticks the top three. **Watch N projects** gives each ticked one the best deploy
+  marker the deploy step's ranking finds, then goes to Preferences and Review; Finish
+  writes every watch in one atomic write, or none. The list is one request per account.
+  Each watch is bound to the account that listed it: a list from another server is
+  refused. Running it again adds no watch the file already has for that project and
+  branch. The first watch added is primary unless the file already has one; the others
+  are secondary. Choose **Next** instead to set up one project step by step.
+
+### Changed
+
+- **The default notification body** adds the first failing line on a second line when
+  there is one. A custom `notify.body` is unchanged. `bridgewatch watch` prints the two
+  lines as one, joined by `; `.
+- **A failing pipeline is announced once.** The blocking-failure notice is now kept per
+  pipeline, and "finished: failed" is not sent after it. The ledger an older version
+  wrote is read as before, so an upgrade does not repeat a notice.
+- **The default notification title** ends in ", fixed again" for the new kind. A custom
+  `notify.title` is unchanged.
+
+- **Sign-in is the default way to add an account.** On github.com and gitlab.com, where
+  bridgewatch has its own application, **Sign in with GitHub** (or GitLab) is now what a
+  new account starts on everywhere:
+  - The setup wizard preselects it on a fresh start even when a gh or glab token was
+    found. **Use gh's token** (or glab's) is still listed below it. The CLI's token is
+    preselected only where sign-in needs a client id of your own, as on GitHub
+    Enterprise Server or a self-managed GitLab.
+  - Until now the preselection depended on which answer arrived first, so a found gh
+    token could win over sign-in from one launch to the next. It is now decided from
+    both answers, and never changes a choice you have already made.
+  - Settings' **Add account** writes `token = { oauth = true }` for a new github.com or
+    gitlab.com account, instead of bridgewatch's own entry.
+  - `bridgewatch init` with no token flag writes `token = { oauth = true }` there for a
+    new account, and `own = true` on any other host. An account the file already has
+    keeps its token source on the same instance, as a re-run of the wizard does; until
+    now a flagless `init` rewrote it to `own = true`. A kept source is not re-checked as
+    though it had just been typed, an unknown key elsewhere in the file does not hide the
+    account, and `--oauth` alone keeps an existing sign-in's client id.
+  - In the wizard, the **Sign in** button sits directly under its option, before the
+    alternatives. The section is called **Access**, and what a token must be allowed to do
+    is said only while a token option is chosen.
+- **The popover has a layout system.** Spacing sits on a 4px grid assigned by role, and
+  the app uses four type sizes (15, 13, 12 and 11px) instead of seven. Small buttons are
+  13px.
+  - **The header is one line:** the state, a dot and how long ago the last poll was, with
+    **Refresh** and **Pipelines** as icon buttons. **Debug**, **Settings…** and **Quit**
+    moved to a footer.
+  - **Each pipeline row has two lines.** The first is the ref and its age, and the second
+    is the commit, what started it, the deploy job (now labelled "deploy job build") and
+    the time estimate. The verdict is said once: the row's state shows only where the
+    watch header doesn't already say it, and the deploy pill only where it adds
+    something, so "deployed deployed" is gone.
+  - **Bridge and job rows are in columns.** The name truncates, and the status and job
+    count line up on the right. The trigger job, child pipeline and workflow run links
+    are icons, each with the name a screen reader reads. The name keeps at least 12
+    characters: a long status gives way first, and in a narrow popover "passed, with
+    warnings" reads "warnings", with the full words in its tooltip and accessible name.
+    A dead bridge says why in its status ("no child", "never started").
+  - **Job tools are 12px words.** **log**, **retry** and **play** show on hover or
+    keyboard focus, and always on a failed job.
+  - **Watches are separated by space** instead of a tinted band and a rule.
+
+- **The setup wizard's layout.** The access methods are cards, and the chosen method's
+  controls (the sign-in button, the token field) sit inside its card instead of after
+  the whole list. They stay one radio group: the arrow keys move the choice, and Tab
+  goes from the chosen method into its field. The stepper labels only the current
+  step, so no label is cut short ("Acco…", "Proj…") at the narrowest window; every step
+  keeps its name for screen readers. Text is 13px throughout, with 15px step titles and
+  12px hints, and the column is at most 560px wide. Fields that had a fixed width now
+  shrink with the window.
+
+- **Settings has a sidebar.** Five panes replace the seven tabs: **Accounts**,
+  **Watches**, **General** (the icon and the app), **Verdict**, and **Advanced** (the log,
+  and **Edit as text**). Settings opens on the pane you used last. The arrow keys, Home
+  and End move between panes. The file's path, **Open file** and **Reload** are in a bar
+  at the bottom, and **Setup wizard…** is at the foot of the sidebar.
+  - **Every pane is grouped into cards** of rows, at most 600px wide: the name and its
+    hint on the left, and the control on the right, or underneath when it needs the
+    width. Numbers and menus are as wide as what they hold, not the whole window. Hints
+    wrap at about 60 characters.
+  - **An account starts with how it signs in**, then its server, then an **Advanced**
+    group (API path, auth header, timeout, backoff), folded away. The chosen token
+    source's details, including the "Stored for" line, sit in one panel, with its buttons
+    in one row under it.
+  - **A watch is split into groups** named after its settings: Source, Rows, Polling,
+    Child pipelines, Deploy, Jobs and Notifications. Only Source starts open. The
+    notification settings lose their "Notify:" prefix. **Add watch** is in the Watches
+    pane's header.
+- **Shared controls are 13px**, in every window. The setup wizard looks the same as
+  before; its confirmation dialog, which did not get the wizard's 13px, now does.
+
+### Fixed
+
+- **A token problem stops only its own account in the app.** One account whose token is
+  missing or bound to another server used to stop polling for every account, with the
+  tray icon on unknown and "cannot start polling" in the strip. Now that account's watches
+  carry the error and the others keep polling, as an account that is not signed in
+  always did. The refused account is tried again on its own, in place, at 5 seconds and
+  then at doubling intervals up to 5 minutes, and at once after a token is saved for it or
+  on **Refresh now**: a locked keychain or a token command that timed out heals without a
+  reload, and the other accounts keep their state throughout.
+- **`bridgewatch auth status` lists own-token accounts too**: bound to which server, saved
+  for another server, a 1.x value that binds on first use, or nothing stored. It exits 70
+  unless every account it lists is usable.
+- **A sign-in whose stored server, or whose account's `base_url`, is not an http(s) URL is
+  never used.** Two such addresses used to count as the same server.
+- **Settings says which server an own token is for.** The token field reads "Stored for
+  X" and, when the account has since moved, "Stored for X; paste one for Y".
+- **The setup wizard forgets a stored token when the instance changes**, as it does a
+  sign-in. On a re-run it asks which server the stored token is bound to, so a config
+  edited by hand to another host asks for a token too. The confirmation for moving an
+  account to another host says an own token or a sign-in stays with the old host (it used
+  to say the token would be sent).
+
+- **`bridgewatch init` never moves a token source to another host.** The derived account
+  name is the host's first label, so gitlab.com and gitlab.acme.com are both `gitlab`,
+  and `init` for the second host rewrote the first account's `base_url` while keeping its
+  token source. `init` now refuses to repoint an existing account to another host unless
+  `--account` names it, and a source is kept only on the same instance.
+- **`init` no longer suggests redirecting onto the config.** Its help, its last line and
+  the README said to redirect the output, and a `>` onto the config empties it before
+  `init` reads it. They now say to write a new file, check it and move it into place.
+  The printed `auth login` step carries `--config` when it was given.
+- **The wizard never uses the previous instance's CLI token.** After the instance changed,
+  the old host's glab or gh token stayed preselected until the new detection answered, so
+  **Test connection** in that gap could send it to the new host. A detected token is now
+  tied to the instance it was found for.
+- **Settings: signing in through a newly typed client id writes it.** A successful
+  sign-in already switched an account to `oauth`. When the account signed in already but
+  through another application, the new client id stayed unwritten until **Use this
+  source** was pressed. That button is now hidden for the sign-in the file already uses.
+  What is written is the client id the sign-in started with, even if the box was edited
+  while the code was pending, and "Signed in as" is shown once, not twice.
+- **The wizard counts a sign-in only for what it was made with.** A sign-in that finished
+  after the client id or the instance changed still counted, and so did a stored one after
+  either was edited on a re-run, so the file could name an application or an instance its
+  tokens never came from, and the first poll asked to sign in again. The wizard now asks
+  for a new sign-in instead.
+- **A renamed account keeps its sign-in in the wizard.** A sign-in made after renaming the
+  account, on a re-run or after an earlier sign-in, was stored under the old name, and one
+  that finished after a rename while the code was pending was recorded under the new
+  name, so the saved account had no sign-in either way. A sign-in is now stored under the
+  name the form shows when it starts, and Finish moves it to the saved name when the
+  account was renamed afterwards.
+- **The wizard never keeps a hidden CLI token selected.** When the CLI's token had been
+  picked and the instance changed to one where none is found, the option disappeared but
+  stayed chosen, and **Next** could not go on. It now falls back to sign-in where the
+  instance offers it, else to a pasted token.
+- **`init` quotes the account name in the `auth login` step it prints**, so a name with
+  a space can be pasted as it is.
+- **The popover shrinks again when its content does.** It grew to fit new rows but never
+  came back down, so after a watch was collapsed or its pipelines went, the window kept
+  the old height with empty space below the last row. It is now sized to what the list
+  holds, up to `ui.popover.max_height`, in both directions.
+- **Settings: every tab label stays on one line.** At the narrowest window, **Edit as
+  text** wrapped onto three lines.
+- **A sign-in is sent only to the server that issued it.** `bridgewatch fixture record`
+  read an account's stored sign-in and sent its access token to whatever `base_url` the
+  file named at the time, even a server the sign-in was never issued by, and sent it as
+  `PRIVATE-TOKEN`, which GitLab refuses for an OAuth token. It now records through the
+  same client the poller uses: the token goes as `Authorization: Bearer`, and a sign-in
+  issued by another server, or for another application, sends nothing and says to sign
+  in again.
+- **`auth status` and Settings no longer call an unusable sign-in "signed in".** A stored
+  sign-in issued by another server than the account's `base_url`, or for another
+  application than its client id, is never used to poll. `auth status` now prints
+  `signed in for <server>, not <server>; run bridgewatch auth login --account <name>` for
+  it and exits 70, and Settings says the sign-in is not used and offers to sign in again.
+
 ## [1.3.0] - 2026-11-06
 
 The CLI ships with every release: on npm as `bridgewatch`, and as three tarballs on the
@@ -501,7 +790,8 @@ per-workflow status dot other monitors already show.
   `glab:<host>:token` naming, which has not been checked against a live install.
 - Windows is not targeted.
 
-[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.0.0...v1.1.0

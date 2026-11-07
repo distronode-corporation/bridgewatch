@@ -97,6 +97,7 @@ impl Transport for Routed {
             etag: None,
             link: None,
             oauth_scopes: self.oauth_scopes.lock().unwrap().clone(),
+            token_expiration: None,
             location: None,
             truncated: false,
         })
@@ -844,6 +845,7 @@ fn answers() -> WizardAnswers {
         }),
         launch_at_login: Some(true),
         live_secs: Some(5),
+        watches: Vec::new(),
     }
 }
 
@@ -1390,6 +1392,7 @@ fn gh_answers() -> WizardAnswers {
         }),
         launch_at_login: None,
         live_secs: None,
+        watches: Vec::new(),
     }
 }
 
@@ -1991,4 +1994,572 @@ fn github_token_shapes_are_refused_for_github_and_ignored_for_gitlab() {
         None,
         "GitLab's list is unchanged"
     );
+}
+
+// ---------------------------------------------------------------------------
+// One-click setup: recent_projects, rank_recent, and N watches in one write
+// ---------------------------------------------------------------------------
+
+use bridgewatch_core::wizard::{ListedBy, QuickWatch, RecentListing, RecentProject};
+
+/// A GitLab `GET /projects?simple=true` row, in the documented shape.
+fn gl_row(id: u64, path: &str, branch: Option<&str>, active: Option<&str>) -> String {
+    serde_json::json!({
+        "id": id,
+        "path_with_namespace": path,
+        "name": path.rsplit('/').next(),
+        "default_branch": branch,
+        "web_url": format!("https://gitlab.com/{path}"),
+        "last_activity_at": active,
+    })
+    .to_string()
+}
+
+/// A GitHub `GET /user/repos` row, in the documented shape.
+fn gh_row(id: u64, full_name: &str, pushed_at: Option<&str>) -> String {
+    serde_json::json!({
+        "id": id,
+        "full_name": full_name,
+        "name": full_name.rsplit('/').next(),
+        "default_branch": "main",
+        "html_url": format!("https://github.com/{full_name}"),
+        "pushed_at": pushed_at,
+    })
+    .to_string()
+}
+
+fn ids(projects: &[RecentProject]) -> Vec<u64> {
+    projects.iter().map(|p| p.project.id).collect()
+}
+
+fn ticked(projects: &[RecentProject]) -> Vec<u64> {
+    projects
+        .iter()
+        .filter(|p| p.ticked)
+        .map(|p| p.project.id)
+        .collect()
+}
+
+/// Twelve projects out of order: the list is the ten newest by
+/// `last_activity_at`, newest first, and the top three start ticked. An empty
+/// repository (no default branch) is listed but not ticked, so the fourth
+/// newest takes its place; a row with no timestamp ranks after every dated
+/// one. ONE list request, although the answer says there is a second page.
+#[tokio::test]
+async fn the_one_click_list_is_the_ten_newest_with_the_top_three_ticked_from_one_request() {
+    let mut rows = Vec::new();
+    // ids 1..=11, active on day `id` of November, so 11 is the newest...
+    for id in 1..=11u64 {
+        let when = format!("2026-11-{id:02}T08:00:00.000Z");
+        let branch = (id != 10).then_some("main");
+        rows.push(gl_row(id, &format!("g/p{id}"), branch, Some(&when)));
+    }
+    // ...and 12 has no timestamp at all.
+    rows.push(gl_row(12, "g/p12", Some("main"), None));
+    // Shuffled, so the order is the sort's and not the API's.
+    rows.swap(0, 11);
+    rows.swap(3, 7);
+    let body = format!("[{}]", rows.join(","));
+    let t = Routed::new()
+        .route("/user", 200, PERSONAL_USER)
+        .pages("/projects?", vec![(200, body.as_str(), Some("2"))]);
+
+    let listing = wizard::recent_projects(
+        &client(t.clone()),
+        Provider::Gitlab,
+        &TokenKind::Personal,
+        "https://gitlab.com/",
+    )
+    .await
+    .unwrap();
+    let RecentListing::Projects {
+        projects,
+        listed_by,
+    } = listing
+    else {
+        panic!("expected projects, got {listing:?}");
+    };
+    assert_eq!(ids(&projects), vec![11, 10, 9, 8, 7, 6, 5, 4, 3, 2]);
+    assert_eq!(
+        ticked(&projects),
+        vec![11, 9, 8],
+        "p10 is an empty repository"
+    );
+    assert_eq!(
+        projects[0].project.last_activity_at.as_deref(),
+        Some("2026-11-11T08:00:00.000Z")
+    );
+    assert_eq!(
+        listed_by,
+        ListedBy {
+            provider: Provider::Gitlab,
+            origin: "https://gitlab.com".into()
+        }
+    );
+
+    let lists: Vec<_> = t
+        .seen()
+        .into_iter()
+        .filter(|p| p.starts_with("/projects?"))
+        .collect();
+    assert_eq!(lists.len(), 1, "one list call per account: {lists:?}");
+    assert!(
+        lists[0].contains("order_by=last_activity_at"),
+        "{}",
+        lists[0]
+    );
+}
+
+/// The same on GitHub, from `pushed_at`, with one `/user/repos` request.
+#[tokio::test]
+async fn a_github_account_ranks_by_pushed_at_from_one_request() {
+    let rows = [
+        gh_row(1, "acme/old", Some("2026-01-01T00:00:00Z")),
+        gh_row(2, "acme/new", Some("2026-11-06T09:30:00Z")),
+        gh_row(3, "acme/mid", Some("2026-06-01T00:00:00Z")),
+        gh_row(4, "acme/never", None),
+    ];
+    let body = format!("[{}]", rows.join(","));
+    let t = Routed::new().pages(
+        "/user/repos?",
+        vec![(
+            200,
+            body.as_str(),
+            Some("https://api.github.com/user/repos?page=2"),
+        )],
+    );
+    let listing = wizard::recent_projects(
+        &gh_client(t.clone()),
+        Provider::Github,
+        &TokenKind::Unknown,
+        "https://api.github.com",
+    )
+    .await
+    .unwrap();
+    let RecentListing::Projects {
+        projects,
+        listed_by,
+    } = listing
+    else {
+        panic!("{listing:?}")
+    };
+    assert_eq!(ids(&projects), vec![2, 3, 1, 4]);
+    assert_eq!(ticked(&projects), vec![2, 3, 1]);
+    assert_eq!(listed_by.provider, Provider::Github);
+    assert_eq!(listed_by.origin, "https://api.github.com");
+    assert_eq!(
+        t.seen()
+            .iter()
+            .filter(|p| p.starts_with("/user/repos"))
+            .count(),
+        1
+    );
+}
+
+/// ⚠️ An absent or unreadable timestamp is not invented: the row keeps `None`
+/// (the UI then shows no "active" label) and ranks after every dated row,
+/// keeping the API's order among its kind.
+#[test]
+fn an_absent_timestamp_stays_absent_and_ranks_last() {
+    let summary = |id: u64, active: Option<&str>| wizard::ProjectSummary {
+        id,
+        path: format!("g/p{id}"),
+        name: None,
+        default_branch: Some("main".into()),
+        web_url: None,
+        last_activity_at: active.map(str::to_string),
+    };
+    let ranked = wizard::rank_recent(vec![
+        summary(1, None),
+        summary(2, Some("not a time")),
+        summary(3, Some("2026-11-01T00:00:00+02:00")),
+        summary(4, Some("2026-10-31T23:00:00Z")),
+    ]);
+    // 3 is 22:00Z on the 31st, an hour BEFORE 4: the offset is read.
+    assert_eq!(ids(&ranked), vec![4, 3, 1, 2]);
+    assert_eq!(ranked[2].project.last_activity_at, None);
+    assert_eq!(ticked(&ranked), vec![4, 3, 1]);
+    assert!(wizard::rank_recent(Vec::new()).is_empty(), "empty is empty");
+}
+
+/// A token that cannot list gets no list and no error: the step-by-step
+/// wizard still works for it. A project token is not even asked.
+#[tokio::test]
+async fn a_token_that_cannot_list_gets_no_one_click_list() {
+    let t = Routed::new();
+    let listing = wizard::recent_projects(
+        &client(t.clone()),
+        Provider::Gitlab,
+        &TokenKind::Project {
+            project_id: Some(7),
+        },
+        "https://gitlab.com",
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(listing, RecentListing::Unlisted { .. }),
+        "{listing:?}"
+    );
+    assert!(t.seen().is_empty());
+    for status in [403u16, 404] {
+        let t = Routed::new().route("/projects?", status, "{}");
+        let listing = wizard::recent_projects(
+            &client(t),
+            Provider::Gitlab,
+            &TokenKind::Personal,
+            "https://gitlab.com",
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(listing, RecentListing::Unlisted { .. }),
+            "{status}"
+        );
+    }
+    let t = Routed::new().route("/projects?", 401, "{}");
+    assert!(matches!(
+        wizard::recent_projects(
+            &client(t),
+            Provider::Gitlab,
+            &TokenKind::Personal,
+            "https://gitlab.com"
+        )
+        .await,
+        Err(WizardError::Unauthorized { .. })
+    ));
+}
+
+fn gitlab_com() -> ListedBy {
+    ListedBy::for_instance(Provider::Gitlab, "https://gitlab.com").unwrap()
+}
+
+fn quick(id: u64, path: &str, marker: Option<&str>) -> QuickWatch {
+    QuickWatch {
+        project: ProjectRef::Id(id),
+        path: path.into(),
+        ref_name: "main".into(),
+        deploy_markers: marker.map(|m| vec![m.to_string()]).unwrap_or_default(),
+        listed_by: gitlab_com(),
+    }
+}
+
+/// The answers a one-click setup sends: the account, and N watches.
+fn quick_answers(watches: Vec<QuickWatch>) -> WizardAnswers {
+    WizardAnswers {
+        project: None,
+        watch_id: String::new(),
+        ref_name: String::new(),
+        deploy_markers: Vec::new(),
+        schedule_watch: false,
+        preflight_ref: None,
+        watches,
+        ..answers()
+    }
+}
+
+/// Every ticked watch is in the ONE text the save writes: the first is the
+/// primary, the rest are secondary, each with its own id, branch and the
+/// marker the deploy ranking picked.
+#[test]
+fn one_click_builds_every_ticked_watch_into_one_config() {
+    let built = wizard::build_config(
+        &quick_answers(vec![
+            quick(11, "g/web", Some("deploy:production")),
+            quick(9, "g/api", None),
+            quick(8, "g/docs-site", Some("pages")),
+        ]),
+        None,
+    )
+    .unwrap();
+    let cfg = load(&built.toml);
+    let got: Vec<_> = cfg
+        .watches
+        .iter()
+        .map(|w| {
+            (
+                w.id.as_str(),
+                w.account.as_str(),
+                w.project.clone(),
+                w.ref_pattern.as_str(),
+                w.role,
+                w.deploy_markers.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "web-main",
+                "gitlab",
+                ProjectRef::Id(11),
+                "main",
+                Role::Primary,
+                vec!["deploy:production".to_string()]
+            ),
+            (
+                "api-main",
+                "gitlab",
+                ProjectRef::Id(9),
+                "main",
+                Role::Secondary,
+                vec![]
+            ),
+            (
+                "docs-site-main",
+                "gitlab",
+                ProjectRef::Id(8),
+                "main",
+                Role::Secondary,
+                vec!["pages".to_string()]
+            ),
+        ]
+    );
+    assert_eq!(built.added, vec!["web-main", "api-main", "docs-site-main"]);
+    assert!(built.already_watched.is_empty());
+    assert_eq!(built.secondary_because, None);
+    // No schedule or preflight watch rides along, whatever the answers say.
+    assert_eq!(cfg.watches.len(), 3);
+}
+
+/// ⛔ All or nothing: one watch the core cannot load refuses the whole set,
+/// so no write can carry two of three.
+#[test]
+fn one_bad_watch_refuses_the_whole_set() {
+    let mut bad = quick(9, "g/api", None);
+    bad.ref_name = String::new();
+    let err = wizard::build_config(
+        &quick_answers(vec![
+            quick(11, "g/web", None),
+            bad,
+            quick(8, "g/docs", None),
+        ]),
+        None,
+    )
+    .unwrap_err();
+    let WizardError::Answers(issues) = &err else {
+        panic!("{err:?}")
+    };
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].step, WizardStep::Account);
+    assert_eq!(issues[0].field, "watches");
+    assert!(issues[0].message.contains("g/api"), "{}", issues[0].message);
+}
+
+/// Running the one-click setup again over its own result adds nothing and
+/// changes nothing; a watch the file has by PATH, or under another account on
+/// the same server, counts as already watched too.
+#[test]
+fn re_running_one_click_never_duplicates_a_watch() {
+    let picks = vec![quick(11, "g/web", None), quick(9, "g/api", None)];
+    let first = wizard::build_config(&quick_answers(picks.clone()), None)
+        .unwrap()
+        .toml;
+    let again = wizard::build_config(&quick_answers(picks), Some(&first)).unwrap();
+    assert_eq!(again.toml, first, "a re-run rewrote the file");
+    assert!(again.added.is_empty());
+    assert_eq!(again.already_watched, vec!["web-main", "api-main"]);
+
+    // A hand-written file: g/web by path, g/api under another account on
+    // gitlab.com, and an unrelated watch already holding the id `docs-main`.
+    let existing = r#"
+[accounts.gitlab]
+base_url = "https://gitlab.com"
+token = { keyring = { service = "glab:gitlab.com:token", user = "" } }
+
+[accounts.work]
+base_url = "https://GitLab.com/"
+token = { env = "WORK_TOKEN" }
+
+[[watches]]
+id = "mine"
+account = "gitlab"
+project = "G/Web"
+ref = "main"
+deploy_markers = ["deploy"]
+
+[[watches]]
+id = "theirs"
+account = "work"
+project = 9
+ref = "main"
+role = "secondary"
+
+[[watches]]
+id = "docs-main"
+account = "gitlab"
+project = 1
+ref = "main"
+role = "secondary"
+"#;
+    let built = wizard::build_config(
+        &quick_answers(vec![
+            quick(11, "g/web", None),
+            quick(9, "g/api", None),
+            quick(8, "g/docs", None),
+            // The same project twice in one list is one watch.
+            quick(8, "g/docs", None),
+        ]),
+        Some(existing),
+    )
+    .unwrap();
+    assert_eq!(built.already_watched, vec!["mine", "theirs"]);
+    assert_eq!(built.added, vec!["docs-main-2"], "the id is made unique");
+    assert_eq!(built.secondary_because.as_deref(), Some("mine"));
+    let cfg = load(&built.toml);
+    assert_eq!(cfg.watches.len(), 4);
+    let docs = cfg.watches.iter().find(|w| w.id == "docs-main-2").unwrap();
+    assert_eq!(docs.project, ProjectRef::Id(8));
+    assert_eq!(docs.role, Role::Secondary, "the file already has a primary");
+    assert!(
+        built.toml.starts_with(existing),
+        "the existing text is kept byte for byte:\n{}",
+        built.toml
+    );
+}
+
+/// ⛔ A watch binds only to the account that listed it. A list made on one
+/// server (or by the other provider) is refused for an account written with
+/// another, and nothing is built.
+#[test]
+fn a_one_click_watch_binds_only_to_the_account_that_listed_it() {
+    let mut elsewhere = quick(11, "g/web", None);
+    elsewhere.listed_by =
+        ListedBy::for_instance(Provider::Gitlab, "https://gitlab.example.com").unwrap();
+    let mut other_provider = quick(9, "g/api", None);
+    other_provider.listed_by = ListedBy {
+        provider: Provider::Github,
+        origin: "https://gitlab.com".into(),
+    };
+    let err = wizard::build_config(
+        &quick_answers(vec![elsewhere, other_provider, quick(8, "g/docs", None)]),
+        None,
+    )
+    .unwrap_err();
+    let issues = err.step_issues();
+    assert_eq!(issues.len(), 2, "{issues:?}");
+    assert!(issues.iter().all(|i| i.field == "watches"));
+    assert!(
+        issues[0].message.contains("https://gitlab.example.com"),
+        "{}",
+        issues[0].message
+    );
+
+    // The same list, for the account it was made by, builds; a base_url
+    // spelled differently is the same server.
+    let mut answers = quick_answers(vec![quick(11, "g/web", None)]);
+    answers.base_url = "https://GitLab.com:443/".into();
+    assert!(wizard::build_config(&answers, None).is_ok());
+
+    // GitHub: a repository is written as owner/repo, never an id.
+    let gh = ListedBy::for_instance(Provider::Github, "https://api.github.com").unwrap();
+    let mut answers = WizardAnswers {
+        watches: vec![QuickWatch {
+            project: ProjectRef::Id(5),
+            path: "acme/web".into(),
+            ref_name: "main".into(),
+            deploy_markers: Vec::new(),
+            listed_by: gh.clone(),
+        }],
+        project: None,
+        workflow: None,
+        ..gh_answers()
+    };
+    assert!(wizard::build_config(&answers, None).is_err());
+    answers.watches[0].project = ProjectRef::Path("acme/web".into());
+    let cfg = load(&wizard::build_config(&answers, None).unwrap().toml);
+    assert_eq!(cfg.watches[0].project, ProjectRef::Path("acme/web".into()));
+    assert_eq!(cfg.watches[0].account, "github");
+}
+
+/// ⛔ The save is ONE atomic write of the whole text: a failure part way
+/// through (some bytes of the sibling written, then an error) leaves the old
+/// config byte-identical and no temporary file behind.
+#[test]
+fn a_write_that_fails_part_way_leaves_the_old_config_byte_identical() {
+    let dir = std::env::temp_dir().join(format!("bw-oneclick-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    let old = wizard::build_config(&answers(), None).unwrap().toml;
+    std::fs::write(&path, &old).unwrap();
+
+    let built = wizard::build_config(
+        &quick_answers(vec![
+            quick(11, "g/web", None),
+            quick(9, "g/api", None),
+            quick(8, "g/docs", None),
+        ]),
+        Some(&old),
+    )
+    .unwrap();
+    assert_eq!(built.added.len(), 3);
+
+    let mut calls = 0;
+    let result = config::write_atomic_with(&path, &built.toml, |temp, text| {
+        calls += 1;
+        std::fs::write(temp, &text[..text.len() / 2])?;
+        Err(std::io::Error::other("disk full"))
+    });
+    assert!(result.is_err());
+    assert_eq!(calls, 1, "one write for every watch");
+    assert_eq!(std::fs::read(&path).unwrap(), old.as_bytes());
+    let leftovers: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "config.toml")
+        .collect();
+    assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+
+    // And the same write that does not fail lands all three at once.
+    config::write_atomic(&path, &built.toml).unwrap();
+    assert_eq!(
+        load(&std::fs::read_to_string(&path).unwrap()).watches.len(),
+        6
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The wire shapes the webview reads and sends.
+#[test]
+fn the_one_click_shapes_are_the_ones_api_ts_reads() {
+    let listing = RecentListing::Projects {
+        projects: wizard::rank_recent(vec![wizard::ProjectSummary {
+            id: 1,
+            path: "g/a".into(),
+            name: None,
+            default_branch: Some("main".into()),
+            web_url: None,
+            last_activity_at: None,
+        }]),
+        listed_by: gitlab_com(),
+    };
+    assert_eq!(
+        serde_json::to_value(&listing).unwrap(),
+        serde_json::json!({
+            "mode": "projects",
+            "projects": [{
+                "id": 1, "path": "g/a", "name": null, "default_branch": "main",
+                "web_url": null, "last_activity_at": null, "ticked": true
+            }],
+            "listed_by": {"provider": "gitlab", "origin": "https://gitlab.com"}
+        })
+    );
+    let unlisted = RecentListing::Unlisted { reason: "r".into() };
+    assert_eq!(
+        serde_json::to_value(&unlisted).unwrap(),
+        serde_json::json!({"mode": "unlisted", "reason": "r"})
+    );
+    let answers: WizardAnswers = serde_json::from_value(serde_json::json!({
+        "account": "gitlab", "base_url": "https://gitlab.com", "token": {"own": true},
+        "watches": [{
+            "project": 11, "path": "g/web", "ref_name": "main",
+            "listed_by": {"provider": "gitlab", "origin": "https://gitlab.com"}
+        }]
+    }))
+    .unwrap();
+    assert_eq!(answers.watches[0].deploy_markers, Vec::<String>::new());
+    assert!(wizard::build_config(&answers, None).is_ok());
 }

@@ -5,19 +5,19 @@ pub mod cache;
 pub mod planner;
 pub mod policy;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 pub use cache::{CacheEntry, PipelineCache};
 pub use planner::{PipelinePlan, Plan};
 pub use policy::{MAX_RETRY_AFTER, POLL_NOW_MIN_GAP, PollNow, PollPolicy};
 
-use crate::client::{CiClient, ClientError, ListQuery, RequestRing, in_order};
+use crate::client::{AnnotationAnswer, CiClient, ClientError, ListQuery, RequestRing, in_order};
 use crate::config::{Config, JobsMode, ProjectRef, Provider, Role, Watch, WatchRules};
 use crate::eta::EtaHistory;
 use crate::model::{Bridge, Pipeline, PipelineDetail};
-use crate::notify::{Notification, NotifyLedger, notifications_for};
-use crate::status::Status;
+use crate::notify::{Notification, NotifyLedger, notifications_for, token_notifications};
+use crate::status::{JobClass, Status};
 use crate::verdict::{
     DetailSource, PipelineView, Snapshot, VerdictScript, WatchView, evaluate_pipeline,
 };
@@ -31,6 +31,28 @@ pub struct Tick {
     pub notifications: Vec<Notification>,
     /// How long to wait before the next tick.
     pub next_interval: std::time::Duration,
+    /// Each watch whose LIST request failed this tick, by id, with the error
+    /// as it was raised. The view carries the same error as text, for
+    /// display; this is for a caller that has to tell a refused token or a
+    /// missing project (which no retry will fix) from a timeout or a 503.
+    pub list_errors: BTreeMap<String, ClientError>,
+    /// The watches whose list request was actually SENT this tick. Not one
+    /// sitting out a backoff, and not one whose account is unknown. Whether
+    /// it worked is [`Self::list_errors`].
+    pub polled: BTreeSet<String>,
+}
+
+/// What [`Poller::look_up_commit`] found for one commit on one watch.
+#[derive(Debug, Clone)]
+pub enum CommitLookup {
+    /// The project has no pipeline for this commit that the watch would show
+    /// (by ref and source), or no such commit at all. Yet: a fresh push may
+    /// still be on its way.
+    NotFound,
+    /// Its newest pipeline was skipped: it ran nothing, so it has no verdict.
+    Skipped(Box<Pipeline>),
+    /// Its newest pipeline that ran, judged as a row of the watch would be.
+    Found(Box<PipelineView>),
 }
 
 /// One watch's runtime state.
@@ -85,6 +107,38 @@ pub struct Poller {
     /// interval before it knows this tick's answer, and last tick's is the only
     /// honest guess.
     last_any_live: bool,
+    /// The accounts [`Poller::from_config_per_account`] built a refusing
+    /// client for, because their credential failed. Empty otherwise.
+    refused: Vec<String>,
+    /// What [`Poller::retry_refused`] needs to build one account's client
+    /// again. `None` for a poller built from ready clients.
+    retry: Option<Retry>,
+    /// The accounts whose token's expiry is still to be asked for: GitLab
+    /// tokens, whose `expires_at` costs one request (F3). Each is asked once
+    /// and taken off; one whose answer was "later" (a rate limit, a 5xx, the
+    /// network) is asked again next tick.
+    expiry_due: BTreeSet<String>,
+    /// Each account's [`crate::health::Observed::accepted`] count as of the
+    /// last tick, to tell whether an answer accepted it since.
+    accepted_seen: HashMap<String, u64>,
+}
+
+/// How a client's transport is made, per account: the network's
+/// ([`ReqwestTransport`](crate::client::ReqwestTransport) on the account's
+/// timeout), or one a test supplies.
+type MakeTransport = Arc<
+    dyn Fn(&crate::config::Account) -> Result<Arc<dyn crate::client::Transport>, ClientError>
+        + Send
+        + Sync,
+>;
+
+/// Everything needed to build a refused account's client again, in place.
+struct Retry {
+    /// The polled accounts, as the configuration said when the poller was
+    /// built. A retry never reads the file: a changed file is a reload.
+    accounts: BTreeMap<String, crate::config::Account>,
+    store: Arc<dyn crate::token::TokenProvider>,
+    transport: MakeTransport,
 }
 
 impl Poller {
@@ -153,6 +207,10 @@ impl Poller {
             clock: Arc::new(chrono::Utc::now),
             sender,
             last_any_live: false,
+            refused: Vec::new(),
+            retry: None,
+            expiry_due: BTreeSet::new(),
+            accepted_seen: HashMap::new(),
         })
     }
 
@@ -170,6 +228,53 @@ impl Poller {
     where
         P: crate::token::TokenProvider + Clone + 'static,
     {
+        Self::build(config, provider, false, network_transport())
+    }
+
+    /// [`Poller::from_config`], where an account whose token cannot be
+    /// resolved fails only its own watches: the app's poller.
+    ///
+    /// ⛔ D4. One account's token error used to stop the whole poller: the
+    /// icon went to unknown, every account stopped, and the strip read
+    /// "cannot start polling". Now that account gets a client whose every
+    /// request is refused with [`ClientError::Token`] before anything is
+    /// sent, so its watches carry the error and the others keep polling, as
+    /// an account that is not signed in always has. The CLI keeps
+    /// [`Poller::from_config`], where the same error is exit 70.
+    pub fn from_config_per_account<P>(config: &Config, provider: &P) -> Result<Self, PollerError>
+    where
+        P: crate::token::TokenProvider + Clone + 'static,
+    {
+        Self::build(config, provider, true, network_transport())
+    }
+
+    /// [`Poller::from_config_per_account`] over one transport the caller
+    /// supplies for every account: a script, in a test.
+    pub fn from_config_per_account_on<P>(
+        config: &Config,
+        provider: &P,
+        transport: Arc<dyn crate::client::Transport>,
+    ) -> Result<Self, PollerError>
+    where
+        P: crate::token::TokenProvider + Clone + 'static,
+    {
+        Self::build(
+            config,
+            provider,
+            true,
+            Arc::new(move |_: &crate::config::Account| Ok(transport.clone())),
+        )
+    }
+
+    fn build<P>(
+        config: &Config,
+        provider: &P,
+        per_account: bool,
+        transport: MakeTransport,
+    ) -> Result<Self, PollerError>
+    where
+        P: crate::token::TokenProvider + Clone + 'static,
+    {
         let ring = RequestRing::new(config.log.keep_requests);
         let mut clients = BTreeMap::new();
         let store: Arc<dyn crate::token::TokenProvider> = Arc::new(provider.clone());
@@ -181,15 +286,118 @@ impl Poller {
         // watch names has no client, which is exactly what a watch naming an
         // account that does not exist already gets.
         let used: HashSet<&str> = config.watches.iter().map(|w| w.account.as_str()).collect();
+        let mut refused = Vec::new();
+        let mut polled = BTreeMap::new();
         for (name, account) in config
             .accounts
             .iter()
             .filter(|(name, _)| used.contains(name.as_str()))
         {
-            let client = client_for_account(name, account, None, store.clone(), ring.clone())?;
+            let made = account_client(name, account, &store, &ring, &transport);
+            let client = match made {
+                Ok(client) => client,
+                Err(failure) if per_account => {
+                    let client = refusal(name, account, failure, &ring)?;
+                    refused.push(name.clone());
+                    client
+                }
+                Err(e) => return Err(e),
+            };
             clients.insert(name.clone(), client);
+            polled.insert(name.clone(), account.clone());
         }
-        Self::with_clients(config, clients, ring).map_err(PollerError::Config)
+        let mut poller = Self::with_clients(config, clients, ring).map_err(PollerError::Config)?;
+        poller.expiry_due = poller
+            .clients
+            .keys()
+            .filter(|name| !refused.contains(name))
+            .filter(|name| {
+                config
+                    .accounts
+                    .get(*name)
+                    .is_some_and(expiry_costs_a_request)
+            })
+            .cloned()
+            .collect();
+        poller.refused = refused;
+        poller.retry = per_account.then_some(Retry {
+            accounts: polled,
+            store,
+            transport,
+        });
+        Ok(poller)
+    }
+
+    /// The accounts whose credential failed, and whose every request is
+    /// refused: since the poller was built, or since the last
+    /// [`Poller::retry_refused`] that still could not resolve them.
+    pub fn refused_accounts(&self) -> &[String] {
+        &self.refused
+    }
+
+    /// Resolve the credential of each refused account again, and swap in the
+    /// real client of every one that now resolves.
+    ///
+    /// ⛔ In place. Every watch keeps its state (backoff, `retry_after`, the
+    /// pipeline cache and the last view), the healthy accounts' and the
+    /// recovered account's alike; only a client changes. Some causes of a
+    /// refusal pass on their own (a locked keychain, a Secret Service not up
+    /// yet at login, a command that timed out, a token saved since), and
+    /// rebuilding the whole poller for them wiped every other account's
+    /// backoff and cache each time. An account still refused keeps a refusing
+    /// client, with the latest reason, and sends nothing.
+    ///
+    /// Returns the accounts that recovered. ⚠️ Blocking, like building: it
+    /// reads the credential store or runs a token command.
+    pub fn retry_refused(&mut self) -> Vec<String> {
+        let Some(retry) = &self.retry else {
+            return Vec::new();
+        };
+        let mut recovered = Vec::new();
+        let mut still = Vec::new();
+        for name in std::mem::take(&mut self.refused) {
+            let Some(account) = retry.accounts.get(&name) else {
+                continue;
+            };
+            let made = account_client(&name, account, &retry.store, &self.ring, &retry.transport);
+            let client = match made {
+                Ok(client) => {
+                    tracing::info!(account = %name, "the account's credential resolves again");
+                    recovered.push(name.clone());
+                    client
+                }
+                Err(failure) => match refusal(&name, account, failure, &self.ring) {
+                    Ok(client) => {
+                        still.push(name.clone());
+                        client
+                    }
+                    // Not a credential failure (a transport that cannot be
+                    // built): keep the refusing client already in place.
+                    _ => {
+                        still.push(name);
+                        continue;
+                    }
+                },
+            };
+            self.clients.insert(name, client);
+        }
+        self.refused = still;
+        // ⚠ The one thing a recovery changes besides the client: the
+        // recovered account's watches backed off on refusals the poller made
+        // itself, which no server asked for, so that backoff is forgotten and
+        // they poll on the next tick. Their cache and last view are kept, and
+        // every other watch is untouched.
+        for state in &mut self.watches {
+            if recovered.contains(&state.watch.account) {
+                state.policy.forget_refusals();
+            }
+        }
+        for name in &recovered {
+            if retry.accounts.get(name).is_some_and(expiry_costs_a_request) {
+                self.expiry_due.insert(name.clone());
+            }
+        }
+        recovered
     }
 
     /// The client each account polls through, by account name.
@@ -255,6 +463,8 @@ impl Poller {
         let mut views = Vec::with_capacity(self.watches.len());
         let mut notifications = Vec::new();
         let mut errors = Vec::new();
+        let mut list_errors = BTreeMap::new();
+        let mut polled_ids = BTreeSet::new();
 
         // What each watch does this tick, decided before anything is sent.
         enum Turn {
@@ -282,6 +492,73 @@ impl Poller {
             })
             .collect();
 
+        // The per-account lookups of this tick (F3), before the watches run:
+        // a GitLab token's expiry (once per account, so the first tick knows
+        // it), and who each account's `mine` watches are held to (once per
+        // account per tick, so a failing `/user` is one failure for all of
+        // them, cubic #66). Only for an account with a watch polling this
+        // tick: one sitting out a backoff is asked nothing extra.
+        //
+        // ⛔ Side by side across accounts (cubic, #67), through `in_order`, so
+        // the request log records them in account order whatever answers
+        // first, and the results are applied in that order after the join.
+        // Within one account they are sequential: see below.
+        let polling: BTreeSet<&str> = self
+            .watches
+            .iter()
+            .zip(&turns)
+            .filter(|(_, turn)| matches!(turn, Turn::Poll))
+            .map(|(state, _)| state.watch.account.as_str())
+            .collect();
+        let wants_owner: BTreeSet<&str> = self
+            .watches
+            .iter()
+            .zip(&turns)
+            .filter(|(state, turn)| state.watch.mine && matches!(turn, Turn::Poll))
+            .map(|(state, _)| state.watch.account.as_str())
+            .collect();
+        let expiry_due = &self.expiry_due;
+        let lookups = self.clients.iter().filter_map(|(name, client)| {
+            let expiry = expiry_due.contains(name) && polling.contains(name.as_str());
+            let owner = wants_owner.contains(name.as_str());
+            (expiry || owner).then_some(async move {
+                // ⛔ One after the other within an account: the expiry
+                // lookup's ignored 401 puts the refusal back as it was before
+                // it, and a `/user` 401 landing in between would be erased by
+                // that (Seer and cubic, #67). Accounts still run side by side.
+                let expiry = match expiry {
+                    true => Some(client.read_token_expiry().await),
+                    false => None,
+                };
+                let owner = match owner {
+                    true => Some(client.owner().await),
+                    false => None,
+                };
+                (name.clone(), expiry, owner)
+            })
+        });
+        let answers = in_order(lookups).await;
+        let mut owners: HashMap<String, Result<String, ClientError>> = HashMap::new();
+        for (name, expiry, owner) in answers {
+            match expiry {
+                Some(Err(e)) if e.should_back_off() => {
+                    tracing::debug!(account = %name, error = %e, "the token's expiry was not read; asked again later");
+                }
+                Some(Err(e)) => {
+                    tracing::debug!(account = %name, error = %e, "the token's expiry cannot be read; not asked again");
+                    self.expiry_due.remove(&name);
+                }
+                Some(Ok(())) => {
+                    self.expiry_due.remove(&name);
+                }
+                None => {}
+            }
+            if let Some(answer) = owner {
+                owners.insert(name, answer);
+            }
+        }
+        let owners = &owners;
+
         // ⛔ Every polled watch runs at once, and everything a watch's result
         // touches outside its own state (the errors, the transition log, the
         // notifications and the ledger they are recorded in) is applied
@@ -289,6 +566,7 @@ impl Poller {
         // what the popover's rows, the notification order and the debug pane's
         // ring all follow; it must not become the order the responses arrived
         // in. Two watches on one account share that client's in-flight bound.
+
         let clients = &self.clients;
         let script = self.script.as_deref();
         let polled = in_order(
@@ -298,7 +576,12 @@ impl Poller {
                 .filter(|(_, turn)| matches!(turn, Turn::Poll))
                 .filter_map(|(state, _)| {
                     let client = clients.get(&state.watch.account)?;
-                    Some(async move { poll_watch(client.as_ref(), state, script).await })
+                    let owner = state
+                        .watch
+                        .mine
+                        .then(|| owners.get(&state.watch.account).cloned())
+                        .flatten();
+                    Some(async move { poll_watch(client.as_ref(), state, script, owner).await })
                 }),
         )
         .await;
@@ -339,9 +622,17 @@ impl Poller {
                     }
                 }
                 Turn::Poll => {
-                    let Some(mut view) = polled.next() else {
+                    let Some((mut view, list_error, sent)) = polled.next() else {
                         continue;
                     };
+                    // Only when the list request went out: a `mine` watch
+                    // whose owner could not be read sent nothing.
+                    if sent {
+                        polled_ids.insert(state.watch.id.clone());
+                    }
+                    if let Some(e) = list_error {
+                        list_errors.insert(state.watch.id.clone(), e);
+                    }
                     // ⛔ Here, in configuration order, and never inside
                     // `poll_watch`: the history is shared by every watch, and
                     // the concurrent half may touch nothing but its own
@@ -360,6 +651,38 @@ impl Poller {
                 }
             }
         }
+
+        // Token health (F3), from what this tick's and earlier requests showed:
+        // no request of its own. A refused account (its credential never
+        // resolved) has sent nothing and says it on its watches already.
+        let now_secs = now.timestamp();
+        let mut tokens = Vec::new();
+        let mut healthy = Vec::new();
+        for (name, client) in &self.clients {
+            if self.refused.contains(name) {
+                continue;
+            }
+            let observed = client.credential();
+            // Healthy for the ledger only when an answer ACCEPTED the
+            // credential this tick, even while an expiry warns (cubic, #66).
+            // ⛔ Not merely "no refusal held": an account that sent nothing,
+            // sat out a backoff or lost its connection has said nothing, and
+            // clearing its persisted refusal would announce it again on the
+            // next 401 (Seer and cubic, #67).
+            let seen = self.accepted_seen.insert(name.clone(), observed.accepted);
+            if observed.refused.is_none() && seen.unwrap_or(0) < observed.accepted {
+                healthy.push(name.clone());
+            }
+            if let Some(health) = crate::health::assess(name, &observed, now_secs) {
+                tokens.push(health);
+            }
+        }
+        notifications.extend(token_notifications(
+            &tokens,
+            &healthy,
+            &mut self.ledger,
+            now_secs,
+        ));
 
         // Only when something was recorded: an idle tick leaves the file alone.
         if let Some(path) = &self.ledger_path
@@ -383,6 +706,7 @@ impl Poller {
             errors,
             last_poll: chrono::Utc::now(),
             request_log: self.ring.entries(),
+            tokens,
         };
 
         let any_live = snapshot.any_live();
@@ -412,7 +736,92 @@ impl Poller {
             snapshot,
             notifications,
             next_interval,
+            list_errors,
+            polled: polled_ids,
         }
+    }
+
+    /// Look one commit's pipelines up DIRECTLY, for `bridgewatch wait`: the
+    /// commit a watch's rows no longer hold (only the newest settled ones are
+    /// kept, and a skipped pipeline never is), or not yet.
+    ///
+    /// `sha` may be abbreviated; it is expanded through the provider first,
+    /// because both match a pipeline's sha in full only. The pipelines are
+    /// held to the watch's ref and sources, as its rows are, and the newest
+    /// one that ran is judged exactly as a row would be: same detail fetch,
+    /// same rules, same script.
+    ///
+    /// ⚠️ Read-only: nothing it fetches enters the watch's cache, its backoff
+    /// or the ledger, so a lookup cannot change what the next tick shows.
+    ///
+    /// # Errors
+    ///
+    /// The first request that failed, as raised. An unknown watch or account
+    /// is [`ClientError::Unsupported`].
+    pub async fn look_up_commit(
+        &self,
+        watch: &str,
+        sha: &str,
+    ) -> Result<CommitLookup, ClientError> {
+        let unsupported = |message: String| ClientError::Unsupported { message };
+        let state = self
+            .watches
+            .iter()
+            .find(|s| s.watch.id == watch)
+            .ok_or_else(|| unsupported(format!("no watch {watch:?}")))?;
+        let client = self
+            .clients
+            .get(&state.watch.account)
+            .ok_or_else(|| unsupported(format!("unknown account {:?}", state.watch.account)))?;
+        let project = &state.watch.project;
+        let full = if sha.len() >= 40 {
+            sha.to_ascii_lowercase()
+        } else {
+            match client.commit_sha(project, sha).await? {
+                Some(full) => full,
+                None => return Ok(CommitLookup::NotFound),
+            }
+        };
+
+        let query = mine(
+            client.as_ref(),
+            &state.watch,
+            list_query(&state.watch, &state.rules),
+        )
+        .await?
+        .for_sha(&full);
+        let mut rows: Vec<Pipeline> = client
+            .list_pipelines(project, &query)
+            .await?
+            .into_iter()
+            // Held to the commit here too: a recorded fixture answers every
+            // list with the same page, whatever it asked for.
+            .filter(|p| p.sha.eq_ignore_ascii_case(&full))
+            .filter(|p| state.rules.ref_matcher.matches(&p.ref_name))
+            .filter(|p| WatchRules::source_matches(&state.watch.sources, p.source.as_deref()))
+            .collect();
+        rows.sort_by_key(|p| std::cmp::Reverse(p.id));
+
+        let Some(row) = rows.iter().find(|p| p.status != Status::Skipped) else {
+            return Ok(match rows.into_iter().next() {
+                Some(skipped) => CommitLookup::Skipped(Box::new(skipped)),
+                None => CommitLookup::NotFound,
+            });
+        };
+        let fetched = fetch_detail(client.as_ref(), project, row, &query, state).await?;
+        // A pipeline missing a child is not judged: "nothing failed" from a
+        // list that is not all there is the B1 mistake. The caller asks again.
+        if let Some(e) = fetched.errors.into_iter().next() {
+            return Err(e);
+        }
+        let (view, _) = evaluate_pipeline(
+            &fetched.detail,
+            DetailSource::Fetched,
+            &state.watch,
+            &state.rules,
+            self.script.as_deref(),
+        );
+        Ok(CommitLookup::Found(Box::new(view)))
     }
 
     /// Poll forever, sleeping the interval each tick asks for.
@@ -555,12 +964,28 @@ async fn poll_watch(
     client: &dyn CiClient,
     state: &mut WatchState,
     script: Option<&VerdictScript>,
-) -> WatchView {
+    owner: Option<Result<String, ClientError>>,
+) -> (WatchView, Option<ClientError>, bool) {
     let project = state.watch.project.clone();
     let query = list_query(&state.watch, &state.rules);
+    // `owner` is `Some` for a `mine` watch only: who to hold the list to,
+    // or why that could not be said (and then no list is sent).
+    let query = match owner {
+        None => Ok(query),
+        Some(Ok(login)) => Ok(query.for_user(Some(&login))),
+        Some(Err(e)) => Err(e),
+    };
+    let sent = query.is_ok();
+    let listed = match query {
+        Ok(query) => client
+            .list_pipelines(&project, &query)
+            .await
+            .map(|rows| (rows, query)),
+        Err(e) => Err(e),
+    };
 
-    let rows = match client.list_pipelines(&project, &query).await {
-        Ok(rows) => rows,
+    let (rows, query) = match listed {
+        Ok(listed) => listed,
         Err(e) => {
             state.policy.on_error(&e);
             let message = match (&e, &state.not_found_hint) {
@@ -571,7 +996,7 @@ async fn poll_watch(
             // intact, so the only thing this tick learned is that one request
             // did not arrive, and the honest way to say that is an error
             // alongside the rows — not `unknown` where a verdict already exists.
-            return match &state.last_view {
+            let view = match &state.last_view {
                 Some(previous) => WatchView {
                     error: Some(message),
                     ..previous.clone()
@@ -587,6 +1012,7 @@ async fn poll_watch(
                     actions: state.actions,
                 },
             };
+            return (view, Some(e), sent);
         }
     };
     state.policy.on_success();
@@ -629,7 +1055,12 @@ async fn poll_watch(
                     state.policy.on_error(e);
                     error.get_or_insert_with(|| e.to_string());
                 }
-                let incomplete = !fetched.errors.is_empty();
+                // ⛔ An annotation that is still owed (a rate limit, a 5xx)
+                // stores the detail as incomplete too, or a pipeline that has
+                // settled would never be asked again and its first failing
+                // line would be missing for good (Seer, #64). It is not an
+                // error: no strip, no backoff, for a nicety.
+                let incomplete = !fetched.errors.is_empty() || fetched.annotations_owed;
                 state.last_bridges.insert(row.id, fetched.bridges);
                 state.cache.insert_partial(row, fetched.detail, incomplete);
             }
@@ -672,16 +1103,20 @@ async fn poll_watch(
         None
     };
 
-    WatchView {
-        id: state.watch.id.clone(),
-        role: state.watch.role,
-        icon_state,
-        rows: views,
-        error,
-        jobs: state.jobs_mode,
-        provider: state.provider,
-        actions: state.actions,
-    }
+    (
+        WatchView {
+            id: state.watch.id.clone(),
+            role: state.watch.role,
+            icon_state,
+            rows: views,
+            error,
+            jobs: state.jobs_mode,
+            provider: state.provider,
+            actions: state.actions,
+        },
+        None,
+        true,
+    )
 }
 
 /// One pipeline's detail, plus whatever went wrong fetching parts of it.
@@ -691,6 +1126,8 @@ async fn poll_watch(
 struct FetchedDetail {
     detail: PipelineDetail,
     errors: Vec<ClientError>,
+    /// A first failing line could not be asked for yet; see [`annotate`].
+    annotations_owed: bool,
     /// The pipeline's own bridges, for `last_bridges` once it is applied.
     bridges: Vec<Bridge>,
 }
@@ -730,7 +1167,7 @@ async fn fetch_detail(
 ) -> Result<FetchedDetail, ClientError> {
     // Through the row and its query rather than the id: see
     // `CiClient::listed_detail`. GitLab's answer is the same two requests.
-    let (jobs, bridges) = client.listed_detail(project, row, query).await?;
+    let (mut jobs, bridges) = client.listed_detail(project, row, query).await?;
 
     // Pipelines whose status has not moved keep their cached jobs; only the ones
     // the planner names are fetched again.
@@ -756,6 +1193,8 @@ async fn fetch_detail(
     // Every pipeline the dive selected, at any level. Doubles as the cycle
     // guard: ids are unique, so seeing one twice means the walk is going round.
     let mut reached: HashSet<u64> = HashSet::new();
+    // The project each reached child lives in, for its annotation.
+    let mut child_projects: HashMap<u64, ProjectRef> = HashMap::new();
 
     for level in 1..=depth {
         // Decide the whole level first, in bridge order, then ask for all of it
@@ -789,12 +1228,14 @@ async fn fetch_detail(
                     .as_ref()
                     .and_then(|d| d.child_bridges.get(&down.id).cloned());
                 let is_due = due.contains(&down.id);
+                let child_project = down
+                    .project_id
+                    .map(ProjectRef::Id)
+                    .unwrap_or_else(|| level_project.clone());
+                child_projects.insert(down.id, child_project.clone());
                 wanted.push(ChildFetch {
                     id: down.id,
-                    project: down
-                        .project_id
-                        .map(ProjectRef::Id)
-                        .unwrap_or_else(|| level_project.clone()),
+                    project: child_project,
                     jobs: is_due,
                     bridges: level < depth && (is_due || nested_previous.is_none()),
                     previous: nested_previous,
@@ -867,6 +1308,16 @@ async fn fetch_detail(
     child_jobs.retain(|id, _| reached.contains(id));
     child_bridges.retain(|id, _| reached.contains(id));
 
+    let annotations_owed = annotate(
+        client,
+        project,
+        &mut jobs,
+        &mut child_jobs,
+        &child_projects,
+        &state.rules,
+    )
+    .await;
+
     Ok(FetchedDetail {
         detail: PipelineDetail {
             pipeline: row.clone(),
@@ -876,8 +1327,77 @@ async fn fetch_detail(
             child_bridges,
         },
         errors,
+        annotations_owed,
         bridges,
     })
+}
+
+/// Attach the first failing line's annotation to each pipeline's first
+/// BLOCKING failure, the parent's and every reached child's (a commit group's
+/// runs are its children), asking the client for those that have none yet.
+/// Returns whether any answer is still owed ([`AnnotationAnswer::Later`]).
+///
+/// ⛔ Chosen here, under the watch's `[watches.jobs]` rules, and not in the
+/// client, which cannot see them: the first raw failed job may be one the
+/// rules ignore or call a warning, and annotating it left the failure the
+/// notification names without a line (Seer, #64). "First" is list order, the
+/// order the verdict's `failures` are in.
+///
+/// Costs nothing on GitLab (the default answer, no request) and nothing on a
+/// later tick on GitHub (the client remembers every answer). A cached child
+/// whose job already has its annotation is not asked at all.
+async fn annotate(
+    client: &dyn CiClient,
+    project: &ProjectRef,
+    jobs: &mut [crate::model::Job],
+    child_jobs: &mut BTreeMap<u64, Vec<crate::model::Job>>,
+    child_projects: &HashMap<u64, ProjectRef>,
+    rules: &WatchRules,
+) -> bool {
+    let first = |list: &[crate::model::Job]| {
+        list.iter()
+            .position(|j| crate::verdict::job::classify(j, rules) == JobClass::BlockingFailure)
+            .filter(|&i| list[i].annotation.is_none())
+    };
+    // (child id, or none for the parent; index of the job; its project)
+    let mut asks: Vec<(Option<u64>, usize, &ProjectRef)> = Vec::new();
+    if let Some(i) = first(jobs) {
+        asks.push((None, i, project));
+    }
+    for (id, list) in child_jobs.iter() {
+        if let (Some(i), Some(child_project)) = (first(list), child_projects.get(id)) {
+            asks.push((Some(*id), i, child_project));
+        }
+    }
+    if asks.is_empty() {
+        return false;
+    }
+    let answers = {
+        let (jobs, child_jobs) = (&*jobs, &*child_jobs);
+        in_order(asks.iter().map(|(child, i, p)| {
+            let job = match child {
+                None => &jobs[*i],
+                Some(id) => &child_jobs[id][*i],
+            };
+            client.failure_annotation(p, job)
+        }))
+        .await
+    };
+    let mut owed = false;
+    for ((child, i, _), answer) in asks.into_iter().zip(answers) {
+        let job = match child {
+            None => &mut jobs[i],
+            Some(id) => match child_jobs.get_mut(&id) {
+                Some(list) => &mut list[i],
+                None => continue,
+            },
+        };
+        match answer {
+            AnnotationAnswer::Known(found) => job.annotation = found,
+            AnnotationAnswer::Later => owed = true,
+        }
+    }
+    owed
 }
 
 /// The client one account is polled through: a real transport, and its
@@ -907,6 +1427,19 @@ pub fn client_for_account(
         crate::client::ReqwestTransport::new(std::time::Duration::from_secs(account.timeout_secs))
             .map_err(PollerError::Client)?,
     );
+    client_for_account_on(name, account, token, store, transport, ring)
+}
+
+/// [`client_for_account`] over a transport the caller supplies: the network's
+/// in [`client_for_account`], a script in a test.
+pub fn client_for_account_on(
+    name: &str,
+    account: &crate::config::Account,
+    token: Option<crate::token::Secret>,
+    store: Arc<dyn crate::token::TokenProvider>,
+    transport: Arc<dyn crate::client::Transport>,
+    ring: RequestRing,
+) -> Result<Arc<dyn CiClient>, PollerError> {
     // ⛔ Through the factory, never by naming a client type: an account whose
     // provider has no client yet fails HERE, loudly, rather than being handed a
     // GitLab client pointed at somebody else's API.
@@ -928,16 +1461,101 @@ pub fn client_for_account(
                 ring,
             )
         }
-        source => {
+        _ => {
             let token = match token {
                 Some(token) => token,
-                None => crate::token::resolve(source, name, store.as_ref())
+                None => crate::token::resolve(name, account, store.as_ref())
                     .map_err(|e| PollerError::Token(name.to_string(), e))?,
             };
             crate::client::client_for(account, &token, transport, ring)
         }
     }
     .map_err(PollerError::Client)
+}
+
+/// The network's transport for an account, on its own timeout.
+fn network_transport() -> MakeTransport {
+    Arc::new(|account: &crate::config::Account| {
+        let transport: Arc<dyn crate::client::Transport> =
+            Arc::new(crate::client::ReqwestTransport::new(
+                std::time::Duration::from_secs(account.timeout_secs),
+            )?);
+        Ok(transport)
+    })
+}
+
+/// One account's client, resolving its credential through `store`: the
+/// one path a build and [`Poller::retry_refused`] share.
+fn account_client(
+    name: &str,
+    account: &crate::config::Account,
+    store: &Arc<dyn crate::token::TokenProvider>,
+    ring: &RequestRing,
+    transport: &MakeTransport,
+) -> Result<Arc<dyn CiClient>, PollerError> {
+    let transport = transport(account).map_err(PollerError::Client)?;
+    client_for_account_on(name, account, None, store.clone(), transport, ring.clone())
+}
+
+/// What a per-account poller does with a failed client build: a credential
+/// failure becomes a refusing client; anything else is returned as the error
+/// it was. The error text is the token error's display, which never holds a
+/// token.
+fn refusal(
+    name: &str,
+    account: &crate::config::Account,
+    failure: PollerError,
+    ring: &RequestRing,
+) -> Result<Arc<dyn CiClient>, PollerError> {
+    let message = match failure {
+        PollerError::Token(_, e) => {
+            tracing::warn!(account = %name, error = %e, "the account's token is not usable");
+            e.to_string()
+        }
+        PollerError::SignIn(_, e) => {
+            tracing::warn!(account = %name, error = %e, "the account cannot sign in");
+            e.to_string()
+        }
+        other => return Err(other),
+    };
+    refused_client(name, account, message, ring.clone())
+}
+
+/// A client for an account whose credential failed: every request is
+/// refused with [`ClientError::Token`], and none leaves the machine.
+fn refused_client(
+    name: &str,
+    account: &crate::config::Account,
+    message: String,
+    ring: RequestRing,
+) -> Result<Arc<dyn CiClient>, PollerError> {
+    let transport = Arc::new(RefusedTransport {
+        account: name.to_string(),
+        message,
+    });
+    crate::client::client_for(account, &crate::token::Secret::new(""), transport, ring)
+        .map_err(PollerError::Client)
+}
+
+/// The transport behind [`refused_client`]: it answers every request with the
+/// same error, without sending it.
+#[derive(Debug)]
+struct RefusedTransport {
+    account: String,
+    message: String,
+}
+
+#[async_trait::async_trait]
+impl crate::client::Transport for RefusedTransport {
+    async fn execute(
+        &self,
+        _request: crate::client::HttpRequest,
+    ) -> Result<crate::client::HttpResponse, ClientError> {
+        Err(ClientError::Token {
+            account: self.account.clone(),
+            message: self.message.clone(),
+        })
+    }
 }
 
 /// Build the list query for a watch.
@@ -973,6 +1591,28 @@ pub fn list_query(watch: &Watch, rules: &WatchRules) -> ListQuery {
         .for_workflow(watch.workflow.as_deref())
         .in_commit_groups(watch.commit_group_window())
         .expecting(watch.expected_workflows())
+}
+
+/// `query`, held to what the credential's owner started when the watch says
+/// `mine = true`: one [`CiClient::owner`] lookup per client, remembered.
+async fn mine(
+    client: &dyn CiClient,
+    watch: &Watch,
+    query: ListQuery,
+) -> Result<ListQuery, ClientError> {
+    if !watch.mine {
+        return Ok(query);
+    }
+    let login = client.owner().await?;
+    Ok(query.for_user(Some(&login)))
+}
+
+/// Whether an account's token expiry costs a request to learn: a GitLab
+/// token that is not a sign-in (F3). A sign-in states its own end, and GitHub
+/// sends its expiry header on every response.
+fn expiry_costs_a_request(account: &crate::config::Account) -> bool {
+    account.provider == Provider::Gitlab
+        && !matches!(account.token, crate::config::TokenSource::Oauth(_))
 }
 
 /// Filter and trim the list rows a watch should show.
@@ -1034,4 +1674,246 @@ pub fn select_rows(rows: &[Pipeline], watch: &Watch, rules: &WatchRules) -> Vec<
         out.push(newest.clone());
     }
     out
+}
+
+#[cfg(test)]
+mod retry_tests {
+    //! [`Poller::retry_refused`]: a refused account is retried in place, and
+    //! nothing else about the poller changes. Nothing here touches a real
+    //! credential store or the network: an in-memory store and a script.
+
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    use super::Poller;
+    use crate::client::{HttpResponse, ScriptTransport};
+    use crate::token::{Secret, TokenError, TokenProvider};
+
+    /// A credential store in memory, shared by clones, so a test can save a
+    /// token into the one the poller holds.
+    #[derive(Clone, Default)]
+    struct Memory(Arc<Mutex<BTreeMap<String, String>>>);
+
+    impl TokenProvider for Memory {
+        fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(service)
+                .cloned()
+                .ok_or_else(|| TokenError::NoEntry {
+                    service: service.into(),
+                    user: user.into(),
+                })
+        }
+        fn keyring_set(&self, service: &str, _: &str, secret: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().insert(service.into(), secret.into());
+            Ok(())
+        }
+        fn keyring_delete(&self, service: &str, _: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().remove(service);
+            Ok(())
+        }
+        fn env(&self, name: &str) -> Option<String> {
+            (name == "TOK").then(|| "glpat-healthy".to_string())
+        }
+        fn run(&self, _: &[String]) -> Result<String, TokenError> {
+            Err(TokenError::Empty)
+        }
+    }
+
+    /// `moved` reads its own entry on gitlab.example.com; `ok` an env token.
+    const BOTH: &str = r#"
+        [accounts.moved]
+        base_url = "https://gitlab.example.com"
+        token = { own = true }
+
+        [accounts.ok]
+        token = { env = "TOK" }
+
+        [[watches]]
+        id = "broken"
+        account = "moved"
+        project = 2
+
+        [[watches]]
+        id = "fine"
+        account = "ok"
+        project = 1
+        role = "secondary"
+        "#;
+
+    fn config(raw: &str) -> crate::Config {
+        toml::from_str(raw).expect("the table deserialises")
+    }
+
+    /// A store whose `moved` token was saved for gitlab.com: refused for good.
+    fn bound_elsewhere() -> Memory {
+        let store = Memory::default();
+        crate::token::set_own_token(
+            "moved",
+            "https://gitlab.com",
+            &Secret::new("glpat-A"),
+            &store,
+        )
+        .unwrap();
+        store
+    }
+
+    /// Everything a watch keeps between ticks, as one comparable string.
+    fn kept(poller: &Poller, id: &str) -> String {
+        let state = poller
+            .watches
+            .iter()
+            .find(|w| w.watch.id == id)
+            .expect("the watch exists");
+        format!(
+            "{:?} | {:?} | {:?}",
+            state.policy, state.cache, state.last_view
+        )
+    }
+
+    fn requests_for(t: &ScriptTransport, project: u64) -> usize {
+        let marker = format!("/projects/{project}/");
+        t.requests()
+            .iter()
+            .filter(|r| r.url.contains(&marker))
+            .count()
+    }
+
+    /// (a) A retry pass leaves every watch exactly as it was: the healthy
+    /// account's backoff, `retry_after` and cached view survive, while the
+    /// other account stays refused.
+    #[tokio::test]
+    async fn a_retry_pass_keeps_every_watchs_state() {
+        let t = Arc::new(ScriptTransport::new());
+        t.reply("/projects/1/pipelines", 200, "[]");
+        t.reply_with(
+            "/projects/1/pipelines",
+            HttpResponse {
+                retry_after: Some(60),
+                ..HttpResponse::plain(429, "{}")
+            },
+        );
+        let mut poller =
+            Poller::from_config_per_account_on(&config(BOTH), &bound_elsewhere(), t.clone())
+                .unwrap();
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        poller.tick().await; // fine: a view
+        poller.tick().await; // fine: a 429, kept beside that view
+
+        let fine = poller
+            .watches
+            .iter()
+            .find(|w| w.watch.id == "fine")
+            .unwrap();
+        assert_eq!(fine.policy.consecutive_errors(), 1);
+        assert!(format!("{:?}", fine.policy).contains("retry_after: Some(60s)"));
+        assert!(fine.last_view.is_some());
+        let before = (kept(&poller, "fine"), kept(&poller, "broken"));
+
+        for _ in 0..3 {
+            assert!(poller.retry_refused().is_empty());
+        }
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        assert_eq!(
+            (kept(&poller, "fine"), kept(&poller, "broken")),
+            before,
+            "a retry pass changes no watch's state"
+        );
+    }
+
+    /// (b) A refused account becomes usable once its token is saved, without
+    /// a reload, and its watches then poll; the other account's state is kept.
+    #[tokio::test]
+    async fn a_refused_account_recovers_in_place_once_its_token_is_saved() {
+        let store = Memory::default(); // nothing stored for `moved` yet
+        let t = Arc::new(ScriptTransport::new());
+        t.reply("/projects/1/pipelines", 200, "[]");
+        let mut poller =
+            Poller::from_config_per_account_on(&config(BOTH), &store, t.clone()).unwrap();
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        let tick = poller.tick().await;
+        let broken = tick
+            .snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == "broken")
+            .unwrap();
+        assert!(
+            broken
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("account moved:"),
+            "{:?}",
+            broken.error
+        );
+        let fine_before = kept(&poller, "fine");
+
+        crate::token::set_own_token(
+            "moved",
+            "https://gitlab.example.com",
+            &Secret::new("glpat-B"),
+            &store,
+        )
+        .unwrap();
+        let broken_view = poller
+            .watches
+            .iter()
+            .find(|w| w.watch.id == "broken")
+            .map(|w| format!("{:?} | {:?}", w.cache, w.last_view))
+            .unwrap();
+        assert_eq!(poller.retry_refused(), ["moved"]);
+        assert!(poller.refused_accounts().is_empty());
+        assert_eq!(kept(&poller, "fine"), fine_before);
+        // The recovered watch keeps its cache and last view; only the backoff
+        // its own refusals caused is forgotten.
+        let broken = poller
+            .watches
+            .iter()
+            .find(|w| w.watch.id == "broken")
+            .unwrap();
+        assert_eq!(
+            format!("{:?} | {:?}", broken.cache, broken.last_view),
+            broken_view
+        );
+        assert_eq!(broken.policy.consecutive_errors(), 0);
+
+        t.reply("/projects/2/pipelines", 200, "[]");
+        t.reply("/projects/1/pipelines", 200, "[]");
+        let tick = poller.tick().await;
+        assert_eq!(requests_for(&t, 2), 1, "the recovered account polled");
+        let broken = tick
+            .snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == "broken")
+            .unwrap();
+        assert_eq!(broken.error, None);
+    }
+
+    /// (c) An account that stays refused sends nothing, however many passes
+    /// and ticks go by.
+    #[tokio::test]
+    async fn a_permanently_refused_account_makes_no_request() {
+        let raw = BOTH.split("[accounts.ok]").next().unwrap().to_string()
+            + "\n[[watches]]\nid = \"broken\"\naccount = \"moved\"\nproject = 2\n";
+        let t = Arc::new(ScriptTransport::new());
+        let mut poller =
+            Poller::from_config_per_account_on(&config(&raw), &bound_elsewhere(), t.clone())
+                .unwrap();
+        for _ in 0..4 {
+            assert!(poller.retry_refused().is_empty());
+            let tick = poller.tick().await;
+            let error = tick.snapshot.watches[0].error.clone().unwrap_or_default();
+            assert!(
+                error.contains("was saved for https://gitlab.com"),
+                "{error}"
+            );
+            assert!(!error.contains("glpat-A"), "{error}");
+        }
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        assert!(t.requests().is_empty(), "{:?}", t.requests());
+    }
 }

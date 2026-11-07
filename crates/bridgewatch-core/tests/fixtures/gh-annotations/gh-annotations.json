@@ -1,0 +1,38 @@
+[
+  {
+    "path": ".github",
+    "blob_href": "https://github.example/acme-corp/monorepo/blob/0f1e2d3c4b5a69788796a5b4c3d2e1f00fedcba9/.github",
+    "start_line": 1,
+    "end_line": 1,
+    "start_column": null,
+    "end_column": null,
+    "annotation_level": "failure",
+    "title": "",
+    "message": "Process completed with exit code 101.",
+    "raw_details": ""
+  },
+  {
+    "path": "src/parser.rs",
+    "blob_href": "https://github.example/acme-corp/monorepo/blob/0f1e2d3c4b5a69788796a5b4c3d2e1f00fedcba9/src/parser.rs",
+    "start_line": 3,
+    "end_line": 3,
+    "start_column": 5,
+    "end_column": 19,
+    "annotation_level": "warning",
+    "title": "unused import",
+    "message": "unused import: `std::fmt`",
+    "raw_details": "#[warn(unused_imports)] on by default"
+  },
+  {
+    "path": "src/parser.rs",
+    "blob_href": "https://github.example/acme-corp/monorepo/blob/0f1e2d3c4b5a69788796a5b4c3d2e1f00fedcba9/src/parser.rs",
+    "start_line": 142,
+    "end_line": 142,
+    "start_column": 9,
+    "end_column": 41,
+    "annotation_level": "failure",
+    "title": "test parser::tests::rejects_a_trailing_comma",
+    "message": "assertion `left == right` failed\n  left: Ok(())\n right: Err(TrailingComma)",
+    "raw_details": "thread 'parser::tests::rejects_a_trailing_comma' panicked at src/parser.rs:142:9"
+  }
+]

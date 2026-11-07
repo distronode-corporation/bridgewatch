@@ -22,6 +22,12 @@ description: Prove that a CLI signed with the hardened runtime can still read a 
 # oauth/store.rs). That crate looks only in the user domain's DEFAULT keychain, not
 # the search list, so the throwaway keychain is made the default for the duration
 # and the old default is put back on exit.
+#
+# Still in that mode, and still in the throwaway default keychain, it then runs
+# .github/scripts/bound-token-probe.sh: an own token (`token = { own = true }`) is
+# bound to its server on first use, refused (exit 70) after a repoint without being
+# sent, and refused without being sent by the RELEASED 1.3.0 CLI (`released-cli`).
+# ci.yml runs the same script on Linux against a throwaway gnome-keyring.
 inputs:
   binary:
     description: Path to the signed CLI.
@@ -30,6 +36,10 @@ inputs:
     description: Also prove the keyring crate's own path (auth status and auth logout against a seeded sign-in).
     required: false
     default: "false"
+  released-cli:
+    description: With keyring-crate, the released 1.3.0 CLI (.github/scripts/fetch-released-cli.sh) for the bound-token probe.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -39,6 +49,7 @@ runs:
       env:
         BINARY: ${{ inputs.binary }}
         KEYRING_CRATE: ${{ inputs.keyring-crate }}
+        RELEASED_CLI: ${{ inputs.released-cli }}
       run: |
         set -euo pipefail
         [ "$RUNNER_OS" = macOS ] || { echo "::error::the keychain probe is macOS only"; exit 1; }
@@ -196,3 +207,7 @@ runs:
         [ "$rc" -eq 44 ] \
           || { echo "::error::after auth logout, find-generic-password exited $rc, not 44 (not found)"; exit 1; }
         echo "the hardened-runtime CLI deleted the sign-in through the keyring crate"
+
+        # The own-token binding, in the same default keychain (the keyring crate's).
+        [ -n "$RELEASED_CLI" ] || { echo "::error::keyring-crate needs released-cli for the bound-token probe"; exit 1; }
+        KEYCHAIN="$kc" bash "$GITHUB_ACTION_PATH/../../scripts/bound-token-probe.sh" "$bin" "$RELEASED_CLI"

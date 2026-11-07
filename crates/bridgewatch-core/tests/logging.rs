@@ -129,6 +129,7 @@ impl Transport for OneEmptyPage {
             etag: None,
             link: None,
             oauth_scopes: None,
+            token_expiration: None,
             location: None,
             truncated: false,
         })
