@@ -311,7 +311,12 @@ fn on_menu(app: &AppHandle, id: &str) {
             sync_pause(app);
         }
         ID_RELOAD => {
-            crate::commands::reload_from_disk(app, true);
+            // Off the main thread: a reload that sees an account moved reads
+            // the credential store (`commands::reload_from_disk`).
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                crate::commands::reload_from_disk(&app, true);
+            });
         }
         ID_OPEN_CONFIG => {
             let path = app.state::<Arc<AppState>>().config_path.clone();

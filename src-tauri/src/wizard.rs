@@ -577,7 +577,17 @@ pub async fn wizard_save(
         }
     }
 
-    let validation = crate::commands::write_admitted(&app, &state, &base, &built.toml, validation);
+    // On a blocking thread: a write that moves an account reads and writes
+    // the credential store first (`commands::store_admitted`).
+    let validation = {
+        let (app, state, base, text) =
+            (app.clone(), state.clone(), base.clone(), built.toml.clone());
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::commands::write_admitted(&app, &state, &base, &text, validation)
+        })
+        .await
+        .map_err(|e| failure(FailureKind::Network, e.to_string()))?
+    };
     let written = validation.ok;
     if !written && let Some((account, previous)) = stored_over {
         let restored = tauri::async_runtime::spawn_blocking(move || {

@@ -84,15 +84,36 @@ pub fn validate_config_text(text: String, state: Shared<'_>) -> Validation {
 /// since is not overwritten; the answer carries `conflict: true` and the
 /// window decides what to do (the text tab asks). `confirm` is the id of a
 /// confirmation this shell issued for exactly this text; see `guard`.
+///
+/// ⛔ Async, with the work on a blocking thread, like every write: a write
+/// that moves an account reads and writes the credential store first
+/// (`store_admitted`), and a synchronous command runs on the main thread, so
+/// a Keychain prompt would freeze the tray and both windows until answered.
 #[tauri::command]
-pub fn save_config_text(
+pub async fn save_config_text(
     text: String,
     base: String,
     confirm: Option<String>,
     app: AppHandle,
-    state: Shared<'_>,
 ) -> Validation {
-    commit(&app, &state, &base, text, confirm.as_deref())
+    off_main(app, move |app, state| {
+        commit(app, state, &base, text, confirm.as_deref())
+    })
+    .await
+}
+
+/// Run a write (or a reload) on a blocking thread, never on the main one: see
+/// [`save_config_text`].
+async fn off_main(
+    app: AppHandle,
+    work: impl FnOnce(&AppHandle, &AppState) -> Validation + Send + 'static,
+) -> Validation {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Arc<AppState>>().inner().clone();
+        work(&app, &state)
+    })
+    .await
+    .unwrap_or_else(|e| Validation::error(format!("the write did not finish: {e}")))
 }
 
 /// Apply a batch of typed edits through the core's format-preserving editor.
@@ -106,11 +127,23 @@ pub fn save_config_text(
 /// item, and the file then records what the OS did. The key used to be written
 /// and read by nothing, so the checkbox said "on" while the OS said off.
 #[tauri::command]
-pub fn apply_config_edits(
+pub async fn apply_config_edits(
     edits: Vec<Edit>,
     confirm: Option<String>,
     app: AppHandle,
-    state: Shared<'_>,
+) -> Validation {
+    off_main(app, move |app, state| {
+        apply_edits(&edits, confirm.as_deref(), app, state)
+    })
+    .await
+}
+
+/// The body of [`apply_config_edits`], on a blocking thread.
+fn apply_edits(
+    edits: &[Edit],
+    confirm: Option<&str>,
+    app: &AppHandle,
+    state: &AppState,
 ) -> Validation {
     let raw = match read_or_empty(&state.config_path) {
         Ok(raw) => raw,
@@ -121,14 +154,14 @@ pub fn apply_config_edits(
         Ok(editor) => editor,
         Err(e) => return Validation::error(e.to_string()),
     };
-    if let Err(e) = editor.apply(&edits) {
+    if let Err(e) = editor.apply(edits) {
         return Validation::error(e.to_string());
     }
 
-    let mut result = commit(&app, &state, &raw, editor.to_toml(), confirm.as_deref());
+    let mut result = commit(app, state, &raw, editor.to_toml(), confirm);
     if result.ok
-        && let Some(wanted) = launch_at_login_edit(&edits)
-        && let Err(e) = set_login_item(&app, wanted)
+        && let Some(wanted) = launch_at_login_edit(edits)
+        && let Err(e) = set_login_item(app, wanted)
     {
         result.ok = false;
         result.diagnostics.push(crate::config::DiagnosticView {
@@ -340,6 +373,9 @@ pub const CONFIG_CHANGED_EVENT: &str = "config-changed";
 /// an account to a file full of them. The last-seen text is forgotten, so the
 /// reload after the fix goes ahead even when the file holds what it did
 /// before.
+///
+/// ⚠️ Call it off the main thread (every caller does): a reload that sees an
+/// account moved reads the credential store first.
 pub fn reload_from_disk(app: &AppHandle, force: bool) {
     let state = app.state::<Arc<AppState>>();
     let path = state.config_path.clone();
@@ -551,13 +587,21 @@ fn read_stylesheet(path: &std::path::Path) -> Result<String, String> {
 /// Move a watch up or down in `[[watches]]`. See `reorder` for why this is
 /// not a core `Edit` yet, and for what the first version got wrong.
 #[tauri::command]
-pub fn move_watch(id: String, delta: i32, app: AppHandle, state: Shared<'_>) -> Validation {
+pub async fn move_watch(id: String, delta: i32, app: AppHandle) -> Validation {
+    off_main(app, move |app, state| {
+        move_watch_now(&id, delta, app, state)
+    })
+    .await
+}
+
+/// The body of [`move_watch`], on a blocking thread.
+fn move_watch_now(id: &str, delta: i32, app: &AppHandle, state: &AppState) -> Validation {
     let raw = match std::fs::read_to_string(&state.config_path) {
         Ok(raw) => raw,
         Err(e) => return Validation::error(format!("could not read the configuration: {e}")),
     };
-    match crate::reorder::move_watch(&raw, &id, delta) {
-        Ok(Some(text)) => commit(&app, &state, &raw, text, None),
+    match crate::reorder::move_watch(&raw, id, delta) {
+        Ok(Some(text)) => commit(app, state, &raw, text, None),
         Ok(None) => Validation {
             ok: true,
             ..Validation::default()
@@ -568,9 +612,12 @@ pub fn move_watch(id: String, delta: i32, app: AppHandle, state: Shared<'_>) -> 
 
 /// Reload the configuration from disk. The menu item and the settings pane
 /// both call this.
+///
+/// On a blocking thread: a reload that sees an account moved reads the
+/// credential store (see [`save_config_text`]).
 #[tauri::command]
-pub fn reload_config(app: AppHandle) {
-    reload_from_disk(&app, true);
+pub async fn reload_config(app: AppHandle) {
+    let _ = tauri::async_runtime::spawn_blocking(move || reload_from_disk(&app, true)).await;
 }
 
 /// Open the config file in whatever the OS thinks owns `.toml`.
