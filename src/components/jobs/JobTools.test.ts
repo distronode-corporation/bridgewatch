@@ -299,7 +299,7 @@ describe("the tools' look: 12px words, on hover or focus, always on a failed job
   it("is 12px words with a visible focus ring, not 10px capitals", () => {
     mountList(tools(), [failed, manual]);
     const buttons = [...host.querySelectorAll<HTMLButtonElement>('[data-slot="job-tools"] button')];
-    expect(buttons.map((b) => b.textContent?.trim())).toEqual(["log", "retry", "play"]);
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual(["log", "copy", "retry", "play"]);
     for (const button of buttons) {
       expect(button.className).not.toMatch(/uppercase|text-\[10px\]/);
       expect(button.className).toContain("focus-visible:ring-2");

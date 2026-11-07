@@ -108,6 +108,9 @@ pub struct Job {
     /// Link to the job in the GitLab UI.
     #[serde(default)]
     pub web_url: Option<String>,
+    /// Why a failed job failed, as GitLab's reason code.
+    #[serde(default)]
+    pub failure_reason: Option<String>,
 }
 
 impl From<Job> for model::Job {
@@ -122,6 +125,8 @@ impl From<Job> for model::Job {
             finished_at: j.finished_at,
             duration: j.duration,
             web_url: j.web_url,
+            failure_reason: j.failure_reason,
+            annotation: None,
         }
     }
 }

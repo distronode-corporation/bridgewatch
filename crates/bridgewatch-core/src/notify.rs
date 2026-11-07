@@ -15,7 +15,7 @@ use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{ClickTarget, Watch};
-use crate::verdict::{IconState, PipelineView, WatchView};
+use crate::verdict::{IconState, JobView, PipelineView, WatchView};
 
 /// The kinds of thing bridgewatch will tell you about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -625,6 +625,9 @@ fn render(
         source => &row.source,
         id => row.id,
         url => &row.web_url,
+        // Null rather than undefined when there is none, so `{% if
+        // failure_line %}` and `default(...)` both read it as absent.
+        failure_line => first_failure_line(row),
         // `ref` is a Rust keyword, and `context!` keys a pair by
         // `stringify!($key)`, so `r#ref => ...` named the key "r#ref" and
         // `{{ref}}` was undefined. The key goes in by string instead.
@@ -661,14 +664,29 @@ pub fn click_url(target: ClickTarget, row: &PipelineView) -> Option<String> {
     }
 }
 
-/// The URL of the first blocking failure, looking in the parent's jobs and then
-/// in every dived child's.
-fn first_failure_url(row: &PipelineView) -> Option<String> {
+/// The first blocking failure's job, looking in the parent's jobs and then in
+/// every dived child's. `None` when nothing failed, or when the first failure
+/// is a bridge with no job behind it.
+fn first_failure_job(row: &PipelineView) -> Option<&JobView> {
     let first = row.failures.first()?;
     row.parent_jobs
         .iter()
         .chain(row.bridges.iter().flat_map(|b| b.jobs.iter()))
         .find(|j| &j.name == first)
+}
+
+/// The first failing line of a row: the [`JobView::failure`] of its first
+/// blocking failure. What `{{failure_line}}` renders, and what the default
+/// body adds under the failing job names.
+pub fn first_failure_line(row: &PipelineView) -> Option<String> {
+    first_failure_job(row).and_then(|j| j.failure.clone())
+}
+
+/// The URL of the first blocking failure, looking in the parent's jobs and then
+/// in every dived child's.
+fn first_failure_url(row: &PipelineView) -> Option<String> {
+    let first = row.failures.first()?;
+    first_failure_job(row)
         .and_then(|j| j.web_url.clone())
         .or_else(|| {
             // A dead bridge has no job to point at; the trigger job is the next

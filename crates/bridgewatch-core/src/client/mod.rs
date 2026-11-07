@@ -33,6 +33,18 @@ use crate::config::{Account, ProjectRef, Provider};
 use crate::model::{Bridge, Job, Pipeline, Project, TokenInfo, User};
 use crate::token::Secret;
 
+/// What [`CiClient::failure_annotation`] found out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnnotationAnswer {
+    /// An answer, which may be "there is none" (including "this token may not
+    /// read it"). Not asked again for the same job.
+    Known(Option<crate::model::Annotation>),
+    /// No answer yet: a rate limit, a 5xx or a dropped connection. The poller
+    /// stores the pipeline as incomplete, so it is asked again next tick even
+    /// when the pipeline has settled.
+    Later,
+}
+
 /// One CI provider, as everything above the client sees it.
 ///
 /// The methods are exactly what the poller, the fixture recorder and the setup
@@ -73,6 +85,18 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
         Err(ClientError::Unsupported {
             message: format!("looking up commit {sha} is not supported for this provider"),
         })
+    }
+
+    /// The first failure annotation of a failed job: what its first failing
+    /// line is made of (F2). The poller asks this for each pipeline's first
+    /// BLOCKING failure under the watch's `[watches.jobs]` rules, which only
+    /// it knows.
+    ///
+    /// The default answers "nothing" without a request: GitLab says why in
+    /// `failure_reason`, already in the jobs list. GitHub reads the job's
+    /// check-run annotations once per job and remembers the answer.
+    async fn failure_annotation(&self, _project: &ProjectRef, _job: &Job) -> AnnotationAnswer {
+        AnnotationAnswer::Known(None)
     }
 
     /// Every job of a pipeline, all pages.

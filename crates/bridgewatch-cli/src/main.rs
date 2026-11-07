@@ -1288,7 +1288,16 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
             if args.json {
                 println!("{}", serde_json::json!({ "notify": n }));
             } else {
-                println!("notify [{}] {} — {}", n.kind.as_str(), n.title, n.body);
+                // One line per event: the default body's second line (the
+                // first failing line) joins the first with a `; `.
+                let body = n
+                    .body
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                println!("notify [{}] {} — {}", n.kind.as_str(), n.title, body);
             }
         }
 

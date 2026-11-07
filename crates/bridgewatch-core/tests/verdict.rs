@@ -606,6 +606,8 @@ fn a_tolerated_trigger_job_is_a_warning_not_a_failure() {
         finished_at: None,
         duration: None,
         web_url: None,
+        failure_reason: None,
+        annotation: None,
     }];
     let mut trigger = Bridge {
         id: 1,
@@ -789,6 +791,8 @@ fn job(
         finished_at: None,
         duration: None,
         web_url: None,
+        failure_reason: None,
+        annotation: None,
     }
 }
 

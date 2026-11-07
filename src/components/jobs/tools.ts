@@ -8,7 +8,7 @@
  * decides whether a button is drawn.
  */
 
-import { jobAction, jobLogTail } from "../../lib/ipc";
+import { copyText, jobAction, jobLogTail } from "../../lib/ipc";
 import { createSingleFlight } from "../../lib/single-flight";
 import type { JobAction, JobActionOutcome, JobView, LogTail, Provider } from "../../lib/types";
 
@@ -26,10 +26,12 @@ export interface JobTools {
   api?: JobToolsApi;
 }
 
-/** The two shell commands the tools call. */
+/** The shell commands the tools call. */
 export interface JobToolsApi {
   logTail: (watch: string, url: string) => Promise<LogTail>;
   action: (watch: string, url: string, action: JobAction) => Promise<JobActionOutcome>;
+  /** Put text on the clipboard; `false` when it could not. Defaults to `copyText`. */
+  copy?: (text: string) => Promise<boolean>;
 }
 
 /**
@@ -40,7 +42,57 @@ export interface JobToolsApi {
 export const SHELL_API: JobToolsApi = {
   logTail: (watch, url) => jobLogTail(watch, url),
   action: (watch, url, action) => jobAction(watch, url, action),
+  copy: (text) => copyText(text),
 };
+
+/** "Copy failure as Markdown": any failed job. Needs nothing from the account. */
+export function canCopyFailure(job: JobView): boolean {
+  return job.status === "failed";
+}
+
+/** The longest run of backticks in `text`. */
+function longestBacktickRun(text: string): number {
+  let longest = 0;
+  for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length);
+  return longest;
+}
+
+/**
+ * `text` as a Markdown code span that survives its own backticks: the fence is
+ * one longer than the longest run inside, padded when the text starts or ends
+ * with one (CommonMark's rule).
+ */
+export function codeSpan(text: string): string {
+  const fence = "`".repeat(longestBacktickRun(text) + 1);
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+/**
+ * A failed job as Markdown, for an issue or a chat: what failed and where, the
+ * first failing line in a fenced block (its own backticks cannot close it),
+ * and the job's link.
+ *
+ *     `verify:android` failed in acme-corp/monorepo, pipeline #13074.
+ *
+ *     ```
+ *     script failure
+ *     ```
+ *
+ *     https://gitlab.com/acme-corp/monorepo/-/jobs/16558670141
+ */
+export function failureMarkdown(job: JobView, context: string): string {
+  const project = projectOf(job.web_url);
+  const where = [project, context].filter((part) => !!part).join(", ");
+  const parts = [`${codeSpan(job.name)} failed${where ? ` in ${where}` : ""}.`];
+  const line = job.failure?.trim();
+  if (line) {
+    const fence = "`".repeat(Math.max(3, longestBacktickRun(line) + 1));
+    parts.push(`${fence}\n${line}\n${fence}`);
+  }
+  if (job.web_url) parts.push(job.web_url);
+  return `${parts.join("\n\n")}\n`;
+}
 
 /** A failed job has a log worth reading from the popover. */
 export function canShowLog(job: JobView): boolean {

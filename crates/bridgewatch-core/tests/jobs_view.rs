@@ -223,3 +223,108 @@ fn the_jobs_mode_serialises_as_the_config_word() {
     assert_eq!(w(JobsMode::All), "\"all\"");
     assert_eq!(w(JobsMode::Failures), "\"failures\"");
 }
+
+// ---------------------------------------------------------------------------
+// The first failing line
+// ---------------------------------------------------------------------------
+
+/// GitLab's `failure_reason` is already in the jobs list bridgewatch fetches;
+/// a failed job carries it in words, and nothing else carries anything.
+#[tokio::test]
+async fn a_failed_gitlab_job_carries_its_failure_reason_in_words() {
+    let snapshot = snapshot_for("ca41ab28-deployed-with-failure", &[]);
+    let snapshot = snapshot.await;
+    let row = main_row(&snapshot);
+    let jobs: Vec<&JobView> = row
+        .parent_jobs
+        .iter()
+        .chain(row.bridges.iter().flat_map(|b| b.jobs.iter()))
+        .collect();
+    let android = jobs
+        .iter()
+        .find(|j| j.name == "verify:android")
+        .expect("the failed android job is listed");
+    assert_eq!(android.failure.as_deref(), Some("script failure"));
+    let others: Vec<&str> = jobs
+        .iter()
+        .filter(|j| j.status != "failed")
+        .filter(|j| j.failure.is_some())
+        .map(|j| j.name.as_str())
+        .collect();
+    assert!(others.is_empty(), "only a failed job says why: {others:?}");
+}
+
+/// The line is one line, at the file and line GitHub pointed at, and never a
+/// wall: the message is cut to its first line and to `FAILURE_LINE_MAX`.
+#[test]
+fn a_failing_line_is_one_short_line_at_its_location() {
+    use bridgewatch_core::model::{Annotation, FAILURE_LINE_MAX};
+    let at = |path: Option<&str>, line: Option<u64>, message: &str| {
+        Annotation {
+            path: path.map(str::to_string),
+            start_line: line,
+            message: message.to_string(),
+        }
+        .line()
+    };
+    assert_eq!(
+        at(Some("src/a.rs"), Some(7), "\n  boom  \nsecond line").as_deref(),
+        Some("src/a.rs:7: boom")
+    );
+    assert_eq!(
+        at(Some("src/a.rs"), None, "boom").as_deref(),
+        Some("src/a.rs: boom")
+    );
+    assert_eq!(
+        at(
+            Some(".github"),
+            Some(1),
+            "Process completed with exit code 1."
+        )
+        .as_deref(),
+        Some("Process completed with exit code 1."),
+        "GitHub's placeholder path points at nothing worth naming"
+    );
+    assert_eq!(at(None, Some(3), "boom").as_deref(), Some("boom"));
+    assert_eq!(
+        at(Some("a"), Some(1), " \n\t"),
+        None,
+        "nothing said, no line"
+    );
+
+    let long = at(Some("a"), Some(1), &"x".repeat(500)).unwrap();
+    let message = long.strip_prefix("a:1: ").unwrap();
+    assert_eq!(message.chars().count(), FAILURE_LINE_MAX);
+    assert!(message.ends_with('\u{2026}'), "{message}");
+
+    let job: Job = serde_json::from_str(
+        r#"{"id":1,"name":"a","status":"failed","failure_reason":"stuck_or_timeout_failure"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        job.failure_line().as_deref(),
+        Some("stuck or timeout failure")
+    );
+    let passed = Job {
+        status: bridgewatch_core::status::Status::Success,
+        ..job.clone()
+    };
+    assert_eq!(
+        passed.failure_line(),
+        None,
+        "a reason on a job that passed is not shown"
+    );
+    let annotated = Job {
+        annotation: Some(Annotation {
+            path: Some("src/a.rs".into()),
+            start_line: Some(3),
+            message: "boom".into(),
+        }),
+        ..job
+    };
+    assert_eq!(
+        annotated.failure_line().as_deref(),
+        Some("src/a.rs:3: boom"),
+        "an annotation says more than a reason code"
+    );
+}

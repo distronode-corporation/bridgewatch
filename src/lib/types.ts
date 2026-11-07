@@ -52,6 +52,13 @@ export interface JobView {
    * for a running job it is GitLab's elapsed time at the last poll, if any.
    */
   duration?: number | null;
+  /**
+   * The first failing line of a failed job, one line: GitHub's first failure
+   * annotation (`path:line: message`) or GitLab's failure reason in words
+   * ("script failure"). Null for a job that did not fail, or that nobody said
+   * why about. Optional for the same reason as `started_at`.
+   */
+  failure?: string | null;
 }
 
 /** `JobsMode`: which jobs an expanded row lists. Presentation only. */

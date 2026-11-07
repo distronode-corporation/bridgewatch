@@ -335,6 +335,8 @@ let _ = (&mut ledger, NotifyKind::Deployed);
 A `Notification` is `{ watch, kind, pipeline_id, title, body, url, key }`.
 `title` and `body` are already rendered through the watch's MiniJinja templates;
 `url` is the resolved `click` target. Hand them to the OS and do nothing else.
+The default body's second line is `failure_line`, the first failing line of the
+first blocking failure (`notify::first_failure_line`, from `JobView::failure`).
 
 Rules the shell can rely on:
 
