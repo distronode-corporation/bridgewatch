@@ -91,7 +91,8 @@ stored() {
     raw="$(security find-generic-password -s "$service" -a token -w "${KEYCHAIN:?}")"
     # `security -w` prints a value holding a non-printable byte (the tab after
     # the marker) as hex.
-    if [[ "$raw" =~ ^([0-9a-f]{2})+$ ]] && [ "${#raw}" -gt "${#marker}" ]; then
+    # Either case: which one `security` uses is not documented.
+    if [[ "$raw" =~ ^([0-9a-fA-F]{2})+$ ]] && [ "${#raw}" -gt "${#marker}" ]; then
       echo "security -w printed the entry as hex" >&2
       printf '%s' "$raw" | xxd -r -p
     else
@@ -138,10 +139,29 @@ server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
 server.serve_forever()
 PY
 start_standin() {
-  python3 -I "$work/standin.py" "$work" "$1" </dev/null &
-  servers+=("$!")
-  for _ in $(seq 1 50); do [ -s "$work/$1.port" ] && break; sleep 0.2; done
-  [ -s "$work/$1.port" ] || { echo "::error::stand-in $1 did not start"; exit 1; }
+  local pid
+  python3 -I "$work/standin.py" "$work" "$1" </dev/null 2>"$work/$1.err" &
+  pid=$!
+  servers+=("$pid")
+  for _ in $(seq 1 150); do
+    [ -s "$work/$1.port" ] && break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.2
+  done
+  if [ ! -s "$work/$1.port" ]; then
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "::error::stand-in $1 is running but wrote no port in 30s"
+    else
+      rc=0
+      wait "$pid" || rc=$?
+      echo "::error::stand-in $1 exited $rc before writing its port"
+    fi
+    cat "$work/$1.err"
+    ls -la "$work"
+    command -v python3
+    python3 --version
+    exit 1
+  fi
   : > "$work/$1.headers"
 }
 start_standin a
