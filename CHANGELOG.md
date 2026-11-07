@@ -44,6 +44,15 @@ body line with a bracket.
     alternatives. The section is called **Access**, and what a token must be allowed to do
     is said only while a token option is chosen.
 
+- **The setup wizard's layout.** The access methods are cards, and the chosen method's
+  controls (the sign-in button, the token field) sit inside its card instead of after
+  the whole list. They stay one radio group: the arrow keys move the choice, and Tab
+  goes from the chosen method into its field. The stepper labels only the current
+  step, so no label is cut short ("Acco…", "Proj…") at the narrowest window; every step
+  keeps its name for screen readers. Text is 13px throughout, with 15px step titles and
+  12px hints, and the column is at most 560px wide. Fields that had a fixed width now
+  shrink with the window.
+
 ### Fixed
 
 - **`bridgewatch init` never moves a token source to another host.** The derived account
