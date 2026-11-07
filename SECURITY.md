@@ -23,7 +23,8 @@ backported.
 
 | Version | Supported |
 | --- | --- |
-| 1.3.x (current release: 1.3.0) | Yes |
+| 2.0.x (current release: 2.0.0) | Yes |
+| 1.3.x | No |
 | 1.2.x | No |
 | 1.1.x | No |
 | 1.0.x | No |
