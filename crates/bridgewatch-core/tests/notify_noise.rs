@@ -190,6 +190,74 @@ fn a_failing_watch_that_passes_says_fixed_again_once() {
     );
 }
 
+/// ⛔ A deploy reached while post-deploy jobs still run used to be announced
+/// at once, so "fixed again" arrived as a SECOND banner when the row settled
+/// (Seer, #58). On a failing watch the deploy waits for the settle.
+#[test]
+fn a_deploy_on_a_failing_watch_waits_for_the_settle_and_is_replaced() {
+    let w = watch();
+    let mut ledger = baselined(&w);
+    notifications_for(
+        &w,
+        &view(&w, vec![row(40, "failed", "absent", false, &["lint"])]),
+        &mut ledger,
+    );
+
+    let red = row(40, "failed", "absent", false, &["lint"]);
+    let live = notifications_for(
+        &w,
+        &view(
+            &w,
+            vec![row(41, "deployed", "live", true, &[]), red.clone()],
+        ),
+        &mut ledger,
+    );
+    assert!(live.is_empty(), "held while live: {:?}", kinds(&live));
+
+    let settled = vec![row(41, "deployed", "live", false, &[]), red.clone()];
+    let out = notifications_for(&w, &view(&w, settled.clone()), &mut ledger);
+    assert_eq!(kinds(&out), ["recovered"], "one banner for the push");
+    assert!(notifications_for(&w, &view(&w, settled), &mut ledger).is_empty());
+
+    // Settling red instead, the held deploy is still said, beside the failure.
+    let mut ledger = baselined(&w);
+    notifications_for(&w, &view(&w, vec![red.clone()]), &mut ledger);
+    let live = notifications_for(
+        &w,
+        &view(
+            &w,
+            vec![row(42, "deployed", "live", true, &[]), red.clone()],
+        ),
+        &mut ledger,
+    );
+    assert!(live.is_empty(), "{:?}", kinds(&live));
+    let out = notifications_for(
+        &w,
+        &view(
+            &w,
+            vec![
+                row(42, "deployed_with_failure", "live", false, &["fuzz"]),
+                red,
+            ],
+        ),
+        &mut ledger,
+    );
+    assert_eq!(kinds(&out), ["deployed", "blocking_failure"], "{out:#?}");
+}
+
+/// A green watch's deploy is not held: it is said while post-deploy jobs run.
+#[test]
+fn a_deploy_on_a_green_watch_is_said_at_once() {
+    let w = watch();
+    let mut ledger = baselined(&w);
+    let out = notifications_for(
+        &w,
+        &view(&w, vec![row(50, "deployed", "live", true, &[])]),
+        &mut ledger,
+    );
+    assert_eq!(kinds(&out), ["deployed"]);
+}
+
 /// Turned off, a recovering push says what any green push says.
 #[test]
 fn recovered_off_says_the_ordinary_thing() {

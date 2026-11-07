@@ -26,8 +26,9 @@ body line with a bracket.
   object. A verdict is final only once nothing is in flight, because a post-deploy failure
   can still downgrade a deploy. A parked gate is final too, because only a person moves it.
 - **A "fixed again" notification** (`notify.recovered`, on by default). When a watch that
-  was failing passes again, you get one notification that says so, in place of what that
-  pipeline would otherwise have said on the same tick.
+  was failing passes again, you get one notification that says so, in place of that
+  push's deploy and finish notifications. While a watch is failing, its next deploy is
+  announced when the pipeline settles, not while post-deploy jobs still run.
 - **More than three notifications at once arrive as one.** It lists the first three
   titles, then "and N more"; the popover has the rest.
 - **Pause notifications** in the tray menu, for one hour or until resumed. While notifications

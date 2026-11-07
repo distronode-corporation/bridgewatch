@@ -414,7 +414,19 @@ pub fn notifications_for(
         // and two banners for one push is the noise this exists to cut. The
         // default title still names the state ("deployed, fixed again").
         let recovering = recovered_row == Some(row.id);
+        // ⛔ And the replacing only works if the deploy has not ALREADY been
+        // said: `deployed` fires while post-deploy jobs still run, a tick or
+        // more before the row settles and can recover, which was two banners
+        // for one push (Seer, #58). On a failing watch a live row's deploy is
+        // held, unrecorded, until the row settles: green, and "fixed again"
+        // replaces it; red, and it fires then beside the failure. A gate is
+        // not live, so a parked row never holds it.
+        let hold_deploy =
+            !baselining && watch.notify.recovered && row.live && ledger.is_failing(&watch.id);
         let mut events = candidate_events(watch, row);
+        if hold_deploy {
+            events.retain(|(kind, _)| *kind != NotifyKind::Deployed);
+        }
         if recovering {
             events.insert(0, (NotifyKind::Recovered, Vec::new()));
         }

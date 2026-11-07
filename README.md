@@ -604,7 +604,9 @@ Notifications are for news, so bridgewatch says each thing once:
 - **"Fixed again"** (`notify.recovered`, on by default): when a watch whose newest
   settled pipeline failed gets a newer one that passes, that push says "deployed, fixed
   again" (or "succeeded_no_deploy, fixed again") instead of its usual deploy or finish
-  notification. Running, cancelled and parked pipelines neither break nor fix a watch.
+  notification. On a failing watch, a deploy is announced when its pipeline finishes: as
+  "fixed again" if it passed, or as "deployed" with a "blocking failure" if it didn't.
+  Running, cancelled and parked pipelines neither break nor fix a watch.
 - **A burst becomes one.** More than 3 notifications from one poll (a laptop waking up, a
   push fanning out across watches) are shown as one, "bridgewatch: 5 updates", quoting
   the first three. The CLI's `watch` still prints every one.
