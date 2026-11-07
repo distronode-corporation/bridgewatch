@@ -522,13 +522,16 @@ impl Conn {
 
     /// Record what one answer says about the credential.
     ///
-    /// ⛔ A sign-in's own end (its refresh token) is the expiry that counts
-    /// there, and GitHub's expiry header is NOT read on one: a GitHub App's
+    /// ⛔ A sign-in's own end is the expiry that counts there
+    /// ([`crate::health::SignInNote::ends_at`]): its refresh token's expiry,
+    /// or for a sign-in without a refresh token its access token's. GitHub's
+    /// expiry header is NOT read on one: a GitHub App's
     /// access token states its eight hours on every response, renews itself,
     /// and would read as "expires within 24 h" all day.
     fn observe(&self, result: &Result<HttpResponse, ClientError>) {
         use crate::health::{Expiry, ExpiryOf, Refusal};
         let sign_in = self.transport.sign_in();
+        self.probe.sign_in(sign_in.is_some());
         if let Some(note) = &sign_in {
             match note.ends_at {
                 Some(at) => self.probe.expires(Expiry {

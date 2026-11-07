@@ -118,6 +118,9 @@ pub struct Poller {
     /// and taken off; one whose answer was "later" (a rate limit, a 5xx, the
     /// network) is asked again next tick.
     expiry_due: BTreeSet<String>,
+    /// Each account's [`crate::health::Observed::accepted`] count as of the
+    /// last tick, to tell whether an answer accepted it since.
+    accepted_seen: HashMap<String, u64>,
 }
 
 /// How a client's transport is made, per account: the network's
@@ -207,6 +210,7 @@ impl Poller {
             refused: Vec::new(),
             retry: None,
             expiry_due: BTreeSet::new(),
+            accepted_seen: HashMap::new(),
         })
     }
 
@@ -488,10 +492,16 @@ impl Poller {
             })
             .collect();
 
-        // A GitLab token's expiry, once per account (F3), before its watches
-        // so the first tick already knows it. Only for an account with a watch
-        // polling this tick: one sitting out a backoff (an outage, a rate
-        // limit) is not asked anything extra.
+        // The per-account lookups of this tick (F3), before the watches run:
+        // a GitLab token's expiry (once per account, so the first tick knows
+        // it), and who each account's `mine` watches are held to (once per
+        // account per tick, so a failing `/user` is one failure for all of
+        // them, cubic #66). Only for an account with a watch polling this
+        // tick: one sitting out a backoff is asked nothing extra.
+        //
+        // ⛔ Side by side across accounts (cubic, #67), through `in_order`, so
+        // the request log records them in account order whatever answers
+        // first, and the results are applied in that order after the join.
         let polling: BTreeSet<&str> = self
             .watches
             .iter()
@@ -499,27 +509,55 @@ impl Poller {
             .filter(|(_, turn)| matches!(turn, Turn::Poll))
             .map(|(state, _)| state.watch.account.as_str())
             .collect();
-        let due: Vec<String> = self
-            .expiry_due
+        let wants_owner: BTreeSet<&str> = self
+            .watches
             .iter()
-            .filter(|name| polling.contains(name.as_str()))
-            .cloned()
+            .zip(&turns)
+            .filter(|(state, turn)| state.watch.mine && matches!(turn, Turn::Poll))
+            .map(|(state, _)| state.watch.account.as_str())
             .collect();
-        for name in due {
-            let Some(client) = self.clients.get(&name) else {
-                continue;
-            };
-            match client.read_token_expiry().await {
-                Err(e) if e.should_back_off() => {}
-                Err(e) => {
+        enum Lookup {
+            Expiry(String, Result<(), ClientError>),
+            Owner(String, Result<String, ClientError>),
+        }
+        type LookupFuture<'a> =
+            std::pin::Pin<Box<dyn std::future::Future<Output = Lookup> + Send + 'a>>;
+        let mut lookups: Vec<LookupFuture<'_>> = Vec::new();
+        for (name, client) in &self.clients {
+            if self.expiry_due.contains(name) && polling.contains(name.as_str()) {
+                let name = name.clone();
+                lookups.push(Box::pin(async move {
+                    let answer = client.read_token_expiry().await;
+                    Lookup::Expiry(name, answer)
+                }));
+            }
+            if wants_owner.contains(name.as_str()) {
+                let name = name.clone();
+                lookups.push(Box::pin(async move {
+                    let answer = client.owner().await;
+                    Lookup::Owner(name, answer)
+                }));
+            }
+        }
+        let mut owners: HashMap<String, Result<String, ClientError>> = HashMap::new();
+        for lookup in in_order(lookups).await {
+            match lookup {
+                Lookup::Expiry(name, Err(e)) if e.should_back_off() => {
+                    tracing::debug!(account = %name, error = %e, "the token's expiry was not read; asked again later");
+                }
+                Lookup::Expiry(name, Err(e)) => {
                     tracing::debug!(account = %name, error = %e, "the token's expiry cannot be read; not asked again");
                     self.expiry_due.remove(&name);
                 }
-                Ok(()) => {
+                Lookup::Expiry(name, Ok(())) => {
                     self.expiry_due.remove(&name);
+                }
+                Lookup::Owner(name, answer) => {
+                    owners.insert(name, answer);
                 }
             }
         }
+        let owners = &owners;
 
         // ⛔ Every polled watch runs at once, and everything a watch's result
         // touches outside its own state (the errors, the transition log, the
@@ -528,23 +566,6 @@ impl Poller {
         // what the popover's rows, the notification order and the debug pane's
         // ring all follow; it must not become the order the responses arrived
         // in. Two watches on one account share that client's in-flight bound.
-        // Who each account's `mine` watches are held to, asked ONCE per
-        // account this tick, before they run side by side: a lookup that
-        // fails is that one failure for all of them, not one request per
-        // watch (cubic, #66). Remembered by the client once it succeeds.
-        let mut owners: HashMap<String, Result<String, ClientError>> = HashMap::new();
-        for (state, turn) in self.watches.iter().zip(&turns) {
-            if !state.watch.mine
-                || !matches!(turn, Turn::Poll)
-                || owners.contains_key(&state.watch.account)
-            {
-                continue;
-            }
-            if let Some(client) = self.clients.get(&state.watch.account) {
-                owners.insert(state.watch.account.clone(), client.owner().await);
-            }
-        }
-        let owners = &owners;
 
         let clients = &self.clients;
         let script = self.script.as_deref();
@@ -642,9 +663,14 @@ impl Poller {
                 continue;
             }
             let observed = client.credential();
-            // Accepted is healthy for the ledger even while an expiry warns:
-            // a later refusal must be said again (cubic, #66).
-            if observed.refused.is_none() {
+            // Healthy for the ledger only when an answer ACCEPTED the
+            // credential this tick, even while an expiry warns (cubic, #66).
+            // ⛔ Not merely "no refusal held": an account that sent nothing,
+            // sat out a backoff or lost its connection has said nothing, and
+            // clearing its persisted refusal would announce it again on the
+            // next 401 (Seer and cubic, #67).
+            let seen = self.accepted_seen.insert(name.clone(), observed.accepted);
+            if observed.refused.is_none() && seen.unwrap_or(0) < observed.accepted {
                 healthy.push(name.clone());
             }
             if let Some(health) = crate::health::assess(name, &observed, now_secs) {

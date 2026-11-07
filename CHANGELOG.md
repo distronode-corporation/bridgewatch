@@ -83,12 +83,13 @@ body line with a bracket.
 - **Token health.** bridgewatch tells an expiring token from an expired, a revoked and an
   invalid one, and warns 72 hours and again 24 hours before an expiry, each warning once
   as a notification, and in a strip in the popover for as long as it is true. The expiry
-  is GitLab's `expires_at` (`GET /personal_access_tokens/self`, asked once per token),
-  GitHub's `github-authentication-token-expiration` header (on every response, so no
-  request of its own), or a sign-in's refresh-token expiry. GitLab's 401 says whether a
+  is GitLab's `expires_at` (`GET /personal_access_tokens/self`, asked once per token
+  each time a poller starts), GitHub's `github-authentication-token-expiration` header
+  (on every response, so no request of its own), or a sign-in's refresh-token expiry
+  (the access token's for a sign-in that cannot renew). GitLab's 401 says whether a
   token was revoked or has expired; GitHub's does not, so a GitHub 401 reads as expired
   only past a known expiry. `bridgewatch auth status` shows each bound own token's
-  expiry (one request each) and says when a sign-in ends within 72 hours.
+  expiry (one expiry lookup each) and says when a sign-in ends within 72 hours.
 
 ### Changed
 

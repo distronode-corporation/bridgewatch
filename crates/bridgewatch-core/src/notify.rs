@@ -760,9 +760,10 @@ pub fn batch(notifications: Vec<Notification>) -> Vec<Notification> {
 /// The token-health notifications of one tick: each warning ONCE.
 ///
 /// `health` is every account with something to say at `now` (Unix seconds,
-/// the clock [`crate::health::assess`] read); `healthy` the accounts
-/// whose credential was accepted with nothing to say, whose "revoked" and
-/// "invalid" records are forgotten so a later refusal is said again.
+/// the clock [`crate::health::assess`] read); `healthy` the accounts whose
+/// credential an answer accepted this tick, whether or not an expiry still
+/// warns: their "revoked", "invalid" and dateless "expired" records are
+/// forgotten, so a later refusal is said again.
 ///
 /// The keys (in [`NotifyLedger::tokens`]):
 ///

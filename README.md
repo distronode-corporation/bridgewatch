@@ -796,11 +796,12 @@ A token source table names exactly one source; a table naming two is refused.
 bridgewatch tells four things apart, per account: a token that **expires** soon, one that
 **has expired**, one that was **revoked**, and one the server does not accept (**invalid**).
 Each shows in a strip at the top of the popover for as long as it is true, and is one
-notification, never repeated. An expiry warns twice: 72 hours before, and 24 hours before.
+notification, never repeated. An expiry warns twice: 72 hours before, and 24 hours before. An
+expiry that is first seen inside 24 hours gets only the 24-hour warning.
 
 | Credential | Where the expiry comes from | What it costs |
 | --- | --- | --- |
-| GitLab personal, project or group access token | `expires_at` from `GET /personal_access_tokens/self` (00:00 UTC on that date) | one request per token each time the app starts or reloads its configuration, asked again only after a rate limit, a server error or a dropped connection, and only on a tick where that account polls |
+| GitLab personal, project or group access token | `expires_at` from `GET /personal_access_tokens/self` (00:00 UTC on that date) | one request per token each time a poller starts (the app starting or reloading its configuration, or a CLI command such as `check`, `watch` or `wait`), asked again only after a rate limit, a server error or a dropped connection, and only on a tick where that account polls |
 | GitHub personal access token with an expiry | the `github-authentication-token-expiration` response header | nothing: it is on every response |
 | A sign-in | the refresh token's expiry, stored with the sign-in; for a sign-in that cannot renew itself, the access token's | nothing |
 

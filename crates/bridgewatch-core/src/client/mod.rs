@@ -158,10 +158,12 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
     /// The login this client's credential belongs to: the signed-in user, or
     /// the owner of the token. What a `mine = true` watch filters on (F3).
     ///
-    /// ⛔ Asked ONCE per client and remembered (GitLab and GitHub keep it on
-    /// their connection), so a `mine` watch costs one `GET /user` for the
-    /// life of the poller, and none when the sign-in already names the user.
-    /// The default asks every time, for a client that keeps nothing.
+    /// ⛔ A successful answer is remembered per client (GitLab and GitHub keep
+    /// it on their connection), so a `mine` watch costs one `GET /user` for
+    /// the life of the poller, and none when the sign-in already names the
+    /// user. A failed lookup is not remembered: it is asked again on a later
+    /// tick (the poller asks once per account per tick). The default asks
+    /// every time, for a client that keeps nothing.
     async fn owner(&self) -> Result<String, ClientError> {
         self.current_user().await.map(|u| u.username)
     }

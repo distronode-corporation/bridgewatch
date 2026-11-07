@@ -211,12 +211,14 @@ async fn a_failed_owner_lookup_is_the_watchs_error_and_is_asked_again() {
     let raw = r#"
         [accounts.lab]
         token = { env = "TOK" }
+        rate_limit_backoff = { max_secs = 1 }
 
         [[watches]]
         id = "mine"
         account = "lab"
         project = 1
         mine = true
+        poll = { live_secs = 1, idle_secs = 1 }
 
         [[watches]]
         id = "also-mine"
@@ -228,7 +230,14 @@ async fn a_failed_owner_lookup_is_the_watchs_error_and_is_asked_again() {
     t.reply("/personal_access_tokens/self", 200, GITLAB_SELF_NO_EXPIRY);
     t.reply("/user", 503, "{}");
     t.reply("/user", 200, GITLAB_USER);
-    t.reply("/projects/1/pipelines", 200, "[]");
+    for project in [1, 2] {
+        replies(
+            &t,
+            &format!("/projects/{project}/pipelines"),
+            2,
+            HttpResponse::plain(200, "[]"),
+        );
+    }
     let mut p = poller(raw, &Memory::default(), &t, &Clock::at(wall()));
     let first = p.tick().await;
     assert!(first.snapshot.watches[0].error.is_some());
@@ -246,10 +255,22 @@ async fn a_failed_owner_lookup_is_the_watchs_error_and_is_asked_again() {
         "no list went out: {:?}",
         first.polled
     );
-    // Not remembered: the next ask asks again, and that answer is kept.
-    let client = p.clients()["lab"].clone();
-    assert_eq!(client.owner().await.unwrap(), "alice");
-    assert_eq!(client.owner().await.unwrap(), "alice");
+    // Not remembered: the next tick, once the backoff (1 s here) has
+    // passed, asks again, and the lists go out held to that owner.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let second = p.tick().await;
+    assert_eq!(count(&t, "/user"), 2, "{:?}", paths(&t));
+    assert!(second.polled.contains("mine"), "{:?}", second.polled);
+    for project in [1, 2] {
+        let lists: Vec<String> = paths(&t)
+            .into_iter()
+            .filter(|p| p.starts_with(&format!("/projects/{project}/pipelines")))
+            .collect();
+        assert_eq!(lists.len(), 1, "{lists:?}");
+        assert!(lists[0].contains("username=alice"), "{lists:?}");
+    }
+    // And remembered from then on: a third tick asks nobody.
+    p.tick().await;
     assert_eq!(count(&t, "/user"), 2, "{:?}", paths(&t));
 }
 
@@ -819,4 +840,131 @@ fn accepted_while_expiring_still_clears_refusals_and_titles_say_now() {
         token_notifications(&[dateless], &[], &mut ledger, 0).len(),
         1
     );
+}
+
+/// Seer and cubic, #67: a persisted "revoked" survives a restart whose tick
+/// had no answer (a dropped connection), so the same refusal afterwards is
+/// not announced a second time.
+#[tokio::test]
+async fn a_persisted_refusal_survives_a_tick_without_an_answer() {
+    let raw = r#"
+        [accounts.lab]
+        token = { env = "TOK" }
+        rate_limit_backoff = { max_secs = 1 }
+
+        [[watches]]
+        id = "web"
+        account = "lab"
+        project = 1
+        poll = { live_secs = 1, idle_secs = 1 }
+    "#;
+    let dir = std::env::temp_dir().join(format!("bw-f3-kept-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ledger = dir.join("notify.json");
+    let revoked = || {
+        HttpResponse::plain(
+            401,
+            r#"{"error":"invalid_token","error_description":"Token was revoked. You have to re-authorize from the user."}"#,
+        )
+    };
+
+    // Before the restart: revoked, said once, and persisted.
+    let t = Arc::new(ScriptTransport::new());
+    t.reply_with("/personal_access_tokens/self", revoked());
+    t.reply_with("/projects/1/pipelines", revoked());
+    let mut p = poller(raw, &Memory::default(), &t, &Clock::at(wall())).with_ledger(ledger.clone());
+    assert_eq!(token_notes(&p.tick().await).len(), 1);
+
+    // After it: the first tick gets no answer at all (no reply scripted is a
+    // transport error), then the token is refused again.
+    let t = Arc::new(ScriptTransport::new());
+    let mut p = poller(raw, &Memory::default(), &t, &Clock::at(wall())).with_ledger(ledger.clone());
+    let offline = p.tick().await;
+    assert!(token_notes(&offline).is_empty());
+    let kept = std::fs::read_to_string(&ledger).unwrap();
+    assert!(kept.contains("lab|revoked"), "the key is kept: {kept}");
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    t.reply_with("/projects/1/pipelines", revoked());
+    let again = p.tick().await;
+    assert!(again.polled.contains("web"));
+    assert_eq!(
+        health(&again, "lab").map(|h| h.state),
+        Some(HealthState::Revoked)
+    );
+    assert!(token_notes(&again).is_empty(), "not announced twice");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// cubic, #67: a 200 whose body does not decode still accepted the
+/// credential; the expiry lookup's failure must not put an earlier refusal
+/// back.
+#[tokio::test]
+async fn a_malformed_expiry_answer_keeps_the_acceptance() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply("/personal_access_tokens/self", 200, "not json");
+    let mut p = poller(GITLAB_ONE, &Memory::default(), &t, &Clock::at(wall()));
+    // Earlier, a list was refused.
+    t.reply(
+        "/projects/1/pipelines",
+        401,
+        r#"{"message":"401 Unauthorized"}"#,
+    );
+    let client = p.clients()["lab"].clone();
+    let _ = client
+        .list_pipelines(
+            &bridgewatch_core::config::ProjectRef::Id(1),
+            &bridgewatch_core::client::ListQuery::exact("main", None, 1),
+        )
+        .await;
+    assert!(client.credential().refused.is_some());
+    // Then the expiry lookup answers 200 with a body that will not decode.
+    assert!(client.read_token_expiry().await.is_err());
+    assert_eq!(client.credential().refused, None, "the 200 accepted it");
+    let _ = &mut p;
+}
+
+/// cubic, #67: a GitLab sign-in that states no end, refused as revoked, is
+/// told to sign in again, not to save a token.
+#[tokio::test]
+async fn a_revoked_sign_in_without_an_end_says_sign_in_again() {
+    let now = wall();
+    let raw = r#"
+        [accounts.gl]
+        token = { oauth = { client_id = "gl-app-0001" } }
+
+        [[watches]]
+        id = "web"
+        account = "gl"
+        project = 1
+    "#;
+    let store = Memory::default();
+    store::save(
+        "gl",
+        &TokenSet {
+            access_token: Secret::new("gl-oauth-FIXTURE"),
+            refresh_token: Some(Secret::new("gl-refresh-FIXTURE")),
+            expires_at: Some((now + 2 * HOUR) as u64),
+            refresh_expires_at: None,
+            scopes: vec!["read_api".into()],
+            login: Some("alice".into()),
+            client_id: "gl-app-0001".into(),
+            base_url: "https://gitlab.com".into(),
+            // Too new to have run out: the 401 is passed through unrefreshed.
+            obtained_at: (now - 5) as u64,
+        },
+        &store,
+    )
+    .unwrap();
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/projects/1/pipelines",
+        401,
+        r#"{"error":"invalid_token","error_description":"Token was revoked. You have to re-authorize from the user."}"#,
+    );
+    let mut p = poller(raw, &store, &t, &Clock::at(now));
+    let tick = p.tick().await;
+    let h = health(&tick, "gl").unwrap_or_else(|| panic!("{tick:?}"));
+    assert_eq!((h.state, h.of), (HealthState::Revoked, ExpiryOf::SignIn));
+    assert!(h.message.contains("sign in again"), "{}", h.message);
+    assert!(!h.message.contains("save a new token"), "{}", h.message);
 }

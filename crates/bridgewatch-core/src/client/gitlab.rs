@@ -312,10 +312,13 @@ impl GitLabClient {
             .await
         {
             Ok(info) => info.into(),
-            Err(e) => {
+            // Only this endpoint's 401 is ignored. A decode error follows a
+            // 2xx, which accepted the credential, and that stands (cubic, #67).
+            Err(e @ ClientError::Auth { status: 401, .. }) => {
                 self.conn.probe().restore_refusal(before);
                 return Err(e);
             }
+            Err(e) => return Err(e),
         };
         match info
             .expires_at

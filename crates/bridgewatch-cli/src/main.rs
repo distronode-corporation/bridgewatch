@@ -1057,14 +1057,16 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
                 ReqwestTransport::new(std::time::Duration::from_secs(a.timeout_secs))
                     .map(|t| Arc::new(t) as Arc<dyn bridgewatch_core::client::Transport>)
             };
+            // One read per keyring item for the whole run: each can prompt.
+            let once = auth::ReadOnce::new(&store);
             let expiries =
-                auth::own_expiries(&config, account.as_deref(), &store, &transport_for).await;
+                auth::own_expiries(&config, account.as_deref(), &once, &transport_for).await;
             // Read the clock after the lookups, which can take a while each.
             let now = bridgewatch_core::oauth::now();
             auth::status(
                 &config,
                 account.as_deref(),
-                &store,
+                &once,
                 &bridgewatch_core::oauth::BuiltinClients::shipped(),
                 &expiries,
                 now,

@@ -84,7 +84,16 @@ pub struct Observed {
     /// When it stops working, when the provider said.
     pub expiry: Option<Expiry>,
     /// The server's last refusal, or `None` once a request is accepted again.
+    /// ⚠ `None` alone does not say the credential works: it is also what a
+    /// client that has had no answer yet holds. [`Self::accepted`] does.
     pub refused: Option<Refusal>,
+    /// How many answers have accepted the credential, ever: a count, so a
+    /// reader can tell whether one arrived since it last looked (cubic and
+    /// Seer, #67).
+    pub accepted: u64,
+    /// Whether the credential is a sign-in (OAuth), whatever its expiry says:
+    /// a sign-in is renewed by signing in again, a token by saving a new one.
+    pub sign_in: bool,
 }
 
 /// One client's [`Observed`], shared by its clones. Written by every request
@@ -105,7 +114,15 @@ impl CredentialProbe {
 
     /// The credential was accepted: any earlier refusal is over.
     pub fn accepted(&self) {
-        self.with(|o| o.refused = None);
+        self.with(|o| {
+            o.refused = None;
+            o.accepted = o.accepted.wrapping_add(1);
+        });
+    }
+
+    /// Say whether the credential is a sign-in.
+    pub fn sign_in(&self, sign_in: bool) {
+        self.with(|o| o.sign_in = sign_in);
     }
 
     /// The credential was refused, for this reason.
@@ -193,10 +210,13 @@ pub struct TokenHealth {
 pub fn assess(account: &str, observed: &Observed, now: i64) -> Option<TokenHealth> {
     let expiry = observed.expiry;
     let past = expiry.is_some_and(|e| e.at <= now);
-    let of = expiry.map(|e| e.of).unwrap_or(match observed.refused {
-        Some(Refusal::SignInEnded) => ExpiryOf::SignIn,
-        _ => ExpiryOf::Token,
-    });
+    // The kind of credential is its own fact, not the expiry's: a sign-in
+    // that states no end is still renewed by signing in again (cubic, #67).
+    let of = if observed.sign_in || matches!(observed.refused, Some(Refusal::SignInEnded)) {
+        ExpiryOf::SignIn
+    } else {
+        expiry.map(|e| e.of).unwrap_or(ExpiryOf::Token)
+    };
     let mut warn_hours = None;
     let state = match observed.refused {
         Some(Refusal::Revoked) => HealthState::Revoked,
@@ -366,6 +386,7 @@ mod tests {
                 of: ExpiryOf::Token,
             }),
             refused: None,
+            ..Observed::default()
         };
         assess("lab", &observed, 1_000_000)
     }
@@ -401,6 +422,7 @@ mod tests {
                     of: ExpiryOf::Token,
                 }),
                 refused: Some(refused),
+                ..Observed::default()
             };
             assess("a", &observed, 100).map(|h| h.state)
         };

@@ -19,7 +19,7 @@ use bridgewatch_core::client::{ClientError, RequestRing, Transport};
 use bridgewatch_core::config::{Account, Config, OAuthSource, Provider, TokenSource};
 use bridgewatch_core::health::Refusal;
 use bridgewatch_core::oauth::{self, BuiltinClients, OAuthError, Progress, store};
-use bridgewatch_core::token::{self, OwnTokenStatus, TokenProvider};
+use bridgewatch_core::token::{self, OwnTokenStatus, TokenError, TokenProvider};
 use clap::Subcommand;
 
 use crate::{Failure, Outcome, exit};
@@ -43,7 +43,8 @@ pub enum AuthAction {
     },
     /// Show who each signing-in account is signed in as, until when and with
     /// what scopes, which server each own token (token = { own = true })
-    /// is bound to, and when it expires (one request per own token). Never a
+    /// is bound to, and when it expires (one expiry lookup per own token,
+    /// with a `GET /user` after it when GitLab refuses the lookup). Never a
     /// token. Exits 70 unless every account listed is
     /// usable: one is not signed in, is signed in for another server or
     /// application than it names now, has no own token stored, or has one
@@ -346,6 +347,78 @@ pub fn status(
         }
     }
     Ok(if all_signed_in { exit::OK } else { exit::ERROR })
+}
+
+/// A credential store that reads each address at most ONCE: what one
+/// `auth status` run hands to [`own_expiries`] and [`status`], so a bound own
+/// token is read once rather than three times (its binding for the expiry
+/// lookup, its secret for the request, its binding again for the line).
+/// ⚠ On macOS each read of an item another program wrote can raise an
+/// access prompt (cubic, #67).
+///
+/// What it remembers is a value or "no entry"; any other error is not
+/// remembered. A write or a delete forgets that address.
+pub struct ReadOnce<'a> {
+    inner: &'a dyn TokenProvider,
+    seen: std::sync::Mutex<std::collections::HashMap<(String, String), Option<String>>>,
+}
+
+impl<'a> ReadOnce<'a> {
+    /// Wrap `inner` for one run.
+    pub fn new(inner: &'a dyn TokenProvider) -> Self {
+        Self {
+            inner,
+            seen: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn seen(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<(String, String), Option<String>>>
+    {
+        self.seen.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl TokenProvider for ReadOnce<'_> {
+    fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        let key = (service.to_string(), user.to_string());
+        if let Some(remembered) = self.seen().get(&key).cloned() {
+            return remembered.ok_or_else(|| TokenError::NoEntry {
+                service: service.to_string(),
+                user: user.to_string(),
+            });
+        }
+        let read = self.inner.keyring_get(service, user);
+        match &read {
+            Ok(value) => {
+                self.seen().insert(key, Some(value.clone()));
+            }
+            Err(TokenError::NoEntry { .. }) => {
+                self.seen().insert(key, None);
+            }
+            Err(_) => {}
+        }
+        read
+    }
+
+    fn keyring_set(&self, service: &str, user: &str, secret: &str) -> Result<(), TokenError> {
+        self.seen().remove(&(service.to_string(), user.to_string()));
+        self.inner.keyring_set(service, user, secret)
+    }
+
+    fn keyring_delete(&self, service: &str, user: &str) -> Result<(), TokenError> {
+        self.seen().remove(&(service.to_string(), user.to_string()));
+        self.inner.keyring_delete(service, user)
+    }
+
+    fn env(&self, name: &str) -> Option<String> {
+        self.inner.env(name)
+    }
+
+    fn run(&self, argv: &[String]) -> Result<String, TokenError> {
+        self.inner.run(argv)
+    }
 }
 
 /// How close an end has to be for `auth status` to say what to do: the
@@ -1289,6 +1362,60 @@ pub(crate) mod tests {
         assert!(
             text.ends_with("the server refuses it: it has expired; save a new one in Settings\n"),
             "{text}"
+        );
+    }
+
+    /// One `auth status` run reads a bound own token's entry ONCE, through
+    /// [`ReadOnce`], for its expiry lookup and its line (cubic, #67).
+    #[tokio::test]
+    async fn status_reads_each_own_entry_from_the_store_once() {
+        struct Counting(Memory, std::sync::atomic::AtomicUsize);
+        impl TokenProvider for Counting {
+            fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+                self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.0.keyring_get(service, user)
+            }
+            fn keyring_set(&self, s: &str, u: &str, v: &str) -> Result<(), TokenError> {
+                self.0.keyring_set(s, u, v)
+            }
+            fn keyring_delete(&self, s: &str, u: &str) -> Result<(), TokenError> {
+                self.0.keyring_delete(s, u)
+            }
+            fn env(&self, n: &str) -> Option<String> {
+                self.0.env(n)
+            }
+            fn run(&self, a: &[String]) -> Result<String, TokenError> {
+                self.0.run(a)
+            }
+        }
+        let config = config(
+            "[accounts.lab]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n",
+        );
+        let store = Counting(Memory::default(), Default::default());
+        let secret = bridgewatch_core::token::Secret::new("tok-FIXTURE");
+        token::set_own_token("lab", "https://gitlab.example.com", &secret, &store.0).unwrap();
+        let t = Arc::new(ScriptTransport::new());
+        t.reply(
+            "/personal_access_tokens/self",
+            200,
+            r#"{"id":9,"name":"bw","scopes":["read_api"],"expires_at":null,"active":true}"#,
+        );
+        let transport = t.clone();
+        let transport_for = move |_: &Account| Ok(transport.clone() as Arc<dyn Transport>);
+        let once = ReadOnce::new(&store);
+        let expiries = own_expiries(&config, None, &once, &transport_for).await;
+        let mut out = Vec::new();
+        let code = status(&config, None, &once, &BUILTIN, &expiries, 0, &mut out).unwrap();
+        assert_eq!(code, exit::OK);
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .contains("it does not expire")
+        );
+        assert_eq!(
+            store.1.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one keyring read for the whole run"
         );
     }
 
