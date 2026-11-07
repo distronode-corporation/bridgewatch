@@ -45,15 +45,25 @@
    * opening the window on "Edit as text" for a broken file is not a pane the
    * user chose, and must not become the one every later window opens on.
    */
+  /** The one scroll container every pane is shown in. */
+  let paneScroller = $state<HTMLElement | null>(null);
+
   async function show(name: string | null | undefined, remember: boolean) {
     const request = paneFor(name);
     if (!request) return;
+    const changed = request.pane !== pane;
     pane = request.pane;
     if (remember) rememberPane(storage(), request.pane);
     if (request.focus === "text") {
       await tick();
       document.getElementById("edit-as-text")?.scrollIntoView?.({ block: "start" });
+      return;
     }
+    // ⛔ Every pane is shown in the SAME scroll container, so a new pane kept
+    // the old one's scrollTop: scroll down Accounts, open General, and General
+    // opened part way down with its first fields above the fold (Seer, #65).
+    // The element is reset rather than the panes keyed, so nothing remounts.
+    if (changed && paneScroller) paneScroller.scrollTop = 0;
   }
 
   /** The sidebar is one vertical tab list: arrows, Home and End move AND show, as a tab list does. */
@@ -387,6 +397,7 @@
     </div>
 
     <div
+      bind:this={paneScroller}
       class="pane min-h-0 flex-1 overflow-y-auto"
       role="tabpanel"
       id={`pane-${pane}`}

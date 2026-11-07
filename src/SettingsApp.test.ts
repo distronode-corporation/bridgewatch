@@ -60,6 +60,8 @@ const shell = {
   moveResult: OK,
   saves: [] as { text: string; base: string; confirm: string | null }[],
   saveQueue: [] as Validation[],
+  /** The `open-settings` listener SettingsApp registered, if any. */
+  openSettings: null as null | ((tab: string) => void),
   /** The `config-changed` listener SettingsApp registered, if any. */
   changed: null as null | (() => void),
   wizardOpened: 0,
@@ -81,7 +83,10 @@ vi.mock("./lib/ipc", () => ({
   readConfigText: () => Promise.resolve(shell.text),
   getStatus: () => Promise.resolve(shell.status),
   takeSettingsTab: () => Promise.resolve(shell.tab),
-  onOpenSettings: () => Promise.resolve(() => {}),
+  onOpenSettings: (handler: (tab: string) => void) => {
+    shell.openSettings = handler;
+    return Promise.resolve(() => {});
+  },
   applyConfigEdits: (edits: Edit[], confirm?: string) => {
     shell.edits.push(edits);
     shell.confirms.push(confirm ?? null);
@@ -136,6 +141,7 @@ beforeEach(() => {
   shell.saves = [];
   shell.saveQueue = [];
   shell.changed = null;
+  shell.openSettings = null;
   shell.wizardOpened = 0;
   shell.openError = null;
 });
@@ -780,4 +786,62 @@ describe("SettingsApp, keyboard and screen-reader wiring (cubic, #65)", () => {
     await settle();
     expect(h.ask()?.textContent).toContain("New watch");
   });
+});
+
+describe("SettingsApp, the scroll position across panes (Seer, #65)", () => {
+  /** jsdom has no layout, so the pane's scrollTop is a plain value the test sets and reads. */
+  function scrollable() {
+    const pane = host.querySelector<HTMLElement>(".pane")!;
+    let top = 0;
+    Object.defineProperty(pane, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => (top = v),
+    });
+    return pane;
+  }
+
+  it("opens a new pane at the top, not where the last one was scrolled to", async () => {
+    // ⛔ One scroll container shows every pane, so General opened part way
+    // down after Accounts had been scrolled.
+    const h = await render();
+    const pane = scrollable();
+    pane.scrollTop = 900;
+    await h.tab("General");
+    expect(pane.scrollTop).toBe(0);
+    // The same pane again is not a change: the place is kept.
+    pane.scrollTop = 120;
+    await h.tab("General");
+    expect(pane.scrollTop).toBe(120);
+    // The keyboard path resets too.
+    tabsOf()[2].focus();
+    tabsOf()[2].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await settle();
+    expect(pane.scrollTop).toBe(0);
+  });
+
+  it("still lands the shell's 'Edit as text' request at the editor", async () => {
+    const into = vi.fn();
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = into;
+    try {
+      await render();
+      const pane = scrollable();
+      pane.scrollTop = 900;
+      shell.openSettings!("text");
+      await settle();
+      await settle();
+      expect(into).toHaveBeenCalledTimes(1);
+      expect((into.mock.contexts[0] as Element).id).toBe("edit-as-text");
+      // Not reset over the editor's scroll.
+      expect(pane.scrollTop).toBe(900);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollIntoView", original);
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  function tabsOf() {
+    return [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
+  }
 });
