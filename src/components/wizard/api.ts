@@ -14,6 +14,7 @@
  */
 
 import type { ConfirmRequest, DiagnosticView, Provider, Validation } from "../../lib/types";
+import type { OwnTokenStatus } from "../../lib/own-token";
 
 // ---------------------------------------------------------------------------
 // Wire shapes (core mirrors)
@@ -243,6 +244,11 @@ export interface WizardSaveResult extends Validation {
 export interface WizardApi {
   /** Is the provider CLI's keyring item (glab's or gh's) present for this instance? Existence only. Optional. */
   detectCliToken?(baseUrl: string, provider: Provider): Promise<CliTokenDetection>;
+  /**
+   * A re-run on `{ own: true }`: what the account's own entry holds, and the
+   * server it is bound to. Never the token. Optional.
+   */
+  ownTokenStatus?(account: string): Promise<OwnTokenStatus>;
   /** Step 1: who is this token? */
   testConnection(connection: Connection): Promise<Confirmable<Identity>>;
   /** Step 2: the projects this token can pick from. */

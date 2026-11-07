@@ -44,6 +44,7 @@
     answersOf,
     baseUrlOf,
     followOwnToken,
+    adoptOwnTokenStatus,
     draftFromAnswers,
     emptyDraft,
     formatCommand,
@@ -351,9 +352,24 @@
     void refreshAvailability();
   }
 
+  /**
+   * A re-run on a stored own token asks the shell which server that token is
+   * bound to, and keeps it only for that server (`adoptOwnTokenStatus`). Next
+   * and Test connection wait for the answer; a failed read leaves the file's
+   * word, which the core still checks.
+   */
+  let ownCheck: Promise<void> | null = null;
+
   onMount(() => {
     void detect();
     void refreshAvailability();
+    const ask = api.ownTokenStatus;
+    if (draft.ownStored && ask) {
+      const account = draft.account.trim();
+      ownCheck = ask(account)
+        .then((status) => adoptOwnTokenStatus(draft, status))
+        .catch(() => {});
+    }
   });
 
   let identity = $state<Identity | null>(null);
@@ -370,13 +386,14 @@
    * stored token" for a host that token is not bound to. Every path that
    * validates the account step (Next, Enter, Test connection) calls this first.
    */
-  function settleInstance() {
+  async function settleInstance() {
+    if (ownCheck) await ownCheck;
     followOwnToken(draft);
     forgetSignInIfMoved();
   }
 
   async function testConnection() {
-    settleInstance();
+    await settleInstance();
     const stepErrors = validateStep("account", draft);
     errors = stepErrors;
     if (Object.keys(stepErrors).length > 0) return focusInvalid();
@@ -653,7 +670,7 @@
     advancing = true;
     try {
       const id = step.id;
-      if (id === "account") settleInstance();
+      if (id === "account") await settleInstance();
       if (id === "project" && draft.projectInput.trim() && !inputMatchesProject()) {
         if (!(await resolve())) return void focusInvalid();
       }

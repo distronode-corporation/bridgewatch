@@ -139,8 +139,10 @@ body line with a bracket.
 - **Settings says which server an own token is for.** The token field reads "Stored for
   X" and, when the account has since moved, "Stored for X; paste one for Y".
 - **The setup wizard forgets a stored token when the instance changes**, as it does a
-  sign-in, and the confirmation for moving an account to another host says an own token
-  or a sign-in stays with the old host (it used to say the token would be sent).
+  sign-in. On a re-run it asks which server the stored token is bound to, so a config
+  edited by hand to another host asks for a token too. The confirmation for moving an
+  account to another host says an own token or a sign-in stays with the old host (it used
+  to say the token would be sent).
 
 - **`bridgewatch init` never moves a token source to another host.** The derived account
   name is the host's first label, so gitlab.com and gitlab.acme.com are both `gitlab`,
