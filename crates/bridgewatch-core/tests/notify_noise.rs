@@ -432,6 +432,44 @@ fn a_new_push_running_over_a_red_watch_is_silent_until_it_settles() {
     assert_eq!(out[0].pipeline_id, 82);
 }
 
+/// ⛔ A failure that settles while a newer push is still running makes the
+/// watch failing, and that push passing says "fixed again" (Seer, #61).
+#[test]
+fn a_failure_that_settles_under_a_running_push_is_still_a_failure() {
+    let w = watch();
+    let mut ledger = baselined(&w);
+    notifications_for(
+        &w,
+        &view(&w, vec![row(90, "deployed", "live", false, &[])]),
+        &mut ledger,
+    );
+    assert!(!ledger.is_failing(&w.id));
+
+    let both_running = vec![
+        row(92, "running", "in_progress", true, &[]),
+        row(91, "running", "in_progress", true, &[]),
+        row(90, "deployed", "live", false, &[]),
+    ];
+    notifications_for(&w, &view(&w, both_running), &mut ledger);
+    assert!(!ledger.is_failing(&w.id));
+
+    let red_under_running = vec![
+        row(92, "running", "in_progress", true, &[]),
+        row(91, "failed", "absent", false, &["lint"]),
+    ];
+    notifications_for(&w, &view(&w, red_under_running), &mut ledger);
+    assert!(ledger.is_failing(&w.id), "91 failed, whatever 92 is doing");
+
+    let fixed = vec![
+        row(92, "deployed", "live", false, &[]),
+        row(91, "failed", "absent", false, &["lint"]),
+    ];
+    let out = notifications_for(&w, &view(&w, fixed.clone()), &mut ledger);
+    assert_eq!(kinds(&out), ["recovered"], "{out:#?}");
+    assert_eq!(out[0].pipeline_id, 92);
+    assert!(notifications_for(&w, &view(&w, fixed), &mut ledger).is_empty());
+}
+
 /// A green watch that stays green never says "fixed again".
 #[test]
 fn a_green_watch_is_never_fixed_again() {
