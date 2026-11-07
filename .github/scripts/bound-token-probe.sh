@@ -48,7 +48,8 @@ fi
 work="$(mktemp -d "${RUNNER_TEMP:?}/bound-probe-work.XXXXXX")"
 servers=()
 cleanup() {
-  for pid in "${servers[@]}"; do
+  # The +-expansion: bash 3.2 calls an empty array unbound under set -u.
+  for pid in ${servers[@]+"${servers[@]}"}; do
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
   done
@@ -60,9 +61,12 @@ if [ "$os" = Linux ]; then
   # A fresh login keyring in the temporary HOME, created and unlocked with a
   # made-up password, then the secrets component on this bus.
   kcpass="$(openssl rand -hex 16)"
-  printf '%s' "$kcpass" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+  # Its chatter (an unterminated "discover_other_daemon: 1") is shown only on failure.
+  printf '%s' "$kcpass" | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>"$work/gk.err" \
+    || { cat "$work/gk.err"; echo "::error::gnome-keyring-daemon --unlock failed"; exit 1; }
   # It exits with the session bus when dbus-run-session ends.
-  gnome-keyring-daemon --start --components=secrets >/dev/null
+  gnome-keyring-daemon --start --components=secrets >/dev/null 2>"$work/gk.err" \
+    || { cat "$work/gk.err"; echo "::error::gnome-keyring-daemon --start failed"; exit 1; }
   case "$HOME" in "$RUNNER_TEMP"/*) ;; *) echo "::error::HOME is not the throwaway one"; exit 1 ;; esac
 fi
 
@@ -101,8 +105,11 @@ stored() {
 
 # The two stand-ins. Each writes every request's line and headers to
 # <name>.headers and answers 404.
-start_standin() {
-  python3 -I - "$work" "$1" <<'PY' &
+#
+# ⛔ From a file, not a heredoc on stdin: macOS's /bin/bash (3.2) gives an
+# asynchronous command inside a function /dev/null as its stdin, heredoc or
+# not, so python read an empty script and exited 0 without a word.
+cat > "$work/standin.py" <<'PY'
 import http.server
 import pathlib
 import sys
@@ -130,6 +137,8 @@ server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
 (work / f"{name}.port.tmp").rename(work / f"{name}.port")
 server.serve_forever()
 PY
+start_standin() {
+  python3 -I "$work/standin.py" "$work" "$1" </dev/null &
   servers+=("$!")
   for _ in $(seq 1 50); do [ -s "$work/$1.port" ] && break; sleep 0.2; done
   [ -s "$work/$1.port" ] || { echo "::error::stand-in $1 did not start"; exit 1; }
@@ -172,7 +181,7 @@ run() {
 requests() { grep -c '^GET ' "$work/$1.headers" || true; }
 redacted_err() { sed -E "s/$marker/<marker>/g" "$work/err"; }
 
-echo "probe: account $account, stand-in A $origin_a, stand-in B $origin_b"
+echo "probe: bash $BASH_VERSION, account $account, stand-in A $origin_a, stand-in B $origin_b"
 
 # ---- 1. A bare 1.x entry, and the control: 1.3.0 reads it. ----
 seed
