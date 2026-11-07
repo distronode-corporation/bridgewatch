@@ -444,7 +444,7 @@ async fn run(cli: Cli) -> Outcome {
         Command::Watch(args) => watch(&config, args).await,
         Command::Wait(args) => wait::run(&config, args).await,
         Command::Fixture { action } => fixture(&config, action).await,
-        Command::Init(args) => init(&config, *args),
+        Command::Init(args) => init(&config, *args, &SystemTokenProvider),
         Command::Auth { action } => auth_command(&config, action).await,
         Command::Log(args) => job_log(&config, args).await,
         Command::Retry(args) => job_action(&config, args, JobAction::Retry).await,
@@ -587,7 +587,10 @@ async fn job_action(config_args: &ConfigArgs, args: JobActionArgs, action: JobAc
 }
 
 /// `bridgewatch init`: the wizard's `build_config`, answered from flags.
-fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
+///
+/// `store` is read only when `--account` moves an account that reads its own
+/// entry to another server: see [`bind_before_repoint`].
+fn init(config_args: &ConfigArgs, args: InitArgs, store: &dyn TokenProvider) -> Outcome {
     use bridgewatch_core::config::{OAuthSource, TokenSource};
     use bridgewatch_core::wizard::{self, WizardAnswers, WizardError};
 
@@ -657,11 +660,16 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
             ),
         ));
     }
-    // An explicit --account moving an existing account: where it was.
+    // An explicit --account moving an existing account: where it was, and
+    // whether it read its own entry there.
     let repointed_from = current
         .as_ref()
         .filter(|_| !same_instance)
         .map(|a| a.base_url.clone());
+    let moved_own = current
+        .as_ref()
+        .filter(|_| !same_instance)
+        .filter(|a| matches!(a.token, TokenSource::Own(true)));
     // The source already in the file, on this same instance only: a token
     // source never carries across hosts.
     let kept_source = current
@@ -744,10 +752,20 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
     };
     match built {
         Ok(built) => {
+            if let Some(old) = moved_own {
+                bind_before_repoint(&answers.account, old, store)?;
+            }
             for w in &built.warnings {
                 eprintln!("warning: {}: {}", w.path, w.message);
             }
-            if let Some(note) = repoint_note(&answers, repointed_from.as_deref()) {
+            if let Some(from) = repointed_from.as_deref()
+                && let Some(note) = repoint_note(
+                    from,
+                    &answers.base_url,
+                    moved_own.is_some(),
+                    matches!(answers.token, TokenSource::Own(true)),
+                )
+            {
                 eprintln!("{note}");
             }
             if let Some(primary) = &built.secondary_because {
@@ -849,27 +867,68 @@ fn next_step(
     })
 }
 
-/// What `init` says when `--account` moves an account whose token is its own
-/// entry to another server: that token is bound to the old one and is not
-/// sent, so the account polls nothing until a token is saved for the new one.
-fn repoint_note(
-    answers: &bridgewatch_core::wizard::WizardAnswers,
-    from: Option<&str>,
-) -> Option<String> {
-    let from = from?;
-    matches!(answers.token, config::TokenSource::Own(true)).then(|| {
-        format!(
-            "note: account {:?} moves from {} to {}. A token it stored stays with {} and is \
-             not sent to {}: save a token for the new server in the app's Settings (Accounts, \
-             Token source) before checking it",
-            answers.account,
-            from.trim_end_matches('/'),
-            answers.base_url.trim_end_matches('/'),
-            bridgewatch_core::oauth::host_of(from).unwrap_or_else(|| "the old server".into()),
-            bridgewatch_core::oauth::host_of(&answers.base_url)
-                .unwrap_or_else(|| "the new one".into()),
-        )
-    })
+/// Before `init` prints a file that moves an account which reads its own entry
+/// to another server: tie a token bridgewatch 1.x stored for it (bound to no
+/// server until first used) to the server it is leaving, so the move cannot
+/// carry it to the new one. If that cannot be done (a locked store, a failed
+/// read), nothing is printed: the move is refused, with the store's error.
+///
+/// ⚠️ This reads the credential store, which on macOS can prompt once. Only
+/// this case reads it; every other `init` touches no credential.
+fn bind_before_repoint(
+    account: &str,
+    old: &config::Account,
+    store: &dyn TokenProvider,
+) -> Result<(), Failure> {
+    bridgewatch_core::token::bind_legacy_own(account, old, store)
+        .map(|_| ())
+        .map_err(|e| {
+            // The store's own words. Only a store error can come back from a
+            // read and a write, and its service name, which names the account
+            // the user just typed, is left out of the line.
+            let e = match e {
+                bridgewatch_core::token::TokenError::Store { message, .. } => message,
+                _ => "the credential store did not answer".to_string(),
+            };
+            Failure::new(
+                exit::ERROR,
+                anyhow::anyhow!(
+                    "the token bridgewatch 1.x stored for this account is not tied to a server \
+                     yet, and it could not be tied to {} before the move ({e}), so nothing was \
+                     printed. Unlock the credential store, or make it readable, and run init \
+                     again",
+                    bridgewatch_core::oauth::origin_of(&old.base_url)
+                        .unwrap_or_else(|| "the old server".into())
+                ),
+            )
+        })
+}
+
+/// What `init` says when `--account` moves an account to another server and
+/// the account reads its own entry there: a token it stored on the old server
+/// (`kept`) is bound to that server and is not sent, so the account polls
+/// nothing until a token is saved for the new one.
+///
+/// Takes only the two addresses: neither is a secret, and nothing the
+/// account holds goes into the sentence.
+fn repoint_note(from: &str, to: &str, kept: bool, own_now: bool) -> Option<String> {
+    if !own_now {
+        return None;
+    }
+    let from_host =
+        bridgewatch_core::oauth::host_of(from).unwrap_or_else(|| "the old server".into());
+    let to_host = bridgewatch_core::oauth::host_of(to).unwrap_or_else(|| "the new one".into());
+    let consequence = if kept {
+        format!("A token it stored stays with {from_host} and is not sent to {to_host}: save")
+    } else {
+        "It reads its own stored token from now on: save".to_string()
+    };
+    Some(format!(
+        "note: this moves the account from {} to {}. {consequence} a token for the new server \
+         in the app's Settings (Accounts, Token source) before checking it",
+        from.trim_end_matches('/'),
+        to.trim_end_matches('/'),
+    ))
 }
 
 /// A word a POSIX shell reads back as itself: bare when it is only safe
@@ -1726,5 +1785,112 @@ mod tests {
     fn the_scoped_crate_names_are_the_ones_tracing_sees() {
         assert_eq!(OWN_CRATES[0], module_path!().split("::").next().unwrap());
         assert_eq!(OWN_CRATES[1], "bridgewatch_core");
+    }
+
+    /// `init --account` moving an account that reads its own entry.
+    mod init_repoint {
+        use bridgewatch_core::token::{TokenError, TokenProvider};
+        use clap::Parser;
+
+        use super::super::{Cli, Command, init};
+        use crate::auth::tests::Memory;
+
+        const OWN_ON_OLD: &str = "[accounts.lab]\nbase_url = \"https://gitlab.example.com\"\n\
+                                  token = { own = true }\n";
+
+        /// Run `init --account lab` against a file holding [`OWN_ON_OLD`],
+        /// moving it to `https://gitlab.other.example`.
+        fn repoint(name: &str, store: &dyn TokenProvider) -> Result<i32, i32> {
+            let dir = std::env::temp_dir().join(format!("bw-init-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("config.toml");
+            std::fs::write(&path, OWN_ON_OLD).unwrap();
+            let cli = Cli::try_parse_from([
+                "bridgewatch",
+                "--config",
+                path.to_str().unwrap(),
+                "init",
+                "--base-url",
+                "https://gitlab.other.example",
+                "--account",
+                "lab",
+                "--project",
+                "team/app",
+            ])
+            .expect("parses");
+            let Command::Init(args) = cli.command else {
+                unreachable!()
+            };
+            let out = init(&cli.config, *args, store).map_err(|f| f.code);
+            let _ = std::fs::remove_dir_all(&dir);
+            out
+        }
+
+        fn entry(store: &Memory) -> Option<String> {
+            store.keyring_get("bridgewatch:lab", "token").ok()
+        }
+
+        /// ⛔ The 1.x path the move used to open: a value bound to no server is
+        /// tied to the server the account is leaving before init prints the
+        /// moved file, so the first poll after it is refused, not sent.
+        #[test]
+        fn a_repoint_ties_a_1x_token_to_the_old_server() {
+            let store = Memory::default();
+            store
+                .keyring_set("bridgewatch:lab", "token", "glpat-legacy")
+                .unwrap();
+            assert_eq!(repoint("legacy", &store), Ok(super::exit::OK));
+            let raw = entry(&store).unwrap();
+            assert!(
+                raw.starts_with(bridgewatch_core::token::BOUND_V1)
+                    && raw.contains(r#""origin":"https://gitlab.example.com""#),
+                "the entry is bound to the old server"
+            );
+        }
+
+        /// A locked keychain: the value cannot be bound, so init refuses and
+        /// prints nothing, and the entry is left as it was.
+        #[test]
+        fn a_repoint_with_the_keychain_locked_is_refused() {
+            struct Locked(Memory);
+            impl TokenProvider for Locked {
+                fn keyring_get(&self, service: &str, _: &str) -> Result<String, TokenError> {
+                    Err(TokenError::Store {
+                        service: service.into(),
+                        message: "the keychain is locked".into(),
+                    })
+                }
+                fn keyring_set(&self, service: &str, _: &str, _: &str) -> Result<(), TokenError> {
+                    Err(TokenError::Store {
+                        service: service.into(),
+                        message: "the keychain is locked".into(),
+                    })
+                }
+                fn keyring_delete(&self, s: &str, u: &str) -> Result<(), TokenError> {
+                    self.0.keyring_delete(s, u)
+                }
+                fn env(&self, n: &str) -> Option<String> {
+                    self.0.env(n)
+                }
+                fn run(&self, argv: &[String]) -> Result<String, TokenError> {
+                    self.0.run(argv)
+                }
+            }
+            let store = Locked(Memory::default());
+            store
+                .0
+                .keyring_set("bridgewatch:lab", "token", "glpat-legacy")
+                .unwrap();
+            assert_eq!(repoint("locked", &store), Err(super::exit::ERROR));
+            assert_eq!(entry(&store.0).as_deref(), Some("glpat-legacy"));
+        }
+
+        /// Nothing stored, or a token already bound: nothing to do, and init
+        /// goes ahead.
+        #[test]
+        fn a_repoint_with_nothing_to_bind_goes_ahead() {
+            assert_eq!(repoint("empty", &Memory::default()), Ok(super::exit::OK));
+        }
     }
 }
