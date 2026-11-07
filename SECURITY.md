@@ -43,7 +43,10 @@ What bridgewatch does to protect you, so a report can say which of these it brea
 - In memory a token is a `Secret` whose `Debug` and `Display` print `<redacted>`. The
   request log records method, API path, status and timing, never headers.
 - A token pasted into Settings or the wizard goes to the OS keyring (service
-  `bridgewatch:<account>`), not to a file.
+  `bridgewatch:<account>`), not to a file. From 2.0 it is stored with the server it was
+  saved for (scheme, host and port) and sent to that server only: after the account's
+  `base_url` changes it is not sent at all until a token is saved for the new server.
+  A 1.x entry is bound to the account's server on its first use, before anything is sent.
 - The HTTP client follows no redirects: a redirect from GitLab or GitHub, on an API
   request or on a sign-in request, is an error (a `304` answering bridgewatch's own
   conditional request to GitHub is not a redirect). This keeps the `PRIVATE-TOKEN` or

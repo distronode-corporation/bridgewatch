@@ -20,9 +20,9 @@ pipeline status.
 A Rust core crate, a `bridgewatch` CLI and a Tauri 2 GUI (Svelte 5). macOS and Linux.
 Apache-2.0.
 
-<img alt="The bridgewatch popover: one watch deployed, two more green with no deploy, each row with its commit, branch and age" src="docs/images/popover.png" width="440">
+<img alt="The bridgewatch popover: one watch deployed with its child pipelines listed, two more green with no deploy, each row with its branch, age, commit and what started it" src="docs/images/popover.png" width="440">
 
-*The 1.2.0 popover on Linux, watching three of our public repositories.*
+*The 2.0 popover in the light theme, rendered from the app's frontend with sample data.*
 
 **Status:** 1.3.0, released 2026-11-06. Download it from the
 [Releases page](https://github.com/distronode-corporation/bridgewatch/releases/latest): a
@@ -34,7 +34,38 @@ signed and notarised universal `.dmg` for macOS, a `.deb`, an `.rpm` and an
 [GitLab mirror](https://gitlab.com/distronode-corporation/bridgewatch) (read-only mirror;
 issues and pull requests live on GitHub) · [CHANGELOG](CHANGELOG.md)
 
-## Why another CI tray monitor
+## Quick start
+
+**The app.** Install it (see [Install](#install)) and start it. With no config file it
+opens the [setup wizard](#first-run-the-setup-wizard):
+
+1. Pick GitLab or GitHub Actions, and gitlab.com or github.com.
+2. **Sign in with GitLab** (or GitHub) is already chosen. Approve bridgewatch in your
+   browser with the short code it shows. There is no token to create or paste, and the
+   sign-in is kept in the system keychain and renews itself.
+3. The wizard lists your ten most recently active projects (or repositories), with the
+   top three ticked. Untick any, press **Watch N projects**, then **Finish**.
+
+The icon now follows those projects. On a self-managed GitLab or GitHub Enterprise
+Server, sign-in needs an OAuth application of your own, so the wizard offers glab's or
+gh's login, a pasted token or the others instead (see [Tokens](#tokens)).
+
+**The CLI.** `init` prints a config without touching the network, and `auth login`
+signs in:
+
+```
+npx bridgewatch init --project group/project > new-config.toml
+# check new-config.toml, then move it to the path `npx bridgewatch config path` prints
+npx bridgewatch auth login --account gitlab
+npx bridgewatch check
+```
+
+For a GitHub repository, add `--provider github` to `init` and sign in with
+`--account github`. `init`'s last line on stderr is the exact `auth login` command for
+the account it wrote. Then `bridgewatch wait` after a push answers "did it ship" with an
+exit code, see [CLI](#cli).
+
+## Why bridgewatch
 
 Most CI tray monitors define "project status" as the status of the newest pipeline on a
 branch. On a real project three things go wrong with that.
@@ -72,6 +103,28 @@ So bridgewatch is:
 - **verdict-driven.** The icon state comes from marker jobs you name (for example
   `deploy:origins`), found anywhere in the parent or a child, not from the parent's
   status field.
+
+What that adds up to:
+
+- **Child pipelines are first-class.** A GitLab trigger job is followed into its child
+  pipeline (`dive`), and a bridge that never produced its child reads dead, not green.
+- **"Did it ship", not "did it pass".** `deploy_markers` name the job that deploys, so a
+  green pipeline whose deploy was skipped or manual does not read as deployed, and a
+  deploy that went out while a sibling failed reads `deployed_with_failure`.
+- **Alerts for runs that never happened.** `expect` turns a GitHub workflow that should
+  have started and did not into a dead bridge and a failure notification.
+- **Polling that leaves GitHub's limit alone.** Requests to GitHub are conditional, and a
+  `304 Not Modified` does not count against the limit, so a settled watch costs nothing,
+  see [Rate limits](#rate-limits).
+- **One core, with exit codes.** The tray app and the CLI share one Rust core, so
+  `bridgewatch check` and `bridgewatch wait` give a script the icon's verdict as an
+  [exit code](#exit-codes).
+- **The login you already have.** gh's and glab's keyring items are read in place, never
+  copied, and sign-in is built in for github.com and gitlab.com.
+- **Your own servers.** Self-managed GitLab and GitHub Enterprise Server work alongside
+  the hosted ones, in one file.
+- **Builds you can check.** The macOS app and CLI are signed and notarised, and every
+  release asset carries a build provenance attestation, see [Install](#install).
 
 ## Icon states
 
@@ -445,8 +498,8 @@ need it; either way a Secret Service (GNOME Keyring, KWallet) has to be running.
 ## First run: the setup wizard
 
 When there is no config file at the default path, bridgewatch opens a setup wizard. It is
-optional: **Skip, I'll edit config.toml** writes nothing and opens Settings on the **Edit
-as text** tab, where you can write the file yourself (start from
+optional: **Skip, I'll edit config.toml** writes nothing and opens Settings at **Edit as
+text** in the **Advanced** pane, where you can write the file yourself (start from
 [`examples/distronode.toml`](examples/distronode.toml) for GitLab or
 [`examples/github.toml`](examples/github.toml) for GitHub). Saving from that tab creates
 it.
@@ -547,7 +600,7 @@ Scopes and permissions, refresh, and what is never logged are in
 
 The release builds can send a crash report to Distronode's Sentry organisation in the
 European Union (de.sentry.io) when the tray app fails. They are off until you turn them on. The popover asks once, with **Don't
-send** as the default, and **Settings → UI → Send crash reports** changes the answer
+send** as the default, and **Settings → General → Send crash reports** changes the answer
 later; both write `[ui].send_crash_reports`. Turning it off takes effect at once.
 
 - **Nothing is sent before a yes.** With the key unset or `false`, no crash-report client
@@ -579,7 +632,7 @@ later; both write `[ui].send_crash_reports`. Turning it off takes effect at once
 - **Config problems** appear in a strip at the top of the popover, with a button that
   opens Settings. A file that fails validation does not take effect; the last good
   configuration keeps running.
-- **The Debug section** at the bottom of the popover shows the config path, the last
+- **The Debug section**, opened from **Debug** in the popover's footer, shows the config path, the last
   poll and the recent API requests with status, timing and rate-limit headers. A 404
   there usually means the project id or the token's scope (GitHub answers 404, not 403,
   for a private repository the token cannot see), a 401 means the token, and no requests
@@ -658,6 +711,26 @@ Which desktops report a click on a notification (`tauri-plugin-notification` 2.8
 | Linux, BSDs | Yes, on a notification server that offers actions (GNOME Shell and KDE Plasma do); one that does not reports nothing. |
 | Windows | Only while the toast is on screen; not from the Action Center. |
 
+## My builds
+
+`mine = true` on a watch keeps only the pipelines (GitLab) or workflow runs (GitHub) you
+started, on a busy project where everyone's pushes would otherwise share the rows:
+
+```toml
+[[watches]]
+id = "my-pushes"
+account = "gitlab"
+project = "group/project"
+ref = "main"
+mine = true
+```
+
+The filter is applied by the server: GitLab is asked with `username=`, GitHub with
+`actor=`. "You" is the signed-in user, or for a token source the token's owner, asked once
+(`GET /user`) and remembered; a sign-in that already names its user needs no request. In
+Settings it is **Only my pipelines**, in the watch's Source group. It applies to the rows
+and so to everything drawn from them: the icon, notifications, `check` and `wait`.
+
 ## The job view, and what "live" means
 
 Each pipeline row in the popover expands into its jobs: the parent's own jobs, then one
@@ -691,7 +764,8 @@ presentation only: the verdict never depends on it.
 inbound URL, and the web UIs' live updates use internal channels. "Real time" in
 bridgewatch therefore means polling: every `poll.live_secs` (default 5 s) while any
 pipeline in any watch is running, and every `poll.idle_secs` (default 60 s) when
-everything has settled. The popover shows "updated Ns ago", and opening it polls at once if the last poll is at
+everything has settled. The popover's header shows how long ago the last poll was ("9s
+ago"), and opening it polls at once if the last poll is at
 least 2 s old.
 
 What a live tick costs, per GitLab watch: one pipeline-list request, plus two (`/jobs` and
@@ -853,15 +927,27 @@ access. The setup wizard never binds one, because the address it would bind to i
 one typed into the form: re-run on a 1.x value the app has not used yet, it asks for the
 token again.
 
+- **After a repoint, save the token again.** Once an entry is bound, changing the
+  account's `base_url` stops it being sent (exit 70, above). Paste the token for the new
+  server in Settings (**Accounts**, the account's sign-in panel) or in the wizard, and it
+  is bound to that server instead. A sign-in is the same: sign in again.
 - If you changed an account's `base_url` under 1.x, 1.x had already sent the token to the
   new address, and 2.0 binds it there. Paste the token again if that is not the server it
   belongs to.
-- bridgewatch 1.3 cannot read an entry 2.0 has written. It refuses it ("cannot go in an
-  HTTP header") without sending anything. To go back to 1.3, paste the token again in its
-  Settings; 2.0 binds that value again on its next use.
+- **Downgrading.** bridgewatch 1.3 cannot read an entry 2.0 has written. The released
+  1.3.0 CLI refuses it ("cannot go in an HTTP header") and exits non-zero without sending
+  anything, whichever server the account points at; CI proves this against the real
+  1.3.0 release on the macOS keychain and on the Linux Secret Service. To go back to 1.3,
+  paste the token again in its Settings; 2.0 binds that value again on its next use.
 - Scripts that read the keychain item directly now get a small document,
   `bw-bound-v1:` followed by a tab and JSON with the token and the server, instead of the
   bare token.
+
+Other changes a 1.x user meets: a new github.com or gitlab.com account signs in by
+default (in the wizard, in Settings' **Add account**, and in `init` with no token flag);
+a failing pipeline is announced once, more than three notifications at once arrive as
+one, and a passing push after a failure says "fixed again"; Settings has five panes
+instead of seven tabs. The [CHANGELOG](CHANGELOG.md) lists them all under Breaking.
 
 ### Reusing glab's login
 
@@ -921,9 +1007,10 @@ overwrite a change made on disk since; it tells you to re-read instead.
 
 **GUI and file parity.** Every key in the file has a control in Settings and every control
 maps to a key; tests compare the Settings registry with the generated JSON Schema, so a
-key without a control fails CI. Settings has tabs for Accounts, Watches, Icon,
-Verdict, UI and Log, plus **Edit as text**, which edits the same file directly with
-diagnostics by line and column.
+key without a control fails CI. Settings has five panes in a sidebar: **Accounts**,
+**Watches**, **General** (the icon and the app), **Verdict**, and **Advanced** (the log,
+and **Edit as text**, which edits the same file directly with diagnostics by line and
+column). It opens on the pane you used last.
 
 `bridgewatch config validate` reports every problem with its line and column.
 `bridgewatch config schema` prints the JSON Schema (the same one committed as
