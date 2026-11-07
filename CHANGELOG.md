@@ -13,6 +13,17 @@ body line with a bracket.
 
 ## [Unreleased]
 
+bridgewatch 2.0 signs in instead of asking for a token, keeps every stored token with the
+server it was saved for, and says more with less noise. A new github.com or gitlab.com
+account starts on **Sign in**, and one-click setup then offers your most recently active
+projects with the top three ticked. `bridgewatch wait` blocks until a commit's pipeline has
+a verdict and exits with its code, for scripts and coding agents. A failure notification
+names the first failing line and opens the failed job when clicked; a failing pipeline is
+announced once, a burst arrives as one, and a fix says "fixed again". `mine = true` shows
+only your own pipelines, and token health warns before a token or sign-in expires. The
+popover, Settings and the setup wizard have new layouts. Upgrading from 1.x: read
+Breaking first, and the README's "Upgrading from 1.x".
+
 ### Breaking
 
 - **Own tokens are bound to their server, and a changed `base_url` needs a new token.**
@@ -28,6 +39,34 @@ body line with a bracket.
 - **1.3 cannot read 2.0 entries, and refuses them without sending.** After a downgrade,
   paste the token again in 1.3's Settings; 2.0 binds it again later.
 - **Sign-in is the default for new github.com and gitlab.com accounts** (see Changed).
+  `bridgewatch init` with no token flag writes `token = { oauth = true }` for a new
+  account there, where 1.x wrote `own = true`, and an account the file already has keeps
+  its source instead of being rewritten to `own = true`.
+- **`bridgewatch init` refuses to repoint an existing account to another host** unless
+  `--account` names it (see Fixed). A script that relied on the derived account name
+  being rewritten now gets an error.
+- **`bridgewatch auth status` lists own-token accounts and exits 70 unless every account
+  it lists is usable.** In 1.x it spoke only of sign-ins, so a file with an own token that
+  is missing, or saved for another server, now makes it exit 70.
+- **A failing pipeline is announced once.** "finished: failed" is no longer sent after
+  its blocking-failure notice, and more jobs failing in the same pipeline say nothing
+  more.
+- **"Fixed again" replaces a push's other notifications** (`notify.recovered`, on by
+  default): the first passing push after a failure sends one "fixed again" notification
+  in place of its deploy and finish notifications. On a failing watch, a deploy is
+  announced when its pipeline settles, not while post-deploy jobs still run. Set
+  `notify.recovered = false` on a watch to keep 1.x's deploy and finish notifications
+  for it.
+- **More than three notifications in one poll arrive as one** in the app, titled
+  "bridgewatch: N updates". `bridgewatch watch` still prints every one.
+- **The default notification body and title change.** The body adds the first failing
+  line as a second line, and the title ends in ", fixed again" for the new kind. A custom
+  `notify.title` or `notify.body` is unchanged. `bridgewatch watch` prints the body's lines
+  as one, joined by `; `, so a script matching its text output sees the longer line.
+- **`bridgewatch watch` can print new notification kinds**, `recovered` and `token`, in
+  its text lines and in `watch --json`.
+- **Settings has five panes instead of seven tabs**, and the popover's **Debug**,
+  **Settings…** and **Quit** moved to a footer (see Changed). Nothing in the file moves.
 - **The `bridgewatch-core` API changes.** `token::set_own_token` takes the server's
   `base_url`, `token::TokenError` has a new `BoundElsewhere` variant and `ClientError` a
   new `Token` variant, and a stored own entry is a small document rather than the bare
