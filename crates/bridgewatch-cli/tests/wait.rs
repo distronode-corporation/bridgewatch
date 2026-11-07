@@ -138,7 +138,13 @@ fn a_pipeline_still_running_times_out_with_124() {
     let name = "synth-marker-failed-live-sibling";
     let sha = fixture_sha(name);
     let out = wait(name, &["--sha", &sha, "--timeout", "2s", "--json"]);
-    assert_eq!(code(&out), 124, "stdout {} stderr {}", stdout(&out), stderr(&out));
+    assert_eq!(
+        code(&out),
+        124,
+        "stdout {} stderr {}",
+        stdout(&out),
+        stderr(&out)
+    );
     let v: serde_json::Value = serde_json::from_str(stdout(&out).trim()).expect("JSON");
     assert_eq!(v["timed_out"], true);
     assert_eq!(v["exit"], 124);
@@ -151,11 +157,17 @@ fn a_pipeline_still_running_times_out_with_124() {
 /// A commit with no pipeline yet is waited for, not refused.
 #[test]
 fn a_commit_with_no_pipeline_yet_is_waited_for() {
-    let out = wait("4cfaced9-deployed", &["--sha", "deadbeefcafe", "--timeout", "1s"]);
+    let out = wait(
+        "4cfaced9-deployed",
+        &["--sha", "deadbeefcafe", "--timeout", "1s"],
+    );
     assert_eq!(code(&out), 124, "{}", stderr(&out));
     assert!(stdout(&out).is_empty(), "stdout carries only the answer");
     let err = stderr(&out);
-    assert!(err.contains("no pipeline for deadbeefcafe on main-push yet"), "{err}");
+    assert!(
+        err.contains("no pipeline for deadbeefcafe on main-push yet"),
+        "{err}"
+    );
     assert!(err.contains("last seen: no pipeline"), "{err}");
 }
 
@@ -256,7 +268,11 @@ ref = "main"
         .args(["wait", "--sha", &sha, "--fixture"])
         .arg(fixture("4cfaced9-deployed")));
     assert_eq!(code(&out), 64, "{}", stderr(&out));
-    assert!(stderr(&out).contains("name one with --watch"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("name one with --watch"),
+        "{}",
+        stderr(&out)
+    );
 
     let out = run(bin()
         .arg("--config")
@@ -272,5 +288,9 @@ ref = "main"
 fn the_help_documents_the_timeout_code() {
     let out = run(bin().arg("--help"));
     assert_eq!(code(&out), 0);
-    assert!(stdout(&out).contains("124 wait: --timeout ran out"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("124 wait: --timeout ran out"),
+        "{}",
+        stdout(&out)
+    );
 }

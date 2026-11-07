@@ -150,8 +150,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         MenuItem::with_id(app, ID_PIPELINES, "Open pipelines page", true, None::<&str>)?;
     let refresh = MenuItem::with_id(app, ID_REFRESH, "Refresh now", true, None::<&str>)?;
     let pause_hour = MenuItem::with_id(app, ID_PAUSE_HOUR, "For 1 hour", true, None::<&str>)?;
-    let pause_until =
-        MenuItem::with_id(app, ID_PAUSE_UNTIL_RESUMED, "Until resumed", true, None::<&str>)?;
+    let pause_until = MenuItem::with_id(
+        app,
+        ID_PAUSE_UNTIL_RESUMED,
+        "Until resumed",
+        true,
+        None::<&str>,
+    )?;
     let resume = MenuItem::with_id(app, ID_RESUME, "Resume", false, None::<&str>)?;
     let pause = Submenu::with_items(
         app,

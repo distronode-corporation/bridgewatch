@@ -48,7 +48,9 @@ pub fn parse_duration(raw: &str) -> Result<Duration, String> {
         return Err(bad());
     }
     if let Ok(secs) = text.parse::<u64>() {
-        return (secs > 0).then(|| Duration::from_secs(secs)).ok_or_else(bad);
+        return (secs > 0)
+            .then(|| Duration::from_secs(secs))
+            .ok_or_else(bad);
     }
     let mut total: u64 = 0;
     let mut digits = String::new();
@@ -176,7 +178,13 @@ fn settled(row: &PipelineView) -> bool {
     !row.live && !matches!(row.state, IconState::Running | IconState::Unknown)
 }
 
-fn report(watch: &str, sha: &str, row: Option<&PipelineView>, code: i32, timed_out: bool) -> String {
+fn report(
+    watch: &str,
+    sha: &str,
+    row: Option<&PipelineView>,
+    code: i32,
+    timed_out: bool,
+) -> String {
     serde_json::json!({
         "watch": watch,
         "sha": sha,
@@ -294,11 +302,16 @@ pub async fn run(config_args: &ConfigArgs, args: WaitArgs) -> Outcome {
 
     let waited = args.timeout.map(|t| t.as_secs()).unwrap_or_default();
     if args.json {
-        println!("{}", report(&watch, &sha, last.as_ref(), exit::TIMEOUT, true));
+        println!(
+            "{}",
+            report(&watch, &sha, last.as_ref(), exit::TIMEOUT, true)
+        );
     }
     eprintln!(
         "timed out after {waited}s waiting for {sha} on {watch} (last seen: {})",
-        last.as_ref().map(|r| r.state.as_str()).unwrap_or("no pipeline")
+        last.as_ref()
+            .map(|r| r.state.as_str())
+            .unwrap_or("no pipeline")
     );
     Ok(exit::TIMEOUT)
 }
@@ -320,7 +333,19 @@ mod tests {
         ] {
             assert_eq!(parse_duration(raw), Ok(Duration::from_secs(secs)), "{raw}");
         }
-        for raw in ["", "0", "0s", "m", "10x", "5s5s", "10m1h", "1.5h", "-1", "1h 30m", "99999999999999999999h"] {
+        for raw in [
+            "",
+            "0",
+            "0s",
+            "m",
+            "10x",
+            "5s5s",
+            "10m1h",
+            "1.5h",
+            "-1",
+            "1h 30m",
+            "99999999999999999999h",
+        ] {
             assert!(parse_duration(raw).is_err(), "{raw:?} should be refused");
         }
     }

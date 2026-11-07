@@ -352,6 +352,11 @@
           "type": "boolean",
           "default": false
         },
+        "recovered": {
+          "description": "A watch that was failing passes again (\"fixed again\"). It replaces what\nthat pipeline would otherwise say on the same tick.",
+          "type": "boolean",
+          "default": true
+        },
         "started": {
           "description": "A pipeline started.",
           "type": "boolean",
@@ -360,7 +365,7 @@
         "title": {
           "description": "MiniJinja template for the notification title.",
           "type": "string",
-          "default": "{{watch.id}} {{sha7}}: {{state}}"
+          "default": "{{watch.id}} {{sha7}}: {{state}}{% if kind == 'recovered' %}, fixed again{% endif %}"
         }
       },
       "additionalProperties": false
@@ -741,8 +746,9 @@
             "deployed": true,
             "finished": true,
             "gate_opened": false,
+            "recovered": true,
             "started": false,
-            "title": "{{watch.id}} {{sha7}}: {{state}}"
+            "title": "{{watch.id}} {{sha7}}: {{state}}{% if kind == 'recovered' %}, fixed again{% endif %}"
           }
         },
         "poll": {

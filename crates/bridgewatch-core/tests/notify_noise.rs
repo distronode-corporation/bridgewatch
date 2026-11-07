@@ -114,7 +114,10 @@ fn a_ledger_from_before_the_failure_key_changed_is_not_announced_again() {
 
     let out = notifications_for(
         &w,
-        &view(&w, vec![row(12, "failed", "absent", true, &["lint", "test"])]),
+        &view(
+            &w,
+            vec![row(12, "failed", "absent", true, &["lint", "test"])],
+        ),
         &mut ledger,
     );
     assert!(out.is_empty(), "{out:?}");
@@ -238,7 +241,10 @@ fn the_baseline_learns_a_failing_watch_silently() {
         &mut ledger,
     );
     assert_eq!(kinds(&out), ["recovered"]);
-    assert_eq!(out[0].title, "main-push 4cfaced: succeeded_no_deploy, fixed again");
+    assert_eq!(
+        out[0].title,
+        "main-push 4cfaced: succeeded_no_deploy, fixed again"
+    );
 }
 
 /// A cancelled or still-running push neither breaks nor fixes the watch.
@@ -344,7 +350,13 @@ fn up_to_three_notifications_are_delivered_as_they_are() {
 #[test]
 fn more_than_three_in_one_poll_are_folded_into_one() {
     let five: Vec<_> = (1..=5)
-        .map(|n| note(if n % 2 == 0 { "api" } else { "web" }, n, Some("https://x/1")))
+        .map(|n| {
+            note(
+                if n % 2 == 0 { "api" } else { "web" },
+                n,
+                Some("https://x/1"),
+            )
+        })
         .collect();
     let out = batch(five);
     assert_eq!(out.len(), 1, "{out:#?}");
@@ -355,7 +367,11 @@ fn more_than_three_in_one_poll_are_folded_into_one() {
         n.body,
         "web #1: deployed\napi #2: deployed\nweb #3: deployed\nand 2 more"
     );
-    assert_eq!(n.url.as_deref(), Some("https://x/1"), "every one pointed there");
+    assert_eq!(
+        n.url.as_deref(),
+        Some("https://x/1"),
+        "every one pointed there"
+    );
     assert_eq!(n.watch, "", "more than one watch");
 }
 

@@ -533,10 +533,7 @@ fn candidate_events(watch: &Watch, row: &PipelineView) -> Vec<(NotifyKind, Vec<S
     // config nothing else would ever mention a pipeline somebody cancelled.
     if watch.notify.finished
         && !row.live
-        && !matches!(
-            row.state,
-            IconState::Unknown | IconState::ParkedGate
-        )
+        && !matches!(row.state, IconState::Unknown | IconState::ParkedGate)
     {
         events.push((NotifyKind::Finished, vec![row.state.as_str().to_string()]));
     }
@@ -551,10 +548,7 @@ fn candidate_events(watch: &Watch, row: &PipelineView) -> Vec<(NotifyKind, Vec<S
     // this on every push — for a set of jobs the override table exists to say
     // are expected to sit unrun. `parked_gate` is the state README rule 8 names,
     // and it is the one that means somebody has to press something.
-    if watch.notify.gate_opened
-        && row.state == IconState::ParkedGate
-        && !row.gates.is_empty()
-    {
+    if watch.notify.gate_opened && row.state == IconState::ParkedGate && !row.gates.is_empty() {
         let jobs: Vec<String> = row.gates.iter().take(3).cloned().collect();
         events.push((NotifyKind::GateOpened, jobs));
     }
