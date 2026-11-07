@@ -237,6 +237,28 @@ fn bad_arguments_are_usage_errors() {
     }
 }
 
+/// ⛔ A timeout past a year is a usage error, not a crash: `now + u64::MAX`
+/// seconds overflowed an `Instant` and panicked with exit 101 (Seer, #58).
+#[test]
+fn an_absurd_timeout_is_a_usage_error_not_a_panic() {
+    // A commit with no pipeline, so a wait that got past the arguments would
+    // reach its deadline rather than answer on the first tick.
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    for timeout in ["18446744073709551615", "8784h"] {
+        let out = wait("4cfaced9-deployed", &["--sha", sha, "--timeout", timeout]);
+        let err = stderr(&out);
+        assert_eq!(code(&out), 64, "{timeout}: {err}");
+        assert!(err.contains("--timeout"), "names the flag: {err}");
+        assert!(err.contains("365-day limit"), "names the limit: {err}");
+    }
+    let out = wait(
+        "4cfaced9-deployed",
+        &["--sha", sha, "--no-pipeline-grace", "18446744073709551615"],
+    );
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(stderr(&out).contains("--no-pipeline-grace"));
+}
+
 /// With one primary watch among several it needs no `--watch`; with two
 /// primary watches it has to be told.
 #[test]

@@ -29,7 +29,8 @@ body line with a bracket.
   pipeline exits 4 at once, and an older pipeline is judged like any row. A commit with no
   pipeline yet is waited for, up to `--no-pipeline-grace` (10 minutes), then exits 4. A
   401, 403 or 404 exits 4 at once, the code `check` gives it, naming the account and the
-  status. A 429, a 5xx or a dropped connection is retried on the usual backoff.
+  status. A 429, a 5xx or a dropped connection is retried on the usual backoff. Both
+  durations are at most 365 days; a longer one is a usage error.
 - **A "fixed again" notification** (`notify.recovered`, on by default). When a watch that
   was failing passes again, you get one notification that says so, in place of that
   push's deploy and finish notifications. While a watch is failing, its next deploy is

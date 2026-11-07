@@ -1078,7 +1078,8 @@ after 10m". A request that no retry will fix ends the wait at once with exit 4, 
 a 404 (no such project, or one the token cannot see), or a sign-in that has to be redone.
 The message names the account and the status. A 429, a 5xx or a dropped connection is
 retried on the usual backoff. `--timeout <dur>` (`90s`, `10m`, `1h30m`, or seconds) gives
-up with exit 124, the code `timeout(1)` uses. stdout carries only the answer: one line, or
+up with exit 124, the code `timeout(1)` uses. Both durations are at most 365 days; a longer
+one is a usage error (exit 64). stdout carries only the answer: one line, or
 with `--json` one object, `{"watch", "sha", "state", "exit", "timed_out", "reason",
 "pipeline"}`, where `reason` says why there is no verdict (or is `null`) and `pipeline` is
 the row as `check --json` prints it (or `null`). Progress goes to stderr, once per change. It is read-only, so a token with read scope is enough,

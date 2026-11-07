@@ -31,11 +31,12 @@ pub struct WaitArgs {
     #[arg(long, value_name = "SHA")]
     pub sha: Option<String>,
     /// Give up after this long and exit 124: 90s, 10m, 1h30m, or a number of
-    /// seconds. Without it, wait for as long as it takes.
+    /// seconds, at most 365 days. Without it, wait for as long as it takes.
     #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
     pub timeout: Option<Duration>,
     /// Give up, exiting 4, when the commit still has no pipeline after this
-    /// long. A fresh push often has none for its first seconds or minutes.
+    /// long (at most 365 days). A fresh push often has none for its first
+    /// seconds or minutes.
     #[arg(long, value_name = "DURATION", value_parser = parse_duration, default_value = "10m")]
     pub no_pipeline_grace: Duration,
     /// Print the final verdict as one JSON object instead of a line of text.
@@ -47,8 +48,26 @@ pub struct WaitArgs {
     pub fixture: Option<PathBuf>,
 }
 
-/// Parse `90`, `90s`, `10m`, `1h30m`, `2h`. At least one second.
+/// The longest `--timeout` or `--no-pipeline-grace`: 365 days.
+///
+/// ⛔ Not decoration. A deadline is `now + duration`, and an `Instant` plus a
+/// duration near `u64::MAX` seconds overflows and PANICS (exit 101, Seer #58);
+/// a year is far past any wait and far from that edge.
+const MAX_DURATION: Duration = Duration::from_secs(365 * 24 * 3600);
+
+/// Parse `90`, `90s`, `10m`, `1h30m`, `2h`. At least one second, at most
+/// [`MAX_DURATION`]. clap names the flag in front of the message.
 pub fn parse_duration(raw: &str) -> Result<Duration, String> {
+    let d = parse_duration_uncapped(raw)?;
+    if d > MAX_DURATION {
+        return Err(format!(
+            "{raw:?} is longer than the 365-day limit; write at most 8760h"
+        ));
+    }
+    Ok(d)
+}
+
+fn parse_duration_uncapped(raw: &str) -> Result<Duration, String> {
     let text = raw.trim();
     let bad = || format!("{raw:?} is not a duration; write e.g. 90s, 10m or 1h30m");
     if text.is_empty() {
@@ -409,9 +428,11 @@ where
     F: Future,
 {
     let started = tokio::time::Instant::now();
+    // Never `None` for a timeout given: `parse_duration` caps it at a year.
+    let deadline = plan.timeout.and_then(|t| started.checked_add(t));
     let expired = async {
-        match plan.timeout {
-            Some(t) => tokio::time::sleep_until(started + t).await,
+        match deadline {
+            Some(at) => tokio::time::sleep_until(at).await,
             None => std::future::pending().await,
         }
     };
@@ -907,6 +928,20 @@ show = { settled = 1 }
             "99999999999999999999h",
         ] {
             assert!(parse_duration(raw).is_err(), "{raw:?} should be refused");
+        }
+    }
+
+    /// ⛔ A year at most: a deadline past that edge overflowed an `Instant`
+    /// and panicked (Seer, #58).
+    #[test]
+    fn a_duration_is_at_most_a_year() {
+        assert_eq!(
+            parse_duration("8760h"),
+            Ok(Duration::from_secs(365 * 86_400))
+        );
+        for raw in ["8784h", "31622400", "18446744073709551615"] {
+            let error = parse_duration(raw).expect_err(raw);
+            assert!(error.contains("365-day limit"), "{raw}: {error}");
         }
     }
 
