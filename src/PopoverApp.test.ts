@@ -33,7 +33,7 @@ const snapshot: Snapshot = {
   request_log: [],
 };
 
-const calls = { status: 0, opened: 0, edits: [] as unknown[] };
+const calls = { status: 0, opened: 0, edits: [] as unknown[], resizes: [] as number[] };
 
 /** What the shell answers for the two "open" requests; reset per test. */
 const shell = {
@@ -43,6 +43,7 @@ const shell = {
   openWizard: (): Promise<void> => Promise.resolve(),
   applyConfigEdits: (_edits: unknown): Promise<{ ok: boolean; diagnostics: { message: string }[] }> =>
     Promise.resolve({ ok: true, diagnostics: [] }),
+  resize: (_height: number): void => {},
 };
 
 vi.mock("./lib/ipc", () => ({
@@ -68,7 +69,11 @@ vi.mock("./lib/ipc", () => ({
   pipelinesUrl: () => shell.pipelinesUrl(),
   quit: () => Promise.resolve(),
   refreshNow: () => Promise.resolve(true),
-  resizePopover: () => Promise.resolve(),
+  resizePopover: (height: number) => {
+    calls.resizes.push(height);
+    shell.resize(height);
+    return Promise.resolve();
+  },
 }));
 
 let host: HTMLDivElement;
@@ -87,6 +92,8 @@ beforeEach(() => {
   calls.status = 0;
   calls.opened = 0;
   calls.edits = [];
+  calls.resizes = [];
+  shell.resize = () => {};
   shell.status = status;
   shell.applyConfigEdits = () => Promise.resolve({ ok: true, diagnostics: [] });
   shell.pipelinesUrl = () => Promise.resolve(null);
@@ -306,5 +313,128 @@ describe("PopoverApp, the crash-report question", () => {
     await settle();
     expect(notice()).toBe("Could not save the crash-report choice: the shell is gone");
     expect(question()).not.toBeNull();
+  });
+});
+
+describe("PopoverApp, sizing the window to its content", () => {
+  /**
+   * A layout model, since jsdom lays nothing out. The window is `win` tall;
+   * the header, notices and footer take `chrome`; the list fills the rest
+   * (`flex-1`) and holds `content` of rows. As in a browser, the list's
+   * `scrollHeight` is never less than its own box, and the shell clamps a
+   * resize to between 80 and the configured maximum.
+   */
+  const MAX = 720;
+  const HEADER = 40;
+  const layout = { win: 400, chrome: 100, content: 500 };
+  const restore: (() => void)[] = [];
+
+  const list = () => host.querySelector<HTMLElement>("[data-scroll]")!;
+  const pad = (el: HTMLElement) => parseFloat(el.style.paddingBottom) || 0;
+
+  function stubLayout() {
+    const proto = HTMLElement.prototype;
+    const own = (name: "clientHeight" | "scrollHeight", get: (el: HTMLElement) => number) => {
+      const before = Object.getOwnPropertyDescriptor(proto, name);
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.hasAttribute("data-scroll") ? get(this) : 0;
+        },
+      });
+      restore.push(() => {
+        if (before) Object.defineProperty(proto, name, before);
+        else delete (proto as unknown as Record<string, unknown>)[name];
+      });
+    };
+    own("clientHeight", () => layout.win - layout.chrome);
+    own("scrollHeight", (el) => Math.max(layout.content + pad(el), layout.win - layout.chrome));
+    const rect = vi.spyOn(proto, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute("data-popover")) return new DOMRect(0, 0, 300, layout.win);
+      const parent = this.parentElement;
+      if (parent?.hasAttribute("data-scroll")) {
+        // As a browser does, a row that is not drawn reports a zero rect at the origin.
+        if (this.style.display === "none") return new DOMRect(0, 0, 0, 0);
+        const rows = [...parent.children].filter((row) => (row as HTMLElement).style.display !== "none");
+        const share = layout.content / rows.length;
+        return new DOMRect(0, HEADER + rows.indexOf(this) * share, 300, share);
+      }
+      return new DOMRect(0, 0, 0, 0);
+    });
+    restore.push(() => rect.mockRestore());
+    shell.resize = (h) => (layout.win = Math.min(Math.max(h, 80), MAX));
+  }
+
+  beforeEach(() => {
+    Object.assign(layout, { win: 400, chrome: 100, content: 500 });
+    stubLayout();
+  });
+  afterEach(() => {
+    while (restore.length) restore.pop()!();
+  });
+
+  async function grown() {
+    const h = await render();
+    list().style.paddingBottom = "12px";
+    h.seconds(1);
+    // Grows to the header and footer plus every row and the list's padding.
+    expect(calls.resizes.at(-1)).toBe(100 + 500 + 12);
+    expect(layout.win).toBe(612);
+    return h;
+  }
+
+  it("shrinks the window again once the content gets smaller", async () => {
+    const h = await grown();
+    // A watch collapsed: the rows now take 150, but the list's box is still
+    // the 512 the old window gave it, so its scrollHeight still says 512.
+    layout.content = 150;
+    h.seconds(1);
+    expect(calls.resizes.at(-1)).toBe(100 + 150 + 12);
+    expect(layout.win).toBe(262);
+  });
+
+  it("comes back down from the cap", async () => {
+    const h = await grown();
+    layout.content = 2000;
+    h.seconds(1);
+    expect(layout.win).toBe(MAX);
+    layout.content = 150;
+    h.seconds(1);
+    expect(layout.win).toBe(262);
+  });
+
+  it("adds the outer rows' margins and ignores a row that is not drawn", async () => {
+    const h = await grown();
+    const hidden = document.createElement("div");
+    hidden.style.display = "none";
+    const last = document.createElement("div");
+    last.style.marginBottom = "4px";
+    list().append(hidden, last);
+    (list().firstElementChild as HTMLElement).style.marginTop = "8px";
+    h.seconds(1);
+    // The hidden row's zero rect at the origin would otherwise add the 40 above the list.
+    expect(calls.resizes.at(-1)).toBe(100 + 8 + 500 + 4 + 12);
+  });
+
+  it("is the chrome and the list's padding when nothing in the list is drawn", async () => {
+    const h = await grown();
+    (list().firstElementChild as HTMLElement).style.display = "none";
+    h.seconds(1);
+    expect(calls.resizes.at(-1)).toBe(100 + 12);
+  });
+
+  it("asks once per real change, never again because of its own resize", async () => {
+    const h = await grown();
+    layout.content = 150;
+    h.seconds(1);
+    const settled = calls.resizes.length;
+    h.seconds(5);
+    document.body.click();
+    flushSync();
+    expect(calls.resizes.length).toBe(settled);
+    // Sub-pixel layout noise is not a change either.
+    layout.content = 150.6;
+    h.seconds(2);
+    expect(calls.resizes.length).toBe(settled);
   });
 });
