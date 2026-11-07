@@ -1,7 +1,7 @@
 //! The tray icon and its menu.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use bridgewatch_core::client::github;
 use bridgewatch_core::config::{Config, ProjectRef, Provider};
@@ -41,17 +41,31 @@ pub const TRAY_ID: &str = "bridgewatch";
 #[cfg(not(target_os = "linux"))]
 const TRAY_LABEL: &str = "bridgewatch";
 
-/// The "Launch at login" checkbox.
+/// The items whose state changes after the menu is built, and the pause state
+/// the menu was last drawn for.
+struct LiveItems {
+    autostart: CheckMenuItem<tauri::Wry>,
+    // Linux rebuilds the menu instead of changing these (see `apply_pause`).
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    pause: Submenu<tauri::Wry>,
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    resume: MenuItem<tauri::Wry>,
+    paused: bool,
+}
+
+/// The current menu's [`LiveItems`]: the "Launch at login" checkbox, the
+/// "Pause notifications" submenu and its Resume item.
 ///
 /// ⛔ `TrayIcon` has no `menu()` getter in Tauri 2 — only `set_menu` — so the
 /// only way to flip a checkbox after the menu is built is to have kept the item
 /// itself. Without this the checkbox would show what was ASKED for rather than
 /// what the OS did, which on a failed `enable()` is a lie.
-static AUTOSTART_ITEM: OnceLock<CheckMenuItem<tauri::Wry>> = OnceLock::new();
-
-/// The "Pause notifications" submenu and its Resume item, kept for the same
-/// reason as [`AUTOSTART_ITEM`]: their text and state follow the pause.
-static PAUSE_ITEMS: OnceLock<(Submenu<tauri::Wry>, MenuItem<tauri::Wry>)> = OnceLock::new();
+///
+/// ⛔ Touched on the MAIN thread only ([`sync_pause`], [`sync_autostart_check`]).
+/// A menu call made off it blocks until the main thread runs it, so a worker
+/// holding this lock across one while the main thread waits for the lock would
+/// hang both.
+static LIVE: Mutex<Option<LiveItems>> = Mutex::new(None);
 
 const ID_SHOW: &str = "show";
 const ID_PIPELINES: &str = "pipelines";
@@ -136,8 +150,8 @@ pub fn remove_icon_dir(app: &AppHandle) {
 /// The directory [`build`] handed to the tray, for [`remove_icon_dir`].
 static ICON_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-/// Build the tray icon, its menu and its event handlers.
-pub fn build(app: &AppHandle) -> tauri::Result<()> {
+/// The tray menu, drawn for a pause state, and the items that change later.
+fn build_menu(app: &AppHandle, paused: bool) -> tauri::Result<(Menu<tauri::Wry>, LiveItems)> {
     let launch_at_login = app.autolaunch().is_enabled().unwrap_or(false);
 
     // ⛔ "Show status" is first because Linux is the platform that needs it.
@@ -157,10 +171,10 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
-    let resume = MenuItem::with_id(app, ID_RESUME, "Resume", false, None::<&str>)?;
+    let resume = MenuItem::with_id(app, ID_RESUME, "Resume", paused, None::<&str>)?;
     let pause = Submenu::with_items(
         app,
-        pause_label(false),
+        pause_label(paused),
         true,
         &[
             &pause_hour,
@@ -204,6 +218,26 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             &quit,
         ],
     )?;
+    Ok((
+        menu,
+        LiveItems {
+            autostart,
+            pause,
+            resume,
+            paused,
+        },
+    ))
+}
+
+/// Whether notifications are paused now.
+fn paused_now(app: &AppHandle) -> bool {
+    app.state::<Arc<AppState>>()
+        .with_quiet(|q| q.current(chrono::Utc::now()).is_some())
+}
+
+/// Build the tray icon, its menu and its event handlers.
+pub fn build(app: &AppHandle) -> tauri::Result<()> {
+    let (menu, live) = build_menu(app, paused_now(app))?;
 
     // Through `drawable_for`, like every later swap: the tray is never built
     // without an image (a status item with none is invisible).
@@ -252,21 +286,51 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     }
 
     builder.build(app)?;
-    let _ = AUTOSTART_ITEM.set(autostart);
-    let _ = PAUSE_ITEMS.set((pause, resume));
-    sync_pause(app);
+    *LIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(live);
     Ok(())
 }
 
 /// Reflect the notification pause in the menu: the submenu's label says
 /// whether notifications are paused, and Resume is offered only then.
+///
+/// Called on every poller tick (a timed pause that ran out), so it does
+/// nothing unless the state changed. Runs on the main thread: see [`LIVE`].
 pub fn sync_pause(app: &AppHandle) {
-    let paused = app
-        .state::<Arc<AppState>>()
-        .with_quiet(|q| q.current(chrono::Utc::now()).is_some());
-    if let Some((submenu, resume)) = PAUSE_ITEMS.get() {
-        let _ = submenu.set_text(pause_label(paused));
-        let _ = resume.set_enabled(paused);
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || apply_pause(&handle, paused_now(&handle)));
+}
+
+fn apply_pause(app: &AppHandle, paused: bool) {
+    let mut live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(items) = live.as_mut() else { return };
+    if items.paused == paused {
+        return;
+    }
+    // ⛔ Linux: `Submenu::set_text` changes the GTK item's label and never
+    // reaches the menu the tray host reads. libappindicator exports the GTK
+    // menu over dbusmenu, and a renamed submenu item kept its old "label" there
+    // (read back with `GetGroupProperties`), so a paused tray still offered
+    // "Pause notifications". A NEW menu is exported whole, so the menu is
+    // rebuilt for the new state and handed to the tray instead.
+    #[cfg(target_os = "linux")]
+    {
+        let Some(tray) = app.tray_by_id(TRAY_ID) else {
+            return;
+        };
+        match build_menu(app, paused) {
+            Ok((menu, fresh)) => match tray.set_menu(Some(menu)) {
+                Ok(()) => *items = fresh,
+                Err(e) => tracing::warn!(error = %e, "could not replace the tray menu"),
+            },
+            Err(e) => tracing::warn!(error = %e, "could not rebuild the tray menu"),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        let _ = items.pause.set_text(pause_label(paused));
+        let _ = items.resume.set_enabled(paused);
+        items.paused = paused;
     }
 }
 
@@ -276,10 +340,13 @@ pub fn sync_pause(app: &AppHandle) {
 /// LaunchAgent directory that is not writable, for one — and a checkbox that
 /// shows what was asked for rather than what happened is a lie.
 pub fn sync_autostart_check(app: &AppHandle) {
-    let enabled = app.autolaunch().is_enabled().unwrap_or(false);
-    if let Some(item) = AUTOSTART_ITEM.get() {
-        let _ = item.set_checked(enabled);
-    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let enabled = handle.autolaunch().is_enabled().unwrap_or(false);
+        if let Some(items) = LIVE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            let _ = items.autostart.set_checked(enabled);
+        }
+    });
 }
 
 fn on_menu(app: &AppHandle, id: &str) {

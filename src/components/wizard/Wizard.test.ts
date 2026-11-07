@@ -502,7 +502,34 @@ describe("review and finish", () => {
       deploy_markers: [],
     });
     expect(JSON.stringify(answers)).not.toContain("pasted-secret-value");
-    expect(text('[data-slot="token-note"]')).toContain("bridgewatch's own keychain entry");
+    expect(text('[data-slot="token-note"]')).toBe(
+      `The token you pasted goes into bridgewatch's own keychain entry for "gitlab", never into this file.`,
+    );
+  });
+
+  it("says the stored token is kept, not pasted, when the field was left empty on a re-run", async () => {
+    const api = fakeApi();
+    await start(api, {
+      initial: {
+        account: "work",
+        base_url: "https://gitlab.com",
+        token: { own: true },
+        project: 42,
+        ref_name: "main",
+        watch_id: "web-main",
+      },
+    });
+    expect(q<HTMLInputElement>("#wizard-secret")?.placeholder).toBe("Leave empty to keep the stored token");
+    await next(); // account → project, nothing pasted
+    await next(); // project → watch
+    await next(); // watch → deploy
+    await click('input[name="marker-mode"][value="none"]');
+    await next(); // deploy → preferences
+    await next(); // preferences → review
+    expect(stepId()).toBe("review");
+    const note = text('[data-slot="token-note"]');
+    expect(note).toBe(`bridgewatch keeps the token already in its own keychain entry for "work"; it never goes into this file.`);
+    expect(note).not.toContain("pasted");
   });
 
   it("Finish calls save with the answers, the pasted token only as an option, then reports the path", async () => {

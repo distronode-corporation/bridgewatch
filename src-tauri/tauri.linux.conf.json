@@ -1,0 +1,50 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "app": {
+    "windows": [
+      {
+        "label": "popover",
+        "title": "bridgewatch",
+        "url": "index.html",
+        "width": 440,
+        "height": 720,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "center": true,
+        "acceptFirstMouse": true
+      },
+      {
+        "label": "settings",
+        "title": "bridgewatch \u2014 Settings",
+        "url": "index.html",
+        "width": 880,
+        "height": 640,
+        "minWidth": 720,
+        "minHeight": 480,
+        "resizable": true,
+        "decorations": true,
+        "visible": false,
+        "center": true
+      },
+      {
+        "label": "wizard",
+        "title": "bridgewatch \u2014 Setup",
+        "url": "index.html",
+        "width": 720,
+        "height": 640,
+        "minWidth": 560,
+        "minHeight": 480,
+        "resizable": true,
+        "decorations": true,
+        "visible": false,
+        "center": true
+      }
+    ]
+  }
+}

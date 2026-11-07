@@ -304,6 +304,27 @@ describe("sign-in with a built-in application", () => {
     expect(options).toEqual({ secret: undefined, oauthAccount: "github" });
   });
 
+  it("says on the review that the sign-in is kept, never that a token was pasted", async () => {
+    const oauth = fakeOAuth(() => BUILT_IN);
+    const api = fakeApi();
+    await github(api, oauth);
+    await click('[data-action="oauth-sign-in"]');
+    await click('[data-action="next"]');
+    await type("#wizard-project-input", "acme/web");
+    await click('[data-action="resolve-project"]');
+    await click('[data-action="next"]'); // watch
+    await click('[data-action="next"]'); // deploy
+    await click('input[name="marker-mode"][value="none"]');
+    await click('[data-action="next"]'); // preferences
+    await click('[data-action="next"]'); // review
+    expect(stepId()).toBe("review");
+    const note = text('[data-slot="token-note"]');
+    expect(note).toBe(
+      `The sign-in is kept in the system keychain for "github" and renews itself; this file only says to sign in.`,
+    );
+    expect(note).not.toContain("pasted");
+  });
+
   it("stores a sign-in made after a rename under the new name, and moves nothing", async () => {
     const oauth = fakeOAuth(() => BUILT_IN);
     const api = fakeApi();

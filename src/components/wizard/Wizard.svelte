@@ -650,7 +650,11 @@
   const tokenNote = $derived.by(() => {
     switch (draft.tokenMode) {
       case "paste":
-        return `The token you pasted goes into bridgewatch's own keychain entry for "${draft.account.trim()}", never into this file.`;
+        // ⛔ Only when something WAS pasted. A re-run that kept the stored
+        // token (the field left empty) pasted nothing, and said it had.
+        return draft.secret.trim()
+          ? `The token you pasted goes into bridgewatch's own keychain entry for "${draft.account.trim()}", never into this file.`
+          : `bridgewatch keeps the token already in its own keychain entry for "${draft.account.trim()}"; it never goes into this file.`;
       case "cli":
         return `The token stays in ${cliName(draft.provider)}'s keychain entry; this file only says where it is.`;
       case "env":
