@@ -587,7 +587,7 @@
           ]
         },
         {
-          "description": "bridgewatch's own credential-store entry, `bridgewatch:<account>`,\nwritten by the GUI or by `set_own_token`. The token is bound to the\nserver it was saved for and sent nowhere else: after a change of\n`base_url` it is not sent until a token is saved for the new server.\nA value stored by bridgewatch 1.x is bound to the account's server the\nfirst time it is used.",
+          "description": "bridgewatch's own credential-store entry, `bridgewatch:<account>`,\nwritten by the GUI or by `set_own_token`. The token is bound to the\nserver it was saved for and sent nowhere else: after a change of\n`base_url` it is not sent until a token is saved for the new server.\nA value stored by bridgewatch 1.x is bound to the account's server the\nfirst time it is used, or, when the app or `bridgewatch init` moves the\naccount to another server before that, to the server it is leaving.",
           "type": "object",
           "properties": {
             "own": {

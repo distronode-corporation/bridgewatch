@@ -190,23 +190,75 @@ pub(crate) fn write_admitted(
     text: &str,
     validation: Validation,
 ) -> Validation {
-    let path = &state.config_path;
+    if let Err(refused) = store_admitted(
+        &state.config_path,
+        base,
+        text,
+        state.config().as_ref(),
+        &SystemTokenProvider,
+    ) {
+        return refused;
+    }
+    reload_from_disk(app, false);
+    validation
+}
+
+/// Put an admitted text on disk: first tie the 1.x own entry of every account
+/// it moves to another server to the server it is leaving, then
+/// compare-and-swap. `Err` is the refusal, and nothing was written.
+///
+/// ⛔ That order is the promise the host-move question makes ("its stored token
+/// stays with the old host"). A 1.x value is bound on first use to whatever
+/// the file says then, so a move written before that first use sent it to the
+/// new host. If the entry cannot be bound (a locked store, a failed read), the
+/// move is not written at all.
+pub(crate) fn store_admitted(
+    path: &std::path::Path,
+    base: &str,
+    text: &str,
+    running: Option<&bridgewatch_core::config::Config>,
+    provider: &dyn token::TokenProvider,
+) -> Result<(), Validation> {
+    bind_before_write(path, base, text, running, provider).map_err(Validation::error)?;
     match crate::config::write_if_unchanged(path, base, text) {
-        Ok(()) => {}
+        Ok(()) => Ok(()),
         Err(crate::config::WriteError::Conflict) => {
             let mut refused = Validation::error(format!(
                 "{} changed on disk since this window read it; nothing was written",
                 path.display()
             ));
             refused.conflict = true;
-            return refused;
+            Err(refused)
         }
-        Err(crate::config::WriteError::Io(e)) => {
-            return Validation::error(format!("could not write {}: {e}", path.display()));
-        }
+        Err(crate::config::WriteError::Io(e)) => Err(Validation::error(format!(
+            "could not write {}: {e}",
+            path.display()
+        ))),
     }
-    reload_from_disk(app, false);
-    validation
+}
+
+/// [`token::bind_before_moves`] for a write: `text` measured against the file
+/// it replaces, or, when that does not load, against what is running (the
+/// same `before` as [`admit`]).
+fn bind_before_write(
+    path: &std::path::Path,
+    base: &str,
+    text: &str,
+    running: Option<&bridgewatch_core::config::Config>,
+    provider: &dyn token::TokenProvider,
+) -> Result<(), String> {
+    let after = bridgewatch_core::config::parse_str(text, path)
+        .map_err(|_| "the configuration to be written does not load".to_string())?;
+    let before = bridgewatch_core::config::parse_str(base, path)
+        .ok()
+        .map(|l| l.config)
+        .or_else(|| running.cloned());
+    match before {
+        Some(before) => token::bind_before_moves(&before, &after.config, provider)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
 }
 
 /// Everything a write must pass before it touches the disk: it loads, and
@@ -313,6 +365,30 @@ pub fn reload_from_disk(app: &AppHandle, force: bool) {
     let validation = Validation::of(&raw, &path);
     let loaded = bridgewatch_core::config::parse_str(&raw, &path).ok();
 
+    // ⛔ An edit this app did not write (another editor, a sync, a script) can
+    // move an account too, and nothing asked about it. Before it runs, the
+    // 1.x own entry of every moved account is tied to the server it was on,
+    // exactly as a write from either window does (`store_admitted`); if that
+    // fails, the edit does not run and the running configuration is kept, as
+    // for any failed reload. The previous server is the RUNNING one: nothing
+    // else records it, so an edit made while the app was not running is not
+    // seen as a move (see `token::bind_before_moves`).
+    if let Err(e) = bind_before_reload(
+        state.config().as_ref(),
+        loaded.as_ref().map(|l| &l.config),
+        &SystemTokenProvider,
+    ) {
+        tracing::warn!(error = %e, "reload refused; the running configuration is kept");
+        {
+            let mut inner = state.lock();
+            inner.validation = Validation::error(e);
+            inner.disk_text = None;
+        }
+        let _ = app.emit(CONFIG_CHANGED_EVENT, ());
+        crate::poller::republish_errors(app);
+        return;
+    }
+
     let changed = {
         let mut inner = state.lock();
         inner.validation = validation;
@@ -357,6 +433,23 @@ pub fn reload_from_disk(app: &AppHandle, force: bool) {
     } else {
         // Nothing to restart, but the popover's error strip has to change.
         crate::poller::republish_errors(app);
+    }
+}
+
+/// [`token::bind_before_moves`] for a reload: the file as it now loads,
+/// measured against what is running. Nothing to measure (no running
+/// configuration, as on a first launch, or a file that does not load) is
+/// nothing to bind.
+fn bind_before_reload(
+    running: Option<&bridgewatch_core::config::Config>,
+    loaded: Option<&bridgewatch_core::config::Config>,
+    provider: &dyn token::TokenProvider,
+) -> Result<(), String> {
+    match (running, loaded) {
+        (Some(running), Some(loaded)) => token::bind_before_moves(running, loaded, provider)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        _ => Ok(()),
     }
 }
 
@@ -824,5 +917,165 @@ mod tests {
         );
         assert_eq!(read_for_reload(&dir.join("missing.toml")).unwrap(), "");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A credential store in memory holding one 1.x (bare) value under
+    /// `bridgewatch:gl`; `locked` makes every read and write fail, as a
+    /// locked keychain does.
+    struct Store {
+        entry: std::sync::Mutex<Option<String>>,
+        locked: bool,
+    }
+    impl Store {
+        fn legacy(locked: bool) -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self {
+                entry: std::sync::Mutex::new(Some("glpat-legacy".into())),
+                locked,
+            })
+        }
+        fn entry(&self) -> Option<String> {
+            self.entry.lock().unwrap().clone()
+        }
+        fn refuse(&self, service: &str) -> Result<(), token::TokenError> {
+            if self.locked {
+                return Err(token::TokenError::Store {
+                    service: service.into(),
+                    message: "the keychain is locked".into(),
+                });
+            }
+            Ok(())
+        }
+    }
+    impl token::TokenProvider for Store {
+        fn keyring_get(&self, service: &str, user: &str) -> Result<String, token::TokenError> {
+            self.refuse(service)?;
+            match (service, user, self.entry()) {
+                ("bridgewatch:gl", "token", Some(v)) => Ok(v),
+                _ => Err(token::TokenError::NoEntry {
+                    service: service.into(),
+                    user: user.into(),
+                }),
+            }
+        }
+        fn keyring_set(
+            &self,
+            service: &str,
+            _: &str,
+            value: &str,
+        ) -> Result<(), token::TokenError> {
+            self.refuse(service)?;
+            *self.entry.lock().unwrap() = Some(value.into());
+            Ok(())
+        }
+        fn keyring_delete(&self, _: &str, _: &str) -> Result<(), token::TokenError> {
+            Ok(())
+        }
+        fn env(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn run(&self, _: &[String]) -> Result<String, token::TokenError> {
+            Err(token::TokenError::Empty)
+        }
+    }
+
+    const ON_NEW: &str =
+        "[accounts.gl]\nbase_url = \"https://evil.example\"\ntoken = { own = true }\n";
+
+    /// What the poller would send for `gl` as the file on disk now says it:
+    /// the client is built as the poller builds it, and asked one question.
+    fn poll_from_disk(path: &Path, store: std::sync::Arc<Store>) -> Vec<String> {
+        let account = account_on_disk(path, "gl").expect("the account is on disk");
+        let transport = std::sync::Arc::new(bridgewatch_core::client::ScriptTransport::new());
+        if let Ok(client) = bridgewatch_core::poll::client_for_account_on(
+            "gl",
+            &account,
+            None,
+            store,
+            transport.clone(),
+            bridgewatch_core::client::RequestRing::new(4),
+        ) {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let _ = rt.block_on(client.current_user());
+        }
+        transport.requests().into_iter().map(|r| r.url).collect()
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("bw-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, OWN).unwrap();
+        path
+    }
+
+    /// ⛔ The Seer finding on the 2.0 release. The host-move question says an
+    /// own token "stays with the old host", but a token bridgewatch 1.x stored
+    /// is bound to no host until first used, and the first use after a move
+    /// bound it to the NEW one. Every write from either window now ties it to
+    /// the old host before the file changes, so the poll after the edit sends
+    /// nothing.
+    #[test]
+    fn a_host_edit_ties_a_1x_token_to_the_old_host_before_the_poll() {
+        let path = scratch("move-legacy");
+        let store = Store::legacy(false);
+        store_admitted(&path, OWN, ON_NEW, None, store.as_ref()).expect("written");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ON_NEW);
+        let urls = poll_from_disk(&path, store.clone());
+        assert!(urls.is_empty(), "a request reached the new host: {urls:?}");
+        let entry = store.entry().unwrap();
+        assert!(
+            entry.starts_with(token::BOUND_V1)
+                && entry.contains(r#""origin":"https://gitlab.com""#),
+            "the entry is bound to the old host"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// ⛔ With the keychain locked the entry cannot be bound, so the move is
+    /// refused with the store's error and the file is not written: the poll
+    /// still goes to the old host only.
+    #[test]
+    fn a_host_edit_with_the_keychain_locked_is_refused_and_writes_nothing() {
+        let path = scratch("move-locked");
+        let store = Store::legacy(true);
+        let refused = store_admitted(&path, OWN, ON_NEW, None, store.as_ref())
+            .expect_err("a move with an unbound 1.x token was written");
+        let message = &refused.diagnostics[0].message;
+        assert!(message.contains("was not moved"), "{message}");
+        assert!(message.contains("the keychain is locked"), "{message}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), OWN);
+        assert_eq!(store.entry().as_deref(), Some("glpat-legacy"));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The same for an edit the app did not write: the reload refuses it, so
+    /// the running configuration (the old host) is kept.
+    #[test]
+    fn a_host_edit_made_in_another_editor_is_bound_or_refused_on_reload() {
+        let parse = |raw: &str| {
+            bridgewatch_core::config::parse_str(raw, Path::new("x.toml"))
+                .unwrap()
+                .config
+        };
+        let (old, new) = (parse(OWN), parse(ON_NEW));
+        let locked = Store::legacy(true);
+        let e = bind_before_reload(Some(&old), Some(&new), locked.as_ref()).unwrap_err();
+        assert!(e.contains("was not moved"), "{e}");
+        assert_eq!(locked.entry().as_deref(), Some("glpat-legacy"));
+
+        let open = Store::legacy(false);
+        bind_before_reload(Some(&old), Some(&new), open.as_ref()).expect("bound");
+        assert!(
+            open.entry()
+                .unwrap()
+                .contains(r#""origin":"https://gitlab.com""#)
+        );
+        // A first launch has nothing running to measure against.
+        let fresh = Store::legacy(true);
+        assert!(bind_before_reload(None, Some(&new), fresh.as_ref()).is_ok());
     }
 }

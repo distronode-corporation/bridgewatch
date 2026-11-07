@@ -204,7 +204,7 @@ fn failure(kind: FailureKind, message: impl Into<String>) -> WizardFailure {
     }
 }
 
-fn account_issue(field: &str, message: String) -> WizardFailure {
+fn answer_issue(field: &str, message: String) -> WizardFailure {
     WizardFailure {
         kind: FailureKind::Answers,
         message: message.clone(),
@@ -248,7 +248,7 @@ pub fn client_for(
         && let Ok(token::OwnTokenStatus::Legacy) =
             token::own_token_status(name, &account, store.as_ref())
     {
-        return Err(account_issue(
+        return Err(answer_issue(
             "token",
             "the stored token was saved by bridgewatch 1.x and is not tied to a server yet: \
              paste it again here, or let the app use it once on the account's current server"
@@ -258,9 +258,9 @@ pub fn client_for(
     poll::client_for_account(name, &account, pasted, store, RequestRing::new(16)).map_err(|e| {
         match e {
             PollerError::Token(_, e) => {
-                account_issue("token", format!("could not read the token: {e}"))
+                answer_issue("token", format!("could not read the token: {e}"))
             }
-            PollerError::SignIn(_, e) => account_issue("token", e.to_string()),
+            PollerError::SignIn(_, e) => answer_issue("token", e.to_string()),
             other => failure(FailureKind::Network, other.to_string()),
         }
     })
@@ -270,7 +270,7 @@ pub fn client_for(
 pub fn check_base_url(base_url: &str) -> Result<(), WizardFailure> {
     match url::Url::parse(base_url.trim()) {
         Ok(u) if matches!(u.scheme(), "http" | "https") && u.host_str().is_some() => Ok(()),
-        _ => Err(account_issue(
+        _ => Err(answer_issue(
             "base_url",
             "the instance address must start with https:// (or http://)".into(),
         )),
@@ -542,7 +542,7 @@ pub async fn wizard_save(
         })
         .await
         .map_err(|e| failure(FailureKind::Network, e.to_string()))?
-        .map_err(|e| account_issue("token", format!("could not move the sign-in: {e}")))?;
+        .map_err(|e| answer_issue("token", format!("could not move the sign-in: {e}")))?;
     }
 
     // Stored BEFORE the write, so the reload the write triggers finds it.
@@ -572,7 +572,7 @@ pub async fn wizard_save(
             })
             .await
             .map_err(|e| failure(FailureKind::Network, e.to_string()))?
-            .map_err(|e| account_issue("token", format!("could not store the token: {e}")))?;
+            .map_err(|e| answer_issue("token", format!("could not store the token: {e}")))?;
             stored_over = Some((answers.account.clone(), previous));
         }
     }
@@ -623,7 +623,7 @@ fn admitted_base_url(
         .ok()
         .and_then(|(c, _)| c.accounts.get(account).map(|a| a.base_url.clone()))
         .ok_or_else(|| {
-            account_issue(
+            answer_issue(
                 "token",
                 "could not store the token: the account is not in the file being saved".to_string(),
             )
