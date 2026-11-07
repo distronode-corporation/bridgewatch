@@ -244,6 +244,17 @@ export interface Status {
    * written without it reads as "do not ask".
    */
   crashReports?: CrashReports;
+  /**
+   * "Pause notifications" from the tray menu (`quiet.rs` in the shell): `null`
+   * or absent when notifications are on, `until: null` for "until resumed",
+   * else the RFC 3339 instant the pause runs out.
+   */
+  notificationsPaused?: NotificationsPaused | null;
+}
+
+/** `quiet::PauseView` in the shell. */
+export interface NotificationsPaused {
+  until: string | null;
 }
 
 /** `state::CrashReports` in the shell. */

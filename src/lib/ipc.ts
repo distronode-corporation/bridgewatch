@@ -55,6 +55,7 @@ export const getSnapshot = () => invoke<Snapshot>("get_snapshot");
 export const getStatus = () => invoke<Status>("get_status");
 export const refreshNow = () => invoke<boolean>("refresh_now");
 export const popoverOpened = () => invoke<boolean>("popover_opened");
+export const resumeNotifications = () => invoke<void>("resume_notifications");
 export const readConfigText = () => invoke<string>("read_config_text");
 export const getConfigJson = () =>
   invoke<{ config: unknown; job_order: string[][] } | null>("get_config_json");

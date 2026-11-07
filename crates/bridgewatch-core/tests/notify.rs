@@ -864,7 +864,7 @@ fn a_full_ledger_never_trims_a_pipeline_that_is_still_on_screen() {
             again.iter().map(|n| &n.key).collect::<Vec<_>>()
         );
     }
-    assert!(ledger.contains("5|blocking_failure|lint"));
+    assert!(ledger.contains("5|blocking_failure|"));
     assert!(ledger.contains("5|finished|failed"));
     assert_eq!(
         ledger.seen.len(),

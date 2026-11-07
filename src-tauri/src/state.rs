@@ -52,6 +52,9 @@ pub struct Inner {
     /// bound, its request ring and its sign-in with the watches. Empty until a
     /// poller is built, and again while one cannot be.
     pub clients: BTreeMap<String, Arc<dyn CiClient>>,
+    /// "Pause notifications", from the tray menu. In memory: a pause ends
+    /// when the app quits.
+    pub quiet: crate::quiet::Quiet,
 }
 
 /// Shared application state, reachable from every command and from the poller.
@@ -99,6 +102,8 @@ pub struct Status {
     /// Where crash reporting stands; `ask` is the popover's cue to put the
     /// question. See `crash`.
     pub crash_reports: CrashReports,
+    /// The notification pause in force, or `None`. See `quiet`.
+    pub notifications_paused: Option<crate::quiet::PauseView>,
 }
 
 /// Where crash reporting stands.
@@ -147,6 +152,7 @@ impl AppState {
                 popover_hidden_at: None,
                 disk_text: resolved.text,
                 clients: BTreeMap::new(),
+                quiet: Default::default(),
             }),
             poll_now: Arc::new(Notify::new()),
             reload: Arc::new(Notify::new()),
@@ -213,8 +219,9 @@ impl AppState {
     /// The current shell status. `crash` is the reporter's two facts: whether
     /// the build has an address, and whether it is sending.
     pub fn status(&self, launch_at_login: bool, crash: (bool, bool)) -> Status {
-        let inner = self.lock();
+        let mut inner = self.lock();
         let answer = inner.config.as_ref().map(|c| c.ui.send_crash_reports);
+        let notifications_paused = inner.quiet.view(chrono::Utc::now());
         Status {
             config_path: self.config_path.display().to_string(),
             seeded: inner.seeded,
@@ -230,7 +237,13 @@ impl AppState {
             platform: std::env::consts::OS.to_string(),
             vibrancy: crate::windows::vibrancy(),
             crash_reports: CrashReports::of(crash.0, answer, crash.1),
+            notifications_paused,
         }
+    }
+
+    /// Run `f` on the notification pause state, under the lock.
+    pub fn with_quiet<T>(&self, f: impl FnOnce(&mut crate::quiet::Quiet) -> T) -> T {
+        f(&mut self.lock().quiet)
     }
 
     /// Record a completed tick's timings. The snapshot itself is stored by

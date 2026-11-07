@@ -209,6 +209,32 @@ impl GitHubClient {
         Ok(run.into())
     }
 
+    /// `GET /repos/{owner}/{repo}/commits/{sha}`: a commit's full sha from
+    /// any unambiguous prefix. A 404, or the 422 GitHub answers for a prefix
+    /// it cannot resolve, is `None`.
+    pub async fn commit_sha(
+        &self,
+        project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        #[derive(serde::Deserialize)]
+        struct Commit {
+            sha: String,
+        }
+        let path = format!(
+            "/repos/{}/commits/{}",
+            repo_segment(project)?,
+            urlencoding::encode(sha)
+        );
+        match self.get_json::<Commit>(&path).await {
+            Ok((commit, _)) => Ok(Some(commit.sha.to_ascii_lowercase())),
+            Err(ClientError::NotFound { .. } | ClientError::Unexpected { status: 422, .. }) => {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// `GET /repos/{owner}/{repo}/actions/runs/{id}/jobs`, all pages.
     ///
     /// `filter=latest` is pinned rather than relied on as a default: a re-run
@@ -602,6 +628,9 @@ fn list_path(repo: &str, query: &ListQuery) -> String {
     if let Some(s) = &query.source {
         parts.push(format!("event={}", urlencoding::encode(s)));
     }
+    if let Some(sha) = &query.sha {
+        parts.push(format!("head_sha={}", urlencoding::encode(sha)));
+    }
     // Drops the `pull_requests` array, which is never read and was 45
     // entries on one sampled run.
     parts.push("exclude_pull_requests=true".to_string());
@@ -700,6 +729,14 @@ fn after_origin(url: &str) -> &str {
 impl CiClient for GitHubClient {
     fn ring(&self) -> &RequestRing {
         GitHubClient::ring(self)
+    }
+
+    async fn commit_sha(
+        &self,
+        project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        GitHubClient::commit_sha(self, project, sha).await
     }
 
     async fn list_pipelines(

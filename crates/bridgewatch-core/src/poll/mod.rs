@@ -5,7 +5,7 @@ pub mod cache;
 pub mod planner;
 pub mod policy;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 pub use cache::{CacheEntry, PipelineCache};
@@ -31,6 +31,28 @@ pub struct Tick {
     pub notifications: Vec<Notification>,
     /// How long to wait before the next tick.
     pub next_interval: std::time::Duration,
+    /// Each watch whose LIST request failed this tick, by id, with the error
+    /// as it was raised. The view carries the same error as text, for
+    /// display; this is for a caller that has to tell a refused token or a
+    /// missing project (which no retry will fix) from a timeout or a 503.
+    pub list_errors: BTreeMap<String, ClientError>,
+    /// The watches whose list request was actually SENT this tick. Not one
+    /// sitting out a backoff, and not one whose account is unknown. Whether
+    /// it worked is [`Self::list_errors`].
+    pub polled: BTreeSet<String>,
+}
+
+/// What [`Poller::look_up_commit`] found for one commit on one watch.
+#[derive(Debug, Clone)]
+pub enum CommitLookup {
+    /// The project has no pipeline for this commit that the watch would show
+    /// (by ref and source), or no such commit at all. Yet: a fresh push may
+    /// still be on its way.
+    NotFound,
+    /// Its newest pipeline was skipped: it ran nothing, so it has no verdict.
+    Skipped(Box<Pipeline>),
+    /// Its newest pipeline that ran, judged as a row of the watch would be.
+    Found(Box<PipelineView>),
 }
 
 /// One watch's runtime state.
@@ -255,6 +277,8 @@ impl Poller {
         let mut views = Vec::with_capacity(self.watches.len());
         let mut notifications = Vec::new();
         let mut errors = Vec::new();
+        let mut list_errors = BTreeMap::new();
+        let mut polled_ids = BTreeSet::new();
 
         // What each watch does this tick, decided before anything is sent.
         enum Turn {
@@ -339,9 +363,13 @@ impl Poller {
                     }
                 }
                 Turn::Poll => {
-                    let Some(mut view) = polled.next() else {
+                    let Some((mut view, list_error)) = polled.next() else {
                         continue;
                     };
+                    polled_ids.insert(state.watch.id.clone());
+                    if let Some(e) = list_error {
+                        list_errors.insert(state.watch.id.clone(), e);
+                    }
                     // ⛔ Here, in configuration order, and never inside
                     // `poll_watch`: the history is shared by every watch, and
                     // the concurrent half may touch nothing but its own
@@ -412,7 +440,86 @@ impl Poller {
             snapshot,
             notifications,
             next_interval,
+            list_errors,
+            polled: polled_ids,
         }
+    }
+
+    /// Look one commit's pipelines up DIRECTLY, for `bridgewatch wait`: the
+    /// commit a watch's rows no longer hold (only the newest settled ones are
+    /// kept, and a skipped pipeline never is), or not yet.
+    ///
+    /// `sha` may be abbreviated; it is expanded through the provider first,
+    /// because both match a pipeline's sha in full only. The pipelines are
+    /// held to the watch's ref and sources, as its rows are, and the newest
+    /// one that ran is judged exactly as a row would be: same detail fetch,
+    /// same rules, same script.
+    ///
+    /// ⚠️ Read-only: nothing it fetches enters the watch's cache, its backoff
+    /// or the ledger, so a lookup cannot change what the next tick shows.
+    ///
+    /// # Errors
+    ///
+    /// The first request that failed, as raised. An unknown watch or account
+    /// is [`ClientError::Unsupported`].
+    pub async fn look_up_commit(
+        &self,
+        watch: &str,
+        sha: &str,
+    ) -> Result<CommitLookup, ClientError> {
+        let unsupported = |message: String| ClientError::Unsupported { message };
+        let state = self
+            .watches
+            .iter()
+            .find(|s| s.watch.id == watch)
+            .ok_or_else(|| unsupported(format!("no watch {watch:?}")))?;
+        let client = self
+            .clients
+            .get(&state.watch.account)
+            .ok_or_else(|| unsupported(format!("unknown account {:?}", state.watch.account)))?;
+        let project = &state.watch.project;
+        let full = if sha.len() >= 40 {
+            sha.to_ascii_lowercase()
+        } else {
+            match client.commit_sha(project, sha).await? {
+                Some(full) => full,
+                None => return Ok(CommitLookup::NotFound),
+            }
+        };
+
+        let query = list_query(&state.watch, &state.rules).for_sha(&full);
+        let mut rows: Vec<Pipeline> = client
+            .list_pipelines(project, &query)
+            .await?
+            .into_iter()
+            // Held to the commit here too: a recorded fixture answers every
+            // list with the same page, whatever it asked for.
+            .filter(|p| p.sha.eq_ignore_ascii_case(&full))
+            .filter(|p| state.rules.ref_matcher.matches(&p.ref_name))
+            .filter(|p| WatchRules::source_matches(&state.watch.sources, p.source.as_deref()))
+            .collect();
+        rows.sort_by_key(|p| std::cmp::Reverse(p.id));
+
+        let Some(row) = rows.iter().find(|p| p.status != Status::Skipped) else {
+            return Ok(match rows.into_iter().next() {
+                Some(skipped) => CommitLookup::Skipped(Box::new(skipped)),
+                None => CommitLookup::NotFound,
+            });
+        };
+        let fetched = fetch_detail(client.as_ref(), project, row, &query, state).await?;
+        // A pipeline missing a child is not judged: "nothing failed" from a
+        // list that is not all there is the B1 mistake. The caller asks again.
+        if let Some(e) = fetched.errors.into_iter().next() {
+            return Err(e);
+        }
+        let (view, _) = evaluate_pipeline(
+            &fetched.detail,
+            DetailSource::Fetched,
+            &state.watch,
+            &state.rules,
+            self.script.as_deref(),
+        );
+        Ok(CommitLookup::Found(Box::new(view)))
     }
 
     /// Poll forever, sleeping the interval each tick asks for.
@@ -555,7 +662,7 @@ async fn poll_watch(
     client: &dyn CiClient,
     state: &mut WatchState,
     script: Option<&VerdictScript>,
-) -> WatchView {
+) -> (WatchView, Option<ClientError>) {
     let project = state.watch.project.clone();
     let query = list_query(&state.watch, &state.rules);
 
@@ -571,7 +678,7 @@ async fn poll_watch(
             // intact, so the only thing this tick learned is that one request
             // did not arrive, and the honest way to say that is an error
             // alongside the rows — not `unknown` where a verdict already exists.
-            return match &state.last_view {
+            let view = match &state.last_view {
                 Some(previous) => WatchView {
                     error: Some(message),
                     ..previous.clone()
@@ -587,6 +694,7 @@ async fn poll_watch(
                     actions: state.actions,
                 },
             };
+            return (view, Some(e));
         }
     };
     state.policy.on_success();
@@ -672,16 +780,19 @@ async fn poll_watch(
         None
     };
 
-    WatchView {
-        id: state.watch.id.clone(),
-        role: state.watch.role,
-        icon_state,
-        rows: views,
-        error,
-        jobs: state.jobs_mode,
-        provider: state.provider,
-        actions: state.actions,
-    }
+    (
+        WatchView {
+            id: state.watch.id.clone(),
+            role: state.watch.role,
+            icon_state,
+            rows: views,
+            error,
+            jobs: state.jobs_mode,
+            provider: state.provider,
+            actions: state.actions,
+        },
+        None,
+    )
 }
 
 /// One pipeline's detail, plus whatever went wrong fetching parts of it.

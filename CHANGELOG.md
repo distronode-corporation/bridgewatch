@@ -19,8 +19,34 @@ body line with a bracket.
   application of your own, as GitHub Enterprise Server and a self-managed GitLab need.
   When the file signs in, `init` ends by printing the next step,
   `bridgewatch auth login --account <name>`.
+- **`bridgewatch wait`.** It waits until the pipeline for one commit has a final verdict,
+  then exits with the same codes as `check`. `--sha` defaults to the current directory's
+  `HEAD`. `--watch` can be left out when only one watch is configured, or only one is
+  primary. `--timeout 10m` gives up and exits 124. `--json` prints the verdict as one
+  object. A verdict is final only once nothing is in flight, because a post-deploy failure
+  can still downgrade a deploy. A parked gate is final too, because only a person moves it.
+  A commit that is not among the watch's rows is looked up directly by its sha. A skipped
+  pipeline exits 4 at once, and an older pipeline is judged like any row. A commit with no
+  pipeline yet is waited for, up to `--no-pipeline-grace` (10 minutes), then exits 4. A
+  401, 403 or 404 exits 4 at once, the code `check` gives it, naming the account and the
+  status. A 429, a 5xx or a dropped connection is retried on the usual backoff. Both
+  durations are at most 365 days; a longer one is a usage error.
+- **A "fixed again" notification** (`notify.recovered`, on by default). When a watch that
+  was failing passes again, you get one notification that says so, in place of that
+  push's deploy and finish notifications. While a watch is failing, its next deploy is
+  announced when the pipeline settles, not while post-deploy jobs still run.
+- **More than three notifications at once arrive as one.** It lists the first three
+  titles, then "and N more"; the popover has the rest.
+- **Pause notifications** in the tray menu, for one hour or until resumed. While notifications
+  are paused, the popover says so and offers **Resume**. A pause lasts until the app quits.
 
 ### Changed
+
+- **A failing pipeline is announced once.** The blocking-failure notice is now kept per
+  pipeline, and "finished: failed" is not sent after it. The ledger an older version
+  wrote is read as before, so an upgrade does not repeat a notice.
+- **The default notification title** ends in ", fixed again" for the new kind. A custom
+  `notify.title` is unchanged.
 
 - **Sign-in is the default way to add an account.** On github.com and gitlab.com, where
   bridgewatch has its own application, **Sign in with GitHub** (or GitLab) is now what a

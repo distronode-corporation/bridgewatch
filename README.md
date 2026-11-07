@@ -564,9 +564,9 @@ later; both write `[ui].send_crash_reports`. Turning it off takes effect at once
   popover, right-click for the menu.
 - **Many Linux tray hosts deliver no left-click** (GNOME's extension included), so the
   first menu item, **Show status**, opens the popover. The menu also has **Open pipelines
-  page** (the repository's Actions page on GitHub), **Refresh now**, **Reload config**,
-  **Open config file**, **Open log folder**, **Settings…**, **Setup wizard…**, **Launch
-  at login** and **Quit bridgewatch**.
+  page** (the repository's Actions page on GitHub), **Refresh now**, **Pause notifications** (for 1 hour, or until resumed),
+  **Reload config**, **Open config file**, **Open log folder**, **Settings…**, **Setup
+  wizard…**, **Launch at login** and **Quit bridgewatch**.
 - **Config problems** appear in a strip at the top of the popover, with a button that
   opens Settings. A file that fails validation does not take effect; the last good
   configuration keeps running.
@@ -593,6 +593,30 @@ later; both write `[ui].send_crash_reports`. Turning it off takes effect at once
   raise it. The `bridgewatch` CLI logs to stderr only.
 - **Not Mac App Store eligible.** The popover's transparent window uses Tauri's
   `macos-private-api` feature.
+
+## Notifications and noise
+
+Notifications are for news, so bridgewatch says each thing once:
+
+- **The first tick after a launch is silent.** It learns what is on screen; only changes
+  after it notify.
+- **A pipeline is reported failing once.** More jobs failing in the same pipeline, and
+  that pipeline settling red, say nothing more; the popover lists every failure. A new
+  push that fails is news again.
+- **"Fixed again"** (`notify.recovered`, on by default): when a watch whose newest
+  settled pipeline failed gets a newer one that passes, that push says "deployed, fixed
+  again" (or "succeeded_no_deploy, fixed again") instead of its usual deploy or finish
+  notification. On a failing watch, a deploy is announced when its pipeline finishes: as
+  "fixed again" if it passed, or as "deployed" with a "blocking failure" if it didn't.
+  Running, cancelled and parked pipelines neither break nor fix a watch.
+- **A burst becomes one.** More than 3 notifications from one poll (a laptop waking up, a
+  push fanning out across watches) are shown as one, "bridgewatch: 5 updates", quoting
+  the first three. The CLI's `watch` still prints every one.
+- **Pause notifications** in the tray menu silences them for 1 hour or until you resume,
+  and the popover says so, with a Resume button. A pause lasts until the app quits.
+  What arrives while paused is not saved up for later.
+- **Secondary watches never notify**, and each kind can be turned off per watch
+  (`[watches.notify]`).
 
 ## The job view, and what "live" means
 
@@ -847,9 +871,10 @@ Accounts of both providers can sit in one file:
 | `post_deploy_failure` | The same for a blocking failure after the marker, or in the marker's own pipeline [`downgrade`]. |
 | `eta` | Learn how long this watch's deploys take and show it on a running row, see [Deploy ETA](#deploy-eta) [true]. |
 | `[watches.jobs]` | Job-name pattern (literal or `re:`) to `gate`, `warning`, `blocking` or `ignore`. File order, first match wins. Applies to bridges too. On GitHub it is the only way to tolerate a failure. |
-| `notify.deployed`, `notify.blocking_failure`, `notify.finished` | Notify on these events [true]. |
+| `notify.deployed`, `notify.blocking_failure`, `notify.finished` | Notify on these events [true]. A pipeline is reported failing once, see [Notifications and noise](#notifications-and-noise). |
+| `notify.recovered` | "Fixed again": the watch's newest settled pipeline passed where the one before it failed. It replaces that pipeline's other notifications [true]. |
 | `notify.started`, `notify.gate_opened` | Notify on these events [false]. |
-| `notify.title`, `notify.body` | MiniJinja templates over the pipeline view (`watch.id`, `sha7`, `state`, `failures`, `warnings`, `gates`, `ref`, `source`, `url`, ...). |
+| `notify.title`, `notify.body` | MiniJinja templates over the pipeline view (`watch.id`, `kind`, `sha7`, `state`, `failures`, `warnings`, `gates`, `ref`, `source`, `url`, ...). The default title adds ", fixed again" when `kind` is `recovered`. |
 | `notify.click` | `first_failure_or_pipeline`, `pipeline`, `marker_job` or `none`. Computed, but desktop notifications cannot open a URL yet, see [Limitations](#limitations). |
 
 **`[icon]`**:
@@ -1008,6 +1033,9 @@ bridgewatch watch --json                 # one JSON object per line: a snapshot 
                                          # {"notify": {...}} per notification
 bridgewatch watch --ticks 3              # stop after three ticks
 
+bridgewatch wait                         # block until HEAD's pipeline has a verdict, exit with it
+bridgewatch wait --sha 4cfaced --watch main-push --timeout 20m --json
+
 bridgewatch init --project group/project --glab --deploy-marker deploy:production
                                          # print the config the wizard would write
 bridgewatch init --provider github --project octo-org/octo-repo --gh --workflow ci.yml
@@ -1029,6 +1057,37 @@ bridgewatch play <job-url> [--account <name>] [--yes]
 
 `--config <path>` (or `-c`) is accepted before or after any subcommand. `watch` does not
 write the GUI's notification ledger; it keeps its own.
+
+**`wait`** is for scripts and coding agents: push, then `bridgewatch wait`, and the exit
+code says whether it went green and whether it deployed, with the codes `check` uses
+(see [Exit codes](#exit-codes)). It waits for one commit, `--sha` (7 or more hex digits)
+or else `git rev-parse HEAD` in the current directory, on one watch, `--watch <id>`, which
+may be left out when only one watch is configured or only one is primary. It polls with
+the same core, rules and intervals as `check` and `watch` and stops at the newest pipeline
+for that commit once nothing in it is in flight: a row that already reads `failed` while
+other jobs run is not final yet, because a deploy can still follow. A pipeline parked at
+a manual gate is final (exit 3), since nothing moves until somebody presses it. A commit
+that is not among the watch's rows (they keep only the newest settled pipelines, and
+never a skipped one) is looked up directly by its sha. If its pipeline was skipped, `wait`
+exits 4 with "pipeline for <sha7> was skipped". If its pipeline is older than the rows, it
+is judged like any row and exits with that verdict's code. A commit with no pipeline yet is
+waited for, since a fresh push often has none for a minute or two. If there is still none
+after `--no-pipeline-grace` (10 minutes by default), it exits 4 with "no pipeline for <sha7>
+after 10m". A request that no retry will fix ends the wait at once with exit 4, the code
+`check` gives the same answer: a 401 or 403 (a token that is refused or lacks the scope),
+a 404 (no such project, or one the token cannot see), or a sign-in that has to be redone.
+The message names the account and the status. A 429, a 5xx or a dropped connection is
+retried on the usual backoff. `--timeout <dur>` (`90s`, `10m`, `1h30m`, or seconds) gives
+up with exit 124, the code `timeout(1)` uses. Both durations are at most 365 days; a longer
+one is a usage error (exit 64). stdout carries only the answer: one line, or
+with `--json` one object, `{"watch", "sha", "state", "exit", "timed_out", "reason",
+"pipeline"}`, where `reason` says why there is no verdict (or is `null`) and `pipeline` is
+the row as `check --json` prints it (or `null`). Progress goes to stderr, once per change. It is read-only, so a token with read scope is enough,
+it reads only that watch's account's token, and it keeps no notification ledger.
+
+```
+git push && bridgewatch wait --timeout 30m && echo "shipped"
+```
 
 **`init`** is the wizard without the UI or the network. It takes `--provider` (`gitlab`,
 the default, or `github`), `--project` (required; an id, a path or a project URL on
@@ -1076,15 +1135,18 @@ schedule exits 1, not 4. Name a primary watch alongside and the tray rule applie
 because a secondary watch must not be able to outvote a primary one.
 
 ```
-  0   check/watch: deployed or succeeded_no_deploy; any other command: success
-  1   check/watch: failed; fixture scrub --check: a fixture would change; retry/play: answered no
-  2   check/watch: deployed_with_failure
-  3   check/watch: running, parked_gate or canceled
-  4   check/watch: unknown (nothing matched, or a request failed; errors on stderr)
+  0   check/watch/wait: deployed or succeeded_no_deploy; any other command: success
+  1   check/watch/wait: failed; fixture scrub --check: a fixture would change; retry/play: answered no
+  2   check/watch/wait: deployed_with_failure
+  3   check/watch: running, parked_gate or canceled; wait: parked_gate or canceled, or interrupted
+  4   check/watch: unknown (nothing matched, or a request failed; errors on stderr); wait: skipped, no pipeline after --no-pipeline-grace, or a refused request (401, 403, 404)
   64  usage error: bad arguments, a --watch, --account or job URL that names nothing configured, a fixture scrub directory with no recordings, or retry/play with no terminal and no --yes
   70  any other error (token, fixture, recording, I/O, or a log or job request that failed)
   78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true
+  124 wait: --timeout ran out before the commit's pipeline had a verdict
 ```
+
+For `wait` the code is the state of the one pipeline it waited for, never the tray's.
 
 ## Build from source
 

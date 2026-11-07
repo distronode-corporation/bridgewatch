@@ -69,6 +69,11 @@ pub struct ListQuery {
     /// **GitLab ignores it**: a GitLab pipeline that never created a child
     /// already says so itself, as a bridge with no downstream pipeline.
     pub expect: Vec<String>,
+    /// One commit, as a FULL sha: GitLab's `sha`, GitHub's `head_sha`. Only
+    /// `bridgewatch wait` sets it, to look a commit's pipelines up directly
+    /// when they are not among the rows a watch shows. Both providers match
+    /// the full sha only; [`super::CiClient::commit_sha`] expands a short one.
+    pub sha: Option<String>,
 }
 
 impl ListQuery {
@@ -82,6 +87,7 @@ impl ListQuery {
             workflow: None,
             commit_group: None,
             expect: Vec::new(),
+            sha: None,
         }
     }
 
@@ -96,6 +102,7 @@ impl ListQuery {
             workflow: None,
             commit_group: None,
             expect: Vec::new(),
+            sha: None,
         }
     }
 
@@ -122,10 +129,20 @@ impl ListQuery {
         self
     }
 
+    /// The same query, narrowed to one commit's pipelines. `sha` must be the
+    /// full sha; see [`Self::sha`].
+    pub fn for_sha(mut self, sha: &str) -> Self {
+        self.sha = Some(sha.to_string());
+        self
+    }
+
     fn to_query(&self) -> String {
         let mut parts = Vec::new();
         if let Some(r) = &self.ref_name {
             parts.push(format!("ref={}", urlencoding::encode(r)));
+        }
+        if let Some(sha) = &self.sha {
+            parts.push(format!("sha={}", urlencoding::encode(sha)));
         }
         if let Some(s) = &self.source {
             parts.push(format!("source={}", urlencoding::encode(s)));
@@ -192,6 +209,30 @@ impl GitLabClient {
     ) -> Result<Pipeline, ClientError> {
         let path = format!("/projects/{}/pipelines/{id}", project.url_segment());
         self.get_json::<wire::Pipeline>(&path).await.map(Into::into)
+    }
+
+    /// `GET /projects/{project}/repository/commits/{sha}`: a commit's full
+    /// sha from any unambiguous prefix. A 404 is `None`: no such commit, or
+    /// not pushed yet.
+    pub async fn commit_sha(
+        &self,
+        project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        #[derive(serde::Deserialize)]
+        struct Commit {
+            id: String,
+        }
+        let path = format!(
+            "/projects/{}/repository/commits/{}",
+            project.url_segment(),
+            urlencoding::encode(sha)
+        );
+        match self.get_json::<Commit>(&path).await {
+            Ok(commit) => Ok(Some(commit.id.to_ascii_lowercase())),
+            Err(ClientError::NotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// `GET /projects/{project}/pipelines/{id}/jobs`, all pages.
@@ -446,6 +487,14 @@ fn normalise<W, M: From<W>>(items: Vec<W>) -> Vec<M> {
 impl CiClient for GitLabClient {
     fn ring(&self) -> &RequestRing {
         GitLabClient::ring(self)
+    }
+
+    async fn commit_sha(
+        &self,
+        project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        GitLabClient::commit_sha(self, project, sha).await
     }
 
     async fn list_pipelines(
