@@ -973,14 +973,7 @@ fn resolve_own(
             // Checked before it is bound: a value that could never be sent is
             // not worth binding, and its error is the one to show.
             let secret = checked(&value)?;
-            let bound =
-                encode_bound(&secret, &account.base_url).ok_or_else(|| TokenError::Store {
-                    service: service.clone(),
-                    message: "the account's base_url is not an http(s) URL, so the stored \
-                              token cannot be tied to a server, and it is not sent"
-                        .to_string(),
-                })?;
-            provider.keyring_set(&service, SystemTokenProvider::OWN_USER, &bound)?;
+            bind_legacy(&service, &secret, &account.base_url, provider)?;
             tracing::info!(
                 account = %account_name,
                 origin = %crate::oauth::origin_of(&account.base_url).unwrap_or_default(),
@@ -991,6 +984,130 @@ fn resolve_own(
     }
 }
 
+/// Write a 1.x value back in its bound form, tied to the origin of `base_url`.
+/// The one place a 1.x value is bound, for first use and before a move alike.
+fn bind_legacy(
+    service: &str,
+    secret: &Secret,
+    base_url: &str,
+    provider: &dyn TokenProvider,
+) -> Result<(), TokenError> {
+    let bound = encode_bound(secret, base_url).ok_or_else(|| TokenError::Store {
+        service: service.to_string(),
+        message: "the account's base_url is not an http(s) URL, so the stored token cannot be \
+                  tied to a server, and it is not sent"
+            .to_string(),
+    })?;
+    provider.keyring_set(service, SystemTokenProvider::OWN_USER, &bound)
+}
+
+/// Bind an account's 1.x own entry to the server `account` names NOW, without
+/// using it. `Ok(true)` when a 1.x value was bound; `Ok(false)` when there was
+/// nothing to bind: no entry, an entry already bound, or a value that could
+/// never be sent anyway (empty, malformed, or a bound document this version
+/// cannot read, all of which [`resolve`] refuses wherever the account points).
+///
+/// ⛔ For the moment before an account is pointed at another server. A 1.x
+/// value is bound on first use to whatever `base_url` reads THEN, so a move
+/// made before that first use used to carry it to the new server; bound to the
+/// old one first, it is refused there instead ([`TokenError::BoundElsewhere`]).
+/// An error (a locked store, a read that fails) means the value is still
+/// unbound, and the caller must not make the move.
+pub fn bind_legacy_own(
+    account_name: &str,
+    account: &crate::config::Account,
+    provider: &dyn TokenProvider,
+) -> Result<bool, TokenError> {
+    let service = SystemTokenProvider::own_service(account_name);
+    let raw = match provider.keyring_get(&service, SystemTokenProvider::OWN_USER) {
+        Ok(raw) => raw,
+        Err(TokenError::NoEntry { .. }) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let Ok(OwnEntry::Legacy(value)) = read_own_entry(&raw, &service) else {
+        return Ok(false);
+    };
+    let Ok(secret) = checked(&value) else {
+        return Ok(false);
+    };
+    bind_legacy(&service, &secret, &account.base_url, provider)?;
+    Ok(true)
+}
+
+/// An edit that moves an account to another server could not tie the
+/// account's 1.x own entry to the old server first, so it must not be made.
+#[derive(Debug)]
+pub struct MoveRefused {
+    /// The name of the account being moved.
+    pub name: String,
+    /// The origin it is moving away from, which the entry was to be bound to.
+    pub from: String,
+    /// Why the entry could not be bound. Never carries the token.
+    pub error: TokenError,
+}
+
+impl std::fmt::Display for MoveRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "account \"{}\" was not moved: the token bridgewatch 1.x stored for it is not tied \
+             to a server yet, and it could not be tied to {} before the move ({}). Unlock the \
+             credential store, or make it readable, and try again",
+            self.name, self.from, self.error
+        )
+    }
+}
+
+impl std::error::Error for MoveRefused {}
+
+/// Before `after` replaces `before`: bind the 1.x own entry of every account
+/// that moves to another server to the server it is leaving. Returns the
+/// accounts whose entry was bound.
+///
+/// Which accounts: one named in both, whose origin differs
+/// ([`crate::oauth::origin_of`], so a respelling is not a move), and which
+/// read its own entry before the move (`token = { own = true }`). An account
+/// that used another source on the old server was not using that entry there,
+/// so there is no old server for it to stay with, and its store is not read.
+/// A `before` with no origin could never send the entry (`resolve` refuses
+/// to bind to it), so it has nowhere to stay either.
+///
+/// ⚠️ Reads the credential store for each such account (on macOS that can
+/// raise a prompt), so call it off the UI thread where one exists.
+pub fn bind_before_moves(
+    before: &crate::config::Config,
+    after: &crate::config::Config,
+    provider: &dyn TokenProvider,
+) -> Result<Vec<String>, MoveRefused> {
+    let mut bound = Vec::new();
+    for (name, account) in &after.accounts {
+        let Some(old) = before.accounts.get(name) else {
+            continue;
+        };
+        if !matches!(old.token, TokenSource::Own(true)) {
+            continue;
+        }
+        let Some(from) = crate::oauth::origin_of(&old.base_url) else {
+            continue;
+        };
+        if crate::oauth::origin_of(&account.base_url).as_deref() == Some(from.as_str()) {
+            continue;
+        }
+        match bind_legacy_own(name, old, provider) {
+            Ok(true) => bound.push(name.clone()),
+            Ok(false) => {}
+            Err(error) => {
+                return Err(MoveRefused {
+                    name: name.clone(),
+                    from,
+                    error,
+                });
+            }
+        }
+    }
+    Ok(bound)
+}
+
 /// What bridgewatch's own entry for an account holds, as a UI or `auth status`
 /// may show it. Never the token.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -999,7 +1116,8 @@ pub enum OwnTokenStatus {
     /// Nothing is stored.
     None,
     /// A value written by bridgewatch 1.x: bound to the account's server the
-    /// first time it is used.
+    /// first time it is used, or to the server it leaves when it is moved
+    /// before that ([`bind_before_moves`]).
     Legacy,
     /// Saved for the account's server, and sent there.
     Bound {

@@ -709,7 +709,7 @@ describe("TokenField, the server an own token is stored for", () => {
     const h = renderOwn([{ kind: "legacy" }, { kind: "bound", origin: "https://gitlab.example.com" }]);
     await settle();
     expect(line()?.textContent).toBe(
-      "A token saved by bridgewatch 1.x is stored. It is tied to https://gitlab.example.com the first time it is used.",
+      "A token saved by bridgewatch 1.x is stored. It is tied to https://gitlab.example.com the first time it is used, or before the account moves to another host.",
     );
     const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
     input.value = "glpat-new";

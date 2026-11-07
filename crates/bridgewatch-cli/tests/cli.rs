@@ -1078,12 +1078,14 @@ fn init_never_carries_a_token_source_to_another_host() {
     let text = stdout(&out);
     assert!(!text.contains("glab:gitlab.com:token"), "{text}");
     assert!(text.contains("token = { own = true }"), "{text}");
-    // ⛔ The exact path of the 1.x bug: a repointed own account. Its stored
-    // token is bound to the old server now, and init says so.
+    // The account used glab's item on the old server, so it had no own token
+    // there to keep (and its store is not read): init says what to do next.
+    // The own-to-own move, which ties a 1.x token to the old server first,
+    // is `init_repoint` in main.rs, against a store in memory.
     assert!(
         stderr(&out).contains(
-            "note: account \"gitlab\" moves from https://gitlab.com to https://gitlab.acme.com. \
-             A token it stored stays with gitlab.com and is not sent to gitlab.acme.com"
+            "note: this moves the account from https://gitlab.com to https://gitlab.acme.com. \
+             It reads its own stored token from now on: save a token for the new server"
         ),
         "{}",
         stderr(&out)
