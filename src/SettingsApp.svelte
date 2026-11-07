@@ -1,13 +1,14 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
 
   import { Button } from "$lib/components/ui/button/index.js";
   import AccountsTab from "./components/settings/AccountsTab.svelte";
   import Ask from "./components/settings/Ask.svelte";
   import SimpleTab from "./components/settings/SimpleTab.svelte";
+  import { HINT, SECTION_TITLE } from "./components/settings/styles";
   import TextTab from "./components/settings/TextTab.svelte";
   import WatchesTab from "./components/settings/WatchesTab.svelte";
-  import type { Tab } from "./lib/settings/registry";
+  import { PANE_GROUPS, PANES, paneFor, rememberPane, restorePane, type Pane } from "./lib/settings/panes";
   import {
     applyConfigEdits,
     getConfigJson,
@@ -27,24 +28,81 @@
   import { isFirstRun, messageOf } from "./lib/format";
   import type { Edit, Status, Validation } from "./lib/types";
 
-  type TabId = Tab | "text";
+  /** This window's storage, or none where the webview refuses it. */
+  function storage(): Storage | null {
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  }
 
-  const TABS: { id: TabId; label: string }[] = [
-    { id: "accounts", label: "Accounts" },
-    { id: "watches", label: "Watches" },
-    { id: "icon", label: "Icon" },
-    { id: "verdict", label: "Verdict" },
-    { id: "ui", label: "UI" },
-    { id: "log", label: "Log" },
-    { id: "text", label: "Edit as text" },
-  ];
+  /** The pane on screen: the last one used, until the shell asks for another. */
+  let pane = $state<Pane>(restorePane(storage()));
 
-  let tab = $state<TabId>("accounts");
+  /**
+   * Show a pane. `remember` is for the user's own choice only: the shell
+   * opening the window on "Edit as text" for a broken file is not a pane the
+   * user chose, and must not become the one every later window opens on.
+   */
+  /** The one scroll container every pane is shown in. */
+  let paneScroller = $state<HTMLElement | null>(null);
+
+  async function show(name: string | null | undefined, remember: boolean) {
+    const request = paneFor(name);
+    if (!request) return;
+    const changed = request.pane !== pane;
+    pane = request.pane;
+    if (remember) rememberPane(storage(), request.pane);
+    if (request.focus === "text") {
+      await tick();
+      document.getElementById("edit-as-text")?.scrollIntoView?.({ block: "start" });
+      return;
+    }
+    // ⛔ Every pane is shown in the SAME scroll container, so a new pane kept
+    // the old one's scrollTop: scroll down Accounts, open General, and General
+    // opened part way down with its first fields above the fold (Seer, #65).
+    // The element is reset rather than the panes keyed, so nothing remounts.
+    if (changed && paneScroller) paneScroller.scrollTop = 0;
+  }
+
+  /** The sidebar is one vertical tab list: arrows, Home and End move AND show, as a tab list does. */
+  function sidebarKey(event: KeyboardEvent, index: number) {
+    const last = PANES.length - 1;
+    const to =
+      event.key === "ArrowDown"
+        ? (index + 1) % PANES.length
+        : event.key === "ArrowUp"
+          ? (index + last) % PANES.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? last
+              : null;
+    if (to === null) return;
+    event.preventDefault();
+    void show(PANES[to].id, true);
+    document.getElementById(`tab-${PANES[to].id}`)?.focus();
+  }
+
+  const paneLabel = $derived(PANES.find((p) => p.id === pane)?.label ?? "");
+
   let config = $state<unknown>(null);
   let jobOrder = $state<string[][]>([]);
   let text = $state("");
   let status = $state<Status | null>(null);
   let validation = $state<Validation | null>(null);
+  /**
+   * Who `validation` answers: a form edit or move, or the file (on load, or
+   * the text editor's own Validate and Save).
+   *
+   * ⛔ The Advanced pane holds form fields (Log) AND the editor, which lists
+   * the file's diagnostics under its 340px box. A refused Log edit put its
+   * reason there, out of sight below the editor, while the notice said "see
+   * the errors below" (Seer, #65). A FORM answer is listed under the pane on
+   * every pane, and the editor lists only the file's.
+   */
+  let validationFrom = $state<"form" | "file">("file");
   let notice = $state("");
   /** The text this window's last successful text-tab save wrote, if any. */
   let savedText: string | null = null;
@@ -79,6 +137,7 @@
     const keep =
       keepValidation === "if-ours" ? validation?.ok === true && text === savedText : keepValidation;
     if (keep) return;
+    validationFrom = "file";
     // A first launch has no file YET: that is the wizard's moment, not an
     // error to list in red under every tab.
     validation =
@@ -90,10 +149,8 @@
   onMount(() => {
     if (!inTauri()) return;
     void load();
-    void takeSettingsTab().then((t) => {
-      if (t) tab = t as TabId;
-    });
-    const unlisten = onOpenSettings((t) => (tab = t as TabId));
+    void takeSettingsTab().then((t) => void show(t, false));
+    const unlisten = onOpenSettings((t) => void show(t, false));
     // H15: any writer (this window, the tray, $EDITOR, the CLI) moves the
     // file; the shell says so, and every copy this window holds follows. The
     // text tab keeps a DIRTY buffer regardless, and the shell's
@@ -158,6 +215,7 @@
       return;
     }
     validation = result;
+    validationFrom = "form";
     notice = result.ok ? "Saved." : "Not saved — see the errors below.";
     await load(!result.ok);
   }
@@ -188,6 +246,7 @@
     // re-reads it, so the order on screen is the file's order, never a guess.
     const result = await moveWatch(id, delta);
     validation = result;
+    validationFrom = "form";
     notice = result.ok ? "Moved." : "Not moved — see the errors below.";
     await load(!result.ok);
   }
@@ -235,144 +294,195 @@
   }
 </script>
 
-<div class="settings bg-background text-foreground flex h-screen flex-col px-3.5 pt-2.5 pb-3.5 text-[13px]">
-  <!-- ⛔ Every tab label stays on one line: at a narrow window "Edit as text"
-       wrapped onto three. The tab strip never shrinks; the buttons on the
-       right wrap to a second row first. -->
-  <nav class="border-border flex flex-wrap items-center gap-1 border-b pb-2">
-    <div class="bg-muted flex shrink-0 items-center gap-0.5 rounded-2xl p-0.5" role="tablist">
-      {#each TABS as t (t.id)}
+<!-- A 168px sidebar of five panes, the pane at most 600px wide, and a 32px
+     footer bar with the file. The title and anything the window is asking
+     stay put above the scrolling pane, so a question asked from far down a
+     long pane is never off screen. -->
+<div class="settings bg-background text-foreground text-ui-body flex h-screen">
+  <nav class="sidebar border-border bg-muted/30 flex w-[168px] shrink-0 flex-col gap-2 border-r p-2" aria-label="Settings">
+    <div class="flex flex-col gap-0.5" role="tablist" aria-orientation="vertical" aria-label="Settings panes">
+      <!-- ⛔ Only the shown pane is mounted (each mounts its own IPC: sign-in
+           status, the stored token, the editor's draft), so only the selected
+           tab names a panel. Every tab naming one left four aria-controls
+           pointing at nothing (cubic, #65). -->
+      {#each PANES as p, index (p.id)}
         <button
           role="tab"
-          aria-selected={tab === t.id}
+          id={`tab-${p.id}`}
+          aria-controls={pane === p.id ? `pane-${p.id}` : undefined}
+          aria-selected={pane === p.id}
+          tabindex={pane === p.id ? 0 : -1}
           class={[
-            "tab rounded-xl px-2 py-1 text-xs font-medium whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-            tab === t.id
+            "tab text-ui-body rounded-lg px-2.5 py-1.5 text-left font-medium whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+            pane === p.id
               ? "active bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
+              : "text-muted-foreground hover:bg-muted hover:text-foreground",
           ]}
-          onclick={() => (tab = t.id)}>{t.label}</button
+          onclick={() => void show(p.id, true)}
+          onkeydown={(event) => sidebarKey(event, index)}>{p.label}</button
         >
       {/each}
     </div>
     <span class="flex-1"></span>
-    <Button variant="ghost" size="sm" class="wizard" title="Walk through the basics again" onclick={() => openOrSay("the setup wizard", openWizard)}
-      >Setup wizard…</Button
-    >
-    <Button variant="outline" size="sm" onclick={() => openOrSay("the file", openConfigFile)}>Open file</Button>
     <Button
-      variant="outline"
+      variant="ghost"
       size="sm"
-      onclick={async () => {
-        await reloadConfig();
-        await load();
-        notice = "Reloaded from disk.";
-      }}>Reload</Button
+      class="wizard justify-start"
+      title="Walk through the basics again"
+      onclick={() => openOrSay("the setup wizard", openWizard)}>Setup wizard…</Button
     >
   </nav>
 
-  <p class="path text-muted-foreground my-1.5 font-mono text-xs">{status?.configPath ?? ""}</p>
+  <div class="main flex min-w-0 flex-1 flex-col">
+    <div class="flex max-w-[600px] flex-col gap-2 px-6 pt-5">
+      <header class="flex min-h-7 items-center gap-3">
+        <h2 class="text-ui-title m-0 font-semibold">{paneLabel}</h2>
+        <span class="flex-1"></span>
+        {#if pane === "watches"}
+          <Button variant="outline" size="sm" class="add" onclick={add}>Add watch</Button>
+        {/if}
+      </header>
 
-  {#if isFirstRun(status)}
-    <div class="first-run bg-tone-blue-bg border-border mb-2 flex items-center gap-2 rounded-xl border px-3 py-2 text-xs">
-      <span class="flex-1">
-        No configuration yet. The setup wizard writes one; or write it yourself on the "Edit as text" tab, where
-        Save creates the file.
-      </span>
-      <Button size="sm" onclick={() => openOrSay("the setup wizard", openWizard)}>Open the setup wizard</Button>
+      {#if isFirstRun(status)}
+        <div class="first-run bg-tone-blue-bg border-border flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-ui-meta">
+          <span class="min-w-0 flex-1 basis-56">
+            No configuration yet. The setup wizard writes one; or write it yourself under Advanced, in "Edit as
+            text", where Save creates the file.
+          </span>
+          <Button size="sm" onclick={() => openOrSay("the setup wizard", openWizard)}>Open the setup wizard</Button>
+        </div>
+      {/if}
+
+      {#if notice}
+        <p class="notice text-muted-foreground text-ui-meta m-0">{notice}</p>
+      {/if}
+
+      {#if pendingConfirm}
+        <Ask
+          title="Confirm this change"
+          message={pendingConfirm.changes.join("\n\n")}
+          confirmLabel="Write it"
+          danger
+          onconfirm={() => pendingConfirm?.answer(true)}
+          oncancel={() => pendingConfirm?.answer(false)}
+        />
+      {:else if asking === "remove"}
+        <Ask
+          title={`Remove the watch "${removing}"?`}
+          message="The rest of the file is left exactly as it is."
+          confirmLabel="Remove"
+          danger
+          onconfirm={() => {
+            asking = null;
+            void edit([{ op: "remove_watch", id: removing }]);
+          }}
+          oncancel={() => (asking = null)}
+        />
+      {:else if asking === "add"}
+        <!-- ⛔ The project is asked for rather than defaulted. `Watch` has no
+             default for it, and seeding a placeholder would write a watch that
+             looks configured and 404s on every tick. -->
+        <Ask
+          title="New watch"
+          message={`It will use the account "${accountNames()[0] ?? ""}", watch "main", and start as a secondary.`}
+          fields={[
+            { name: "id", label: "Watch id", placeholder: "main-push" },
+            { name: "project", label: "Project", placeholder: "numeric id, or group/path" },
+          ]}
+          confirmLabel="Add watch"
+          onconfirm={addWatch}
+          oncancel={() => (asking = null)}
+        />
+      {/if}
     </div>
-  {/if}
 
-  {#if notice}
-    <p class="notice text-muted-foreground mt-0 mb-2 text-xs">{notice}</p>
-  {/if}
+    <div
+      bind:this={paneScroller}
+      class="pane min-h-0 flex-1 overflow-y-auto"
+      role="tabpanel"
+      id={`pane-${pane}`}
+      aria-labelledby={`tab-${pane}`}
+    >
+      <div class="flex max-w-[600px] flex-col gap-6 px-6 pt-3 pb-6">
+        {#if pane === "accounts"}
+          <div><AccountsTab {config} onedit={edit} /></div>
+        {:else if pane === "watches"}
+          <div><WatchesTab {config} {jobOrder} onedit={edit} onremove={remove} onmove={move} onadd={add} /></div>
+        {:else if pane === "general" || pane === "verdict"}
+          {#each PANE_GROUPS[pane] as group (group.tab)}
+            <SimpleTab tab={group.tab} title={group.title} {config} onedit={edit} />
+          {/each}
+        {:else}
+          <SimpleTab tab="log" title="Log" {config} onedit={edit} />
+          <section id="edit-as-text" class="settings-group flex flex-col gap-2" aria-labelledby="edit-as-text-title">
+            <h3 id="edit-as-text-title" class={["px-1", SECTION_TITLE]}>Edit as text</h3>
+            <p class={["m-0 px-1", HINT]}>
+              The whole file. Save checks it first and writes nothing that would not load; comments and order are kept.
+            </p>
+            <TextTab
+              {text}
+              validation={validationFrom === "file" ? validation : null}
+              diskText={readConfigText}
+              onvalidate={async (t) => {
+                validation = await validateConfigText(t);
+                validationFrom = "file";
+              }}
+              onsave={async (t, base) => {
+                const result = await confirmed(await saveConfigText(t, base), (id) =>
+                  saveConfigText(t, base, id),
+                );
+                if (isCancelled(result)) {
+                  notice = "Not saved: the change was not confirmed.";
+                  return result;
+                }
+                if (result.conflict) {
+                  notice = "Not saved: the file changed on disk since this tab read it.";
+                  return result;
+                }
+                validation = result;
+                validationFrom = "file";
+                if (result.ok) savedText = t;
+                notice = result.ok ? "Saved." : "Not saved — the file was left alone.";
+                // ⚠ Kept either way, unlike a form save: this tab RENDERS the
+                // validation, so re-seeding it from the file would replace both
+                // answers the user just asked for — the reason a save was refused,
+                // and the "valid" on one that landed.
+                await load(true);
+                return result;
+              }}
+              onrevert={() => void load()}
+            />
+          </section>
+        {/if}
+      </div>
+    </div>
 
-  {#if pendingConfirm}
-    <Ask
-      title="Confirm this change"
-      message={pendingConfirm.changes.join("\n\n")}
-      confirmLabel="Write it"
-      danger
-      onconfirm={() => pendingConfirm?.answer(true)}
-      oncancel={() => pendingConfirm?.answer(false)}
-    />
-  {:else if asking === "remove"}
-    <Ask
-      title={`Remove the watch "${removing}"?`}
-      message="The rest of the file is left exactly as it is."
-      confirmLabel="Remove"
-      danger
-      onconfirm={() => {
-        asking = null;
-        void edit([{ op: "remove_watch", id: removing }]);
-      }}
-      oncancel={() => (asking = null)}
-    />
-  {:else if asking === "add"}
-    <!-- ⛔ The project is asked for rather than defaulted. `Watch` has no
-         default for it, and seeding a placeholder would write a watch that
-         looks configured and 404s on every tick. -->
-    <Ask
-      title="New watch"
-      message={`It will use the account "${accountNames()[0] ?? ""}", watch "main", and start as a secondary.`}
-      fields={[
-        { name: "id", label: "Watch id", placeholder: "main-push" },
-        { name: "project", label: "Project", placeholder: "numeric id, or group/path" },
-      ]}
-      confirmLabel="Add watch"
-      onconfirm={addWatch}
-      oncancel={() => (asking = null)}
-    />
-  {/if}
-
-  <div class="pane min-h-0 flex-1 overflow-y-auto pr-1.5">
-    {#if tab === "accounts"}
-      <AccountsTab {config} onedit={edit} />
-    {:else if tab === "watches"}
-      <WatchesTab {config} {jobOrder} onedit={edit} onremove={remove} onmove={move} onadd={add} />
-    {:else if tab === "text"}
-      <TextTab
-        {text}
-        {validation}
-        diskText={readConfigText}
-        onvalidate={async (t) => (validation = await validateConfigText(t))}
-        onsave={async (t, base) => {
-          const result = await confirmed(await saveConfigText(t, base), (id) =>
-            saveConfigText(t, base, id),
-          );
-          if (isCancelled(result)) {
-            notice = "Not saved: the change was not confirmed.";
-            return result;
-          }
-          if (result.conflict) {
-            notice = "Not saved: the file changed on disk since this tab read it.";
-            return result;
-          }
-          validation = result;
-          if (result.ok) savedText = t;
-          notice = result.ok ? "Saved." : "Not saved — the file was left alone.";
-          // ⚠ Kept either way, unlike a form save: this tab RENDERS the
-          // validation, so re-seeding it from the file would replace both
-          // answers the user just asked for — the reason a save was refused,
-          // and the "valid" on one that landed.
-          await load(true);
-          return result;
-        }}
-        onrevert={() => void load()}
-      />
-    {:else}
-      <SimpleTab {tab} {config} onedit={edit} />
+    <!-- The file's diagnostics on Advanced are the editor's to list, under its box. -->
+    {#if (pane !== "advanced" || validationFrom === "form") && validation && !validation.ok}
+      <ul class="diagnostics border-border m-0 max-h-30 list-none overflow-y-auto border-t px-6 py-1.5 text-ui-meta">
+        {#each validation.diagnostics as d, index (index)}
+          <li class={[d.severity, d.severity === "error" ? "text-tone-red" : "text-tone-amber"]}>
+            <span class="where text-muted-foreground mr-1.5 font-mono">{d.path}{d.line ? ` (${d.line}:${d.col})` : ""}</span>
+            {d.message}
+          </li>
+        {/each}
+      </ul>
     {/if}
-  </div>
 
-  {#if tab !== "text" && validation && !validation.ok}
-    <ul class="diagnostics border-border mt-2 mb-0 max-h-30 list-none overflow-y-auto border-t p-0 pt-1.5 text-xs">
-      {#each validation.diagnostics as d, index (index)}
-        <li class={[d.severity, d.severity === "error" ? "text-tone-red" : "text-tone-amber"]}>
-          <span class="where text-muted-foreground mr-1.5 font-mono">{d.path}{d.line ? ` (${d.line}:${d.col})` : ""}</span>
-          {d.message}
-        </li>
-      {/each}
-    </ul>
-  {/if}
+    <footer class="border-border flex h-8 shrink-0 items-center gap-1 border-t px-3">
+      <span class="path text-muted-foreground text-ui-meta min-w-0 flex-1 truncate font-mono" title={status?.configPath ?? ""}
+        >{status?.configPath ?? ""}</span
+      >
+      <Button variant="ghost" size="xs" onclick={() => openOrSay("the file", openConfigFile)}>Open file</Button>
+      <Button
+        variant="ghost"
+        size="xs"
+        onclick={async () => {
+          await reloadConfig();
+          await load();
+          notice = "Reloaded from disk.";
+        }}>Reload</Button
+      >
+    </footer>
+  </div>
 </div>
