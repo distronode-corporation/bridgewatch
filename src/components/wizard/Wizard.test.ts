@@ -83,6 +83,7 @@ function fakeApi(overrides: Partial<{ [K in keyof Api]: Mock<(...args: never[]) 
     // A 1.x value: the file's base_url stands for it, as before this check.
     ownTokenStatus: vi.fn<Api["ownTokenStatus"]>(async () => ({ kind: "legacy" })),
     testConnection: vi.fn<Api["testConnection"]>(async () => IDENTITY),
+    recentProjects: vi.fn<Api["recentProjects"]>(async () => ({ mode: "unlisted", reason: "" })),
     listProjects: vi.fn<Api["listProjects"]>(async () => LISTING),
     resolveProject: vi.fn<Api["resolveProject"]>(async () => RESOLVED),
     suggestDeployMarkers: vi.fn<Api["suggestDeployMarkers"]>(async () => SUGGESTIONS),

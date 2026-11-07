@@ -56,6 +56,7 @@ function fakeApi(): { [K in keyof Required<WizardApi>]: Mock } {
     detectCliToken: vi.fn(async () => GH_FOUND),
     ownTokenStatus: vi.fn(async () => ({ kind: "legacy" })),
     testConnection: vi.fn(async () => IDENTITY),
+    recentProjects: vi.fn(async () => ({ mode: "unlisted", reason: "" })),
     listProjects: vi.fn(async () => ({ mode: "projects", truncated: false, projects: [] })),
     resolveProject: vi.fn(async () => ({ id: 1, path: "acme/web", project: "acme/web", default_branch: "main", web_url: null })),
     suggestDeployMarkers: vi.fn(async () => ({ pipeline_id: null, pipeline_url: null, suggestions: [], unread_children: [] })),

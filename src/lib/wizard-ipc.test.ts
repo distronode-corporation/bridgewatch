@@ -69,6 +69,13 @@ describe("wizardApi", () => {
     expect(invoked[4].args).toEqual({ connection: conn, project: 5, refName: "main" });
   });
 
+  it("asks for the one-click list with the connection and the window's account", async () => {
+    const { wizardApi } = await import("./ipc");
+    const conn = { base_url: "https://gitlab.com", token: { own: true } as const };
+    await wizardApi("work").recentProjects!(conn);
+    expect(invoked).toEqual([{ cmd: "wizard_recent_projects", args: { connection: { ...conn, account: "work" } } }]);
+  });
+
   it("sends a workflow only when there is one, and asks for gh's item by provider", async () => {
     const { wizardApi } = await import("./ipc");
     const api = wizardApi();

@@ -136,6 +136,7 @@ fn main() {
             wizard::wizard_detect_cli_token,
             wizard::wizard_test_connection,
             wizard::wizard_list_projects,
+            wizard::wizard_recent_projects,
             wizard::wizard_resolve_project,
             wizard::wizard_suggest_deploy_markers,
             wizard::wizard_preview_config,

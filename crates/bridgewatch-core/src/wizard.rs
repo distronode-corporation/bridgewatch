@@ -576,6 +576,12 @@ pub struct ProjectSummary {
     pub default_branch: Option<String>,
     /// Link.
     pub web_url: Option<String>,
+    /// When the provider last saw activity on it (GitLab's
+    /// `last_activity_at`, GitHub's `pushed_at`), as it reported it. `None`
+    /// when the answer had no such field: the one-click list then shows no
+    /// "active" label for the row and ranks it last.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
 }
 
 impl From<crate::model::Project> for ProjectSummary {
@@ -586,6 +592,7 @@ impl From<crate::model::Project> for ProjectSummary {
             name: p.name,
             default_branch: p.default_branch,
             web_url: p.web_url,
+            last_activity_at: p.last_activity_at,
         }
     }
 }
@@ -632,18 +639,8 @@ pub async fn list_projects(
     search: Option<&str>,
 ) -> Result<ProjectListing, WizardError> {
     if let TokenKind::Project { project_id } = token {
-        let reason = match provider {
-            Provider::Gitlab => {
-                "A project access token can read only its own project, so there is no \
-                 list to pick from. Type the project id or path."
-            }
-            Provider::Github => {
-                "This token can read only its own repository, so there is no list to \
-                 pick from. Type the repository as owner/repo."
-            }
-        };
         return Ok(ProjectListing::TypeIdOrPath {
-            reason: reason.to_string(),
+            reason: own_project_only(provider).to_string(),
             suggestion: *project_id,
         });
     }
@@ -653,23 +650,198 @@ pub async fn list_projects(
             truncated,
         }),
         Err(ClientError::Auth { status: 403, .. }) | Err(ClientError::NotFound { .. }) => {
-            let reason = match provider {
-                Provider::Gitlab => {
-                    "This token is not allowed to list projects. Type the project id or \
-                     path."
-                }
-                Provider::Github => {
-                    "This token is not allowed to list repositories. Type the repository \
-                     as owner/repo."
-                }
-            };
             Ok(ProjectListing::TypeIdOrPath {
-                reason: reason.to_string(),
+                reason: listing_refused(provider).to_string(),
                 suggestion: None,
             })
         }
         Err(e) => Err(WizardError::from_client(e, "the project list")),
     }
+}
+
+/// Why a project access token gets no list. Shared by [`list_projects`] and
+/// [`recent_projects`], so both say it in the same words.
+fn own_project_only(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Gitlab => {
+            "A project access token can read only its own project, so there is no \
+             list to pick from. Type the project id or path."
+        }
+        Provider::Github => {
+            "This token can read only its own repository, so there is no list to \
+             pick from. Type the repository as owner/repo."
+        }
+    }
+}
+
+/// Why a refused listing gets no list. See [`own_project_only`].
+fn listing_refused(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Gitlab => {
+            "This token is not allowed to list projects. Type the project id or \
+             path."
+        }
+        Provider::Github => {
+            "This token is not allowed to list repositories. Type the repository \
+             as owner/repo."
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Step 1, after a sign-in: one-click setup
+// ---------------------------------------------------------------------------
+
+/// How many recently active projects the one-click list shows.
+pub const RECENT_LIMIT: usize = 10;
+
+/// How many of them start ticked.
+pub const PRE_TICKED: usize = 3;
+
+/// The account a one-click list came from: its provider and its server's
+/// origin ([`crate::oauth::origin_of`]).
+///
+/// ⛔ Every [`QuickWatch`] carries it back, and [`build_config`] refuses one
+/// whose server is not the one the answers' account is written with. A list
+/// made on one server and saved under an account the form has since pointed
+/// at another would otherwise bind those watches to a server that never
+/// listed them, and P2's own-token binding would then refuse every poll.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedBy {
+    /// Which provider listed the projects.
+    pub provider: Provider,
+    /// `scheme://host[:port]`, normalised.
+    pub origin: String,
+}
+
+impl ListedBy {
+    /// The listing account for an instance, `None` for a URL with no origin.
+    pub fn for_instance(provider: Provider, base_url: &str) -> Option<Self> {
+        crate::oauth::origin_of(base_url).map(|origin| Self { provider, origin })
+    }
+}
+
+/// One row of the one-click list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecentProject {
+    /// The project, `last_activity_at` included.
+    #[serde(flatten)]
+    pub project: ProjectSummary,
+    /// Whether the row starts ticked. The user can untick it.
+    pub ticked: bool,
+}
+
+/// What the one-click list can offer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "mode")]
+pub enum RecentListing {
+    /// The most recently active projects, at most [`RECENT_LIMIT`]. Empty is
+    /// a real answer: the account has none.
+    Projects {
+        /// Newest activity first.
+        projects: Vec<RecentProject>,
+        /// The account they were listed by.
+        listed_by: ListedBy,
+    },
+    /// This token cannot list: the user picks one project on the next step.
+    Unlisted {
+        /// One sentence saying why.
+        reason: String,
+    },
+}
+
+/// Rank a listing for the one-click list: newest activity first, then the
+/// first [`RECENT_LIMIT`], with the first [`PRE_TICKED`] that can be watched
+/// ticked.
+///
+/// The API already orders by activity; this sorts again on the timestamp
+/// itself, so the answer does not depend on that, and it is stable, so equal
+/// or absent timestamps keep the API's order. A row with no timestamp, or one
+/// that does not parse, sorts after every row that has one.
+///
+/// ⚠️ A project with no default branch (an empty repository) is listed but
+/// never ticked: it has no branch to watch and no pipeline to read.
+pub fn rank_recent(projects: Vec<ProjectSummary>) -> Vec<RecentProject> {
+    let when = |p: &ProjectSummary| {
+        p.last_activity_at
+            .as_deref()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.timestamp_millis())
+    };
+    let mut ranked: Vec<(Option<i64>, ProjectSummary)> =
+        projects.into_iter().map(|p| (when(&p), p)).collect();
+    // `None` is less than every `Some`, so a descending sort puts it last.
+    ranked.sort_by(|(a, _), (b, _)| b.cmp(a));
+    ranked.truncate(RECENT_LIMIT);
+    let mut left = PRE_TICKED;
+    ranked
+        .into_iter()
+        .map(|(_, project)| {
+            let ticked = left > 0 && project.default_branch.is_some();
+            if ticked {
+                left -= 1;
+            }
+            RecentProject { project, ticked }
+        })
+        .collect()
+}
+
+/// The one-click list for a signed-in account, or a token that passed Test
+/// connection: its most recently active projects, ranked by [`rank_recent`].
+///
+/// ⛔ ONE list request, whatever the account holds: the first page, which the
+/// API already orders by activity (GitLab `order_by=last_activity_at`, GitHub
+/// `sort=pushed`), holds the ten newest. The project step's picker reads up to
+/// [`PROJECT_PAGES`] pages; this list does not need them.
+pub async fn recent_projects(
+    client: &dyn CiClient,
+    provider: Provider,
+    token: &TokenKind,
+    base_url: &str,
+) -> Result<RecentListing, WizardError> {
+    let listed_by = ListedBy::for_instance(provider, base_url).ok_or_else(|| {
+        WizardError::Input(StepIssue {
+            step: WizardStep::Account,
+            field: "base_url".into(),
+            message: format!("{base_url:?} is not an instance URL"),
+        })
+    })?;
+    if let TokenKind::Project { .. } = token {
+        return Ok(RecentListing::Unlisted {
+            reason: own_project_only(provider).to_string(),
+        });
+    }
+    match client.list_projects(None, 1).await {
+        Ok((projects, _)) => Ok(RecentListing::Projects {
+            projects: rank_recent(projects.into_iter().map(Into::into).collect()),
+            listed_by,
+        }),
+        Err(ClientError::Auth { status: 403, .. }) | Err(ClientError::NotFound { .. }) => {
+            Ok(RecentListing::Unlisted {
+                reason: listing_refused(provider).to_string(),
+            })
+        }
+        Err(e) => Err(WizardError::from_client(e, "the project list")),
+    }
+}
+
+/// One watch the one-click setup adds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuickWatch {
+    /// What to write as the watch's `project`: the id on GitLab, the path on
+    /// GitHub (as [`ResolvedProject::project`]).
+    pub project: ProjectRef,
+    /// `group/project` or `owner/repo`, for the watch id and for matching a
+    /// watch the file already has by path.
+    pub path: String,
+    /// The branch to watch: the project's default branch.
+    pub ref_name: String,
+    /// The best deploy marker [`suggest_deploy_markers`] ranked for it, or
+    /// none.
+    #[serde(default)]
+    pub deploy_markers: Vec<String>,
+    /// The account that listed it. See [`ListedBy`].
+    pub listed_by: ListedBy,
 }
 
 /// Turn what somebody typed into a [`ProjectRef`], without a request.
@@ -1110,6 +1282,15 @@ pub struct WizardAnswers {
     pub launch_at_login: Option<bool>,
     /// Poll interval while live, seconds. `None` leaves the default.
     pub live_secs: Option<u64>,
+    /// One-click setup: the watches to add, all in one write. Empty is the
+    /// step-by-step wizard, which answers with `project`, `watch_id` and
+    /// `ref_name` instead.
+    ///
+    /// When it is not empty, those three, `workflow`, `schedule_watch` and
+    /// `preflight_ref` are not read: each watch here names its own project
+    /// and branch, and watches every workflow. `sources`, `notify` and
+    /// `live_secs` apply to every one of them.
+    pub watches: Vec<QuickWatch>,
 }
 
 impl Default for WizardAnswers {
@@ -1131,6 +1312,7 @@ impl Default for WizardAnswers {
             notify: None,
             launch_at_login: None,
             live_secs: None,
+            watches: Vec::new(),
         }
     }
 }
@@ -1325,7 +1507,11 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
         );
     }
 
-    if answers.project.is_none() {
+    let quick = !answers.watches.is_empty();
+    if quick {
+        quick_watch_issues(answers, &mut issue);
+    }
+    if !quick && answers.project.is_none() {
         issue(Project, "project", "pick or type a project".into());
     }
     if let Some(ProjectRef::Path(p)) = &answers.project
@@ -1339,7 +1525,8 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
     // the same thing an ERROR, so a wizard that wrote it would produce a file
     // its own final check refuses, with a message about a key the user never
     // saw a field for.
-    if answers.provider == Provider::Github
+    if !quick
+        && answers.provider == Provider::Github
         && let Some(ProjectRef::Id(id)) = &answers.project
     {
         issue(
@@ -1352,12 +1539,12 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
         );
     }
 
-    if answers.watch_id.trim().is_empty() {
+    if !quick && answers.watch_id.trim().is_empty() {
         issue(Watch, "watch_id", "the watch needs an id".into());
     }
-    if answers.ref_name.trim().is_empty() {
+    if !quick && answers.ref_name.trim().is_empty() {
         issue(Watch, "ref_name", "name the branch to watch".into());
-    } else if let Err(e) = RefMatcher::parse(&answers.ref_name) {
+    } else if !quick && let Err(e) = RefMatcher::parse(&answers.ref_name) {
         issue(Watch, "ref_name", e.to_string());
     }
     // ⚠️ The vocabularies overlap in exactly one value, `push`. A GitLab source
@@ -1386,7 +1573,8 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
     // A GitLab project has no workflows to choose between, and `config::validate`
     // warns about the key on a gitlab watch. The wizard never has to write one
     // it knows is inert.
-    if answers.provider == Provider::Gitlab
+    if !quick
+        && answers.provider == Provider::Gitlab
         && answers
             .workflow
             .as_deref()
@@ -1400,7 +1588,7 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
                 .into(),
         );
     }
-    if let Some(glob) = &answers.preflight_ref {
+    if !quick && let Some(glob) = &answers.preflight_ref {
         // A preflight watch is this repository's GitLab idiom (push a `pf/*`
         // branch, read its pipeline, deploy nothing). On GitHub every one of
         // those branches would be one more list request a tick out of a budget
@@ -1446,6 +1634,68 @@ pub fn validate_answers(answers: &WizardAnswers) -> Vec<StepIssue> {
     out
 }
 
+/// [`validate_answers`] for [`WizardAnswers::watches`]: each watch was listed
+/// by the server the account is written with, and names a project and a
+/// branch the core loads.
+///
+/// ⛔ The binding is checked here, where every route to the file passes,
+/// rather than trusted to the form: a list made before the instance changed
+/// is a list from a server the saved account will never talk to.
+fn quick_watch_issues(answers: &WizardAnswers, issue: &mut impl FnMut(WizardStep, &str, String)) {
+    let account = ListedBy::for_instance(answers.provider, &answers.base_url);
+    for q in &answers.watches {
+        if account.as_ref() != Some(&q.listed_by) {
+            issue(
+                WizardStep::Account,
+                "watches",
+                format!(
+                    "{} was listed by {} on {}, not by this account; list the projects again",
+                    q.path,
+                    q.listed_by.provider.as_str(),
+                    q.listed_by.origin
+                ),
+            );
+        }
+        if q.path.trim().is_empty() {
+            issue(
+                WizardStep::Account,
+                "watches",
+                "a listed project has no path".into(),
+            );
+        }
+        if answers.provider == Provider::Github && matches!(q.project, ProjectRef::Id(_)) {
+            issue(
+                WizardStep::Account,
+                "watches",
+                format!(
+                    "{} is a GitHub repository and is written as owner/repo, not as a numeric id",
+                    q.path
+                ),
+            );
+        }
+        if q.ref_name.trim().is_empty() {
+            issue(
+                WizardStep::Account,
+                "watches",
+                format!("{} has no default branch to watch", q.path),
+            );
+        } else if let Err(e) = RefMatcher::parse(&q.ref_name) {
+            issue(WizardStep::Account, "watches", format!("{}: {e}", q.path));
+        }
+        for m in &q.deploy_markers {
+            if m.trim().is_empty() {
+                issue(
+                    WizardStep::Account,
+                    "watches",
+                    format!("{}: a deploy marker is empty", q.path),
+                );
+            } else if let Err(e) = Pattern::parse(m) {
+                issue(WizardStep::Account, "watches", format!("{}: {e}", q.path));
+            }
+        }
+    }
+}
+
 /// What [`build_config`] produced.
 #[derive(Debug, Clone, Serialize)]
 pub struct BuiltConfig {
@@ -1459,6 +1709,12 @@ pub struct BuiltConfig {
     /// file already had a primary watch: that watch's id. The shell says so,
     /// since the wizard is otherwise understood to set up THE watch.
     pub secondary_because: Option<String>,
+    /// One-click setup: the ids of the watches added, in the order asked.
+    pub added: Vec<String>,
+    /// One-click setup: the ids of watches the file already had for a
+    /// project and branch that was asked for, which were left as they are
+    /// instead of being added a second time.
+    pub already_watched: Vec<String>,
 }
 
 /// The opening comment of a file the wizard starts from nothing.
@@ -1684,8 +1940,6 @@ fn build_config_inner(
     if !issues.is_empty() {
         return Err(WizardError::Answers(issues));
     }
-    let project = answers.project.clone().expect("validated above");
-
     let mut editor = ConfigEditor::new(existing.unwrap_or(""))?;
     // What is already there, so equal values are left alone. A file that does
     // not load today is still edited; its problems surface in the final check.
@@ -1758,161 +2012,177 @@ fn build_config_inner(
         edits.extend(token_edits(&acct, &answers.token));
     }
 
-    // --- primary watch --------------------------------------------------
-    let existing_watch = current
-        .as_ref()
-        .and_then(|c| c.watches.iter().find(|w| w.id == answers.watch_id));
     let mut secondary_because = None;
-    match existing_watch {
-        None => {
-            // ⚠️ Two primaries is a WARNING the file then carries forever (the
-            // tray icon becomes the worse of them), and the person who ran the
-            // wizard a second time usually meant "also watch this". An explicit
-            // answer still gets the old behaviour.
-            let other_primary = current
-                .as_ref()
-                .and_then(|c| c.watches.iter().find(|w| w.role.is_primary()));
-            let role = match other_primary {
-                Some(other) if !answers.primary => {
-                    secondary_because = Some(other.id.clone());
-                    Role::Secondary
+    let mut added = Vec::new();
+    let mut already_watched = Vec::new();
+    if answers.watches.is_empty() {
+        let project = answers.project.clone().expect("validated above");
+        // --- primary watch --------------------------------------------------
+        let existing_watch = current
+            .as_ref()
+            .and_then(|c| c.watches.iter().find(|w| w.id == answers.watch_id));
+        match existing_watch {
+            None => {
+                // ⚠️ Two primaries is a WARNING the file then carries forever (the
+                // tray icon becomes the worse of them), and the person who ran the
+                // wizard a second time usually meant "also watch this". An explicit
+                // answer still gets the old behaviour.
+                let other_primary = current
+                    .as_ref()
+                    .and_then(|c| c.watches.iter().find(|w| w.role.is_primary()));
+                let role = match other_primary {
+                    Some(other) if !answers.primary => {
+                        secondary_because = Some(other.id.clone());
+                        Role::Secondary
+                    }
+                    _ => Role::Primary,
+                };
+                let mut watch = new_watch(
+                    &answers.watch_id,
+                    &answers.account,
+                    &project,
+                    &answers.ref_name,
+                    &answers.sources,
+                    role,
+                )?;
+                watch.deploy_markers = answers.deploy_markers.clone();
+                apply_poll_defaults(&mut watch, answers);
+                if let Some(live) = answers.live_secs {
+                    watch.poll.live_secs = live;
                 }
-                _ => Role::Primary,
-            };
-            let mut watch = new_watch(
-                &answers.watch_id,
-                &answers.account,
-                &project,
-                &answers.ref_name,
-                &answers.sources,
-                role,
-            )?;
-            watch.deploy_markers = answers.deploy_markers.clone();
-            apply_poll_defaults(&mut watch, answers);
-            if let Some(live) = answers.live_secs {
-                watch.poll.live_secs = live;
+                if answers.provider == Provider::Github {
+                    watch.workflow = answers
+                        .workflow
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|w| !w.is_empty())
+                        .map(str::to_string);
+                }
+                if let Some(n) = answers.notify {
+                    watch.notify.deployed = n.deployed;
+                    watch.notify.blocking_failure = n.blocking_failure;
+                    watch.notify.finished = n.finished;
+                }
+                new_watches.push(watch);
             }
-            if answers.provider == Provider::Github {
-                watch.workflow = answers
-                    .workflow
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|w| !w.is_empty())
-                    .map(str::to_string);
-            }
-            if let Some(n) = answers.notify {
-                watch.notify.deployed = n.deployed;
-                watch.notify.blocking_failure = n.blocking_failure;
-                watch.notify.finished = n.finished;
-            }
-            new_watches.push(watch);
-        }
-        Some(w) => {
-            let mut set = |path: &str, value: EditValue| {
-                edits.push(Edit::SetWatch {
-                    id: answers.watch_id.clone(),
-                    path: path.to_string(),
-                    value,
-                })
-            };
-            if w.account != answers.account {
-                set("account", s(&answers.account));
-            }
-            if w.project != project {
-                set("project", project_value(&project));
-            }
-            if w.ref_pattern != answers.ref_name {
-                set("ref", s(&answers.ref_name));
-            }
-            if w.sources != answers.sources {
-                set("sources", strings(&answers.sources));
-            }
-            // ⚠️ Written only when the answer HAS one. Nothing here is ever
-            // removed (the doc comment above says so), and an empty answer is
-            // "every workflow", which is also what an absent key means: the
-            // difference only matters on a re-run over a file that already
-            // names one, and there the file wins rather than being quietly
-            // widened to every workflow in the repository.
-            if answers.provider == Provider::Github
-                && let Some(workflow) = answers
-                    .workflow
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|wf| !wf.is_empty())
-                && w.workflow.as_deref() != Some(workflow)
-            {
-                set("workflow", s(workflow));
-            }
-            if w.deploy_markers != answers.deploy_markers {
-                set("deploy_markers", strings(&answers.deploy_markers));
-            }
-            if let Some(live) = answers.live_secs
-                && w.poll.live_secs != live
-            {
-                set("poll.live_secs", EditValue::Integer(live as i64));
-            }
-            if let Some(n) = answers.notify {
-                for (key, want, have) in [
-                    ("notify.deployed", n.deployed, w.notify.deployed),
-                    (
-                        "notify.blocking_failure",
-                        n.blocking_failure,
-                        w.notify.blocking_failure,
-                    ),
-                    ("notify.finished", n.finished, w.notify.finished),
-                ] {
-                    if want != have {
-                        set(key, EditValue::Boolean(want));
+            Some(w) => {
+                let mut set = |path: &str, value: EditValue| {
+                    edits.push(Edit::SetWatch {
+                        id: answers.watch_id.clone(),
+                        path: path.to_string(),
+                        value,
+                    })
+                };
+                if w.account != answers.account {
+                    set("account", s(&answers.account));
+                }
+                if w.project != project {
+                    set("project", project_value(&project));
+                }
+                if w.ref_pattern != answers.ref_name {
+                    set("ref", s(&answers.ref_name));
+                }
+                if w.sources != answers.sources {
+                    set("sources", strings(&answers.sources));
+                }
+                // ⚠️ Written only when the answer HAS one. Nothing here is ever
+                // removed (the doc comment above says so), and an empty answer is
+                // "every workflow", which is also what an absent key means: the
+                // difference only matters on a re-run over a file that already
+                // names one, and there the file wins rather than being quietly
+                // widened to every workflow in the repository.
+                if answers.provider == Provider::Github
+                    && let Some(workflow) = answers
+                        .workflow
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|wf| !wf.is_empty())
+                    && w.workflow.as_deref() != Some(workflow)
+                {
+                    set("workflow", s(workflow));
+                }
+                if w.deploy_markers != answers.deploy_markers {
+                    set("deploy_markers", strings(&answers.deploy_markers));
+                }
+                if let Some(live) = answers.live_secs
+                    && w.poll.live_secs != live
+                {
+                    set("poll.live_secs", EditValue::Integer(live as i64));
+                }
+                if let Some(n) = answers.notify {
+                    for (key, want, have) in [
+                        ("notify.deployed", n.deployed, w.notify.deployed),
+                        (
+                            "notify.blocking_failure",
+                            n.blocking_failure,
+                            w.notify.blocking_failure,
+                        ),
+                        ("notify.finished", n.finished, w.notify.finished),
+                    ] {
+                        if want != have {
+                            set(key, EditValue::Boolean(want));
+                        }
                     }
                 }
             }
         }
-    }
 
-    // --- secondary watches ----------------------------------------------
-    let watches: &[Watch] = current
-        .as_ref()
-        .map(|c| c.watches.as_slice())
-        .unwrap_or(&[]);
-    let taken = |id: &str| watches.iter().any(|w| w.id == id);
-    if answers.schedule_watch {
-        let covered = watches.iter().any(|w| {
-            w.project == project && w.ref_pattern == answers.ref_name && w.sources == ["schedule"]
-        });
-        let id = format!("{}-schedule", answers.watch_id);
-        if !covered && !taken(&id) {
-            let mut watch = new_watch(
-                &id,
-                &answers.account,
-                &project,
-                &answers.ref_name,
-                &["schedule".to_string()],
-                Role::Secondary,
-            )?;
-            // Stays cheap until something breaks, as the shipped example does.
-            // Not on a GitHub watch that shows one row per run: `only_when` is a
-            // bridge filter, a run has no bridges, and `config::validate` warns
-            // about it there, so writing it would hand the user a warning for a
-            // line they never typed. The GitLab watch is written as it always was.
-            if answers.provider == Provider::Gitlab || !watch.group.is_run() {
-                watch.dive.only_when = Some("failed".into());
+        // --- secondary watches ----------------------------------------------
+        let watches: &[Watch] = current
+            .as_ref()
+            .map(|c| c.watches.as_slice())
+            .unwrap_or(&[]);
+        let taken = |id: &str| watches.iter().any(|w| w.id == id);
+        if answers.schedule_watch {
+            let covered = watches.iter().any(|w| {
+                w.project == project
+                    && w.ref_pattern == answers.ref_name
+                    && w.sources == ["schedule"]
+            });
+            let id = format!("{}-schedule", answers.watch_id);
+            if !covered && !taken(&id) {
+                let mut watch = new_watch(
+                    &id,
+                    &answers.account,
+                    &project,
+                    &answers.ref_name,
+                    &["schedule".to_string()],
+                    Role::Secondary,
+                )?;
+                // Stays cheap until something breaks, as the shipped example does.
+                // Not on a GitHub watch that shows one row per run: `only_when` is a
+                // bridge filter, a run has no bridges, and `config::validate` warns
+                // about it there, so writing it would hand the user a warning for a
+                // line they never typed. The GitLab watch is written as it always was.
+                if answers.provider == Provider::Gitlab || !watch.group.is_run() {
+                    watch.dive.only_when = Some("failed".into());
+                }
+                apply_poll_defaults(&mut watch, answers);
+                new_watches.push(watch);
             }
-            apply_poll_defaults(&mut watch, answers);
-            new_watches.push(watch);
         }
-    }
-    if let Some(glob) = &answers.preflight_ref {
-        let covered = watches
-            .iter()
-            .any(|w| w.project == project && &w.ref_pattern == glob);
-        let id = format!("{}-preflight", answers.watch_id);
-        if !covered && !taken(&id) {
-            let mut watch = new_watch(&id, &answers.account, &project, glob, &[], Role::Secondary)?;
-            // A row per preflight, no dive: one request a tick.
-            watch.dive.bridges = String::new();
-            apply_poll_defaults(&mut watch, answers);
-            new_watches.push(watch);
+        if let Some(glob) = &answers.preflight_ref {
+            let covered = watches
+                .iter()
+                .any(|w| w.project == project && &w.ref_pattern == glob);
+            let id = format!("{}-preflight", answers.watch_id);
+            if !covered && !taken(&id) {
+                let mut watch =
+                    new_watch(&id, &answers.account, &project, glob, &[], Role::Secondary)?;
+                // A row per preflight, no dive: one request a tick.
+                watch.dive.bridges = String::new();
+                apply_poll_defaults(&mut watch, answers);
+                new_watches.push(watch);
+            }
         }
+    } else {
+        secondary_because = add_quick_watches(
+            answers,
+            current.as_ref(),
+            &mut new_watches,
+            &mut added,
+            &mut already_watched,
+        )?;
     }
 
     // --- preferences ----------------------------------------------------
@@ -1959,5 +2229,121 @@ fn build_config_inner(
         warnings: loaded.warnings,
         edited_existing: existing.is_some(),
         secondary_because,
+        added,
+        already_watched,
     })
+}
+
+/// Whether an existing watch already follows what a [`QuickWatch`] asks for:
+/// the same project (by id, or by path in any case) and the same branch, on
+/// an account that talks to the server that listed it.
+fn already_follows(
+    watch: &Watch,
+    q: &QuickWatch,
+    answers: &WizardAnswers,
+    config: &Config,
+) -> bool {
+    let same_project = watch.project == q.project
+        || matches!(&watch.project, ProjectRef::Path(p) if p.eq_ignore_ascii_case(&q.path));
+    if !same_project || watch.ref_pattern != q.ref_name {
+        return false;
+    }
+    // The answers' own account is about to be written with the listing's
+    // server (the binding check refused anything else); another account in
+    // the file counts when it talks to that same server.
+    watch.account == answers.account
+        || config.accounts.get(&watch.account).is_some_and(|a| {
+            ListedBy::for_instance(a.provider, &a.base_url).as_ref() == Some(&q.listed_by)
+        })
+}
+
+/// `base`, or `base-2`, `base-3`... : the first that no watch has taken.
+fn unique_id(base: &str, taken: &std::collections::HashSet<String>) -> String {
+    if !taken.contains(base) {
+        return base.to_string();
+    }
+    (2..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|id| !taken.contains(id))
+        .expect("an unbounded range finds a free id")
+}
+
+/// [`build_config`]'s one-click half: one new watch per [`QuickWatch`], none
+/// for one the file (or an earlier entry) already covers.
+///
+/// The first watch added is primary when the file has no primary, or when
+/// [`WizardAnswers::primary`] asks for it; every other one is secondary, for
+/// the reason [`BuiltConfig::secondary_because`] gives: two primaries make the
+/// tray icon the worse of them. Returns that primary's id when it applied.
+fn add_quick_watches(
+    answers: &WizardAnswers,
+    current: Option<&Config>,
+    new_watches: &mut Vec<Watch>,
+    added: &mut Vec<String>,
+    already_watched: &mut Vec<String>,
+) -> Result<Option<String>, WizardError> {
+    let empty = Config::default();
+    let config = current.unwrap_or(&empty);
+    let mut taken: std::collections::HashSet<String> =
+        config.watches.iter().map(|w| w.id.clone()).collect();
+    let other_primary = config.watches.iter().find(|w| w.role.is_primary());
+    let mut secondary_because = None;
+    let mut primary_left = other_primary.is_none() || answers.primary;
+    let mut asked: Vec<&QuickWatch> = Vec::new();
+
+    for q in &answers.watches {
+        if let Some(existing) = config
+            .watches
+            .iter()
+            .find(|w| already_follows(w, q, answers, config))
+        {
+            if !already_watched.contains(&existing.id) {
+                already_watched.push(existing.id.clone());
+            }
+            continue;
+        }
+        // The same project and branch twice in one list is one watch.
+        if asked
+            .iter()
+            .any(|a| a.project == q.project && a.ref_name == q.ref_name)
+        {
+            continue;
+        }
+        asked.push(q);
+
+        let id = unique_id(&suggest_watch_id(&q.path, &q.ref_name), &taken);
+        taken.insert(id.clone());
+        let role = if primary_left {
+            primary_left = false;
+            Role::Primary
+        } else {
+            if added.is_empty()
+                && let Some(other) = other_primary
+            {
+                secondary_because = Some(other.id.clone());
+            }
+            Role::Secondary
+        };
+        let mut watch = new_watch(
+            &id,
+            &answers.account,
+            &q.project,
+            &q.ref_name,
+            &answers.sources,
+            role,
+        )?;
+        watch.deploy_markers = q.deploy_markers.clone();
+        apply_poll_defaults(&mut watch, answers);
+        if let Some(live) = answers.live_secs {
+            watch.poll.live_secs = live;
+        }
+        if let Some(n) = answers.notify {
+            watch.notify.deployed = n.deployed;
+            watch.notify.blocking_failure = n.blocking_failure;
+            watch.notify.finished = n.finished;
+        }
+        added.push(id);
+        new_watches.push(watch);
+    }
+    Ok(secondary_because)
 }

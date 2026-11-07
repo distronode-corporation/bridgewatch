@@ -352,4 +352,9 @@ pub struct Project {
     /// Link to the project.
     #[serde(default)]
     pub web_url: Option<String>,
+    /// When the provider last saw activity on it, as it reports it (RFC 3339):
+    /// GitLab's `last_activity_at`, GitHub's `pushed_at`. `None` when the
+    /// answer carries no such field.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
 }

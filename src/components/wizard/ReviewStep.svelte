@@ -17,6 +17,8 @@
     primary?: boolean;
     /** Change the `primary` answer; the preview is rebuilt from it. */
     onprimary?: (primary: boolean) => void;
+    /** A one-click setup: several watches are added, and the notes say which. */
+    quick?: boolean;
   }
 
   let {
@@ -28,7 +30,11 @@
     tokenNote,
     primary = false,
     onprimary,
+    quick = false,
   }: Props = $props();
+
+  const added = $derived(preview?.added ?? []);
+  const already = $derived(preview?.already_watched ?? []);
 
   const where = (d: DiagnosticView) => (d.line !== null ? `line ${d.line}: ` : d.path ? `${d.path}: ` : "");
 </script>
@@ -54,6 +60,23 @@
       tabindex="0"
       aria-label="config.toml preview"
       data-slot="toml-preview">{preview.toml}</pre>
+    {#if quick}
+      <p class="text-xs" data-slot="quick-added">
+        {#if added.length > 0}
+          Adds {added.length}
+          {added.length === 1 ? "watch" : "watches"}: <span class="font-mono">{added.join(", ")}</span>.
+          {#if added.length > 1}The first drives the tray icon unless another watch already does; the others are
+            secondary, shown in the popover without notifications.{/if}
+        {:else}
+          Adds no watch: every one you ticked is already watched.
+        {/if}
+      </p>
+      {#if already.length > 0}
+        <p class="text-muted-foreground text-xs" data-slot="quick-already">
+          Already watched, left as they are: <span class="font-mono">{already.join(", ")}</span>.
+        </p>
+      {/if}
+    {/if}
     {#if preview.secondary_because}
       <p class="text-muted-foreground text-xs" data-slot="secondary-note">
         Added as a secondary watch, because "{preview.secondary_because}" is already primary and the tray icon
