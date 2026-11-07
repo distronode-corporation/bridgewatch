@@ -499,6 +499,12 @@ pub async fn wizard_save(
     }
 
     // Stored BEFORE the write, so the reload the write triggers finds it.
+    //
+    // ⛔ And put back if the write then fails (an I/O error, or a file that
+    // changed since it was read): the new entry is bound to the NEW base_url,
+    // and a file still naming the old one would refuse it, locking the
+    // account out of a token that used to work.
+    let mut stored_over: Option<(String, Previous)> = None;
     if let (TokenSource::Own(true), Some(pasted)) = (&answers.token, secret.as_deref()) {
         let pasted = pasted.trim().to_string();
         if !pasted.is_empty() {
@@ -507,22 +513,34 @@ pub async fn wizard_save(
             // `admit` just checked, and the write below puts on disk, says it.
             // The token is sent to that server and no other.
             let base_url = admitted_base_url(&built.toml, &path, &answers.account)?;
-            tauri::async_runtime::spawn_blocking(move || {
+            let previous = tauri::async_runtime::spawn_blocking(move || {
+                let previous = previous_own(&account, &SystemTokenProvider);
                 token::set_own_token(
                     &account,
                     &base_url,
                     &Secret::new(pasted),
                     &SystemTokenProvider,
                 )
+                .map(|()| previous)
             })
             .await
             .map_err(|e| failure(FailureKind::Network, e.to_string()))?
             .map_err(|e| account_issue("token", format!("could not store the token: {e}")))?;
+            stored_over = Some((answers.account.clone(), previous));
         }
     }
 
     let validation = crate::commands::write_admitted(&app, &state, &base, &built.toml, validation);
     let written = validation.ok;
+    if !written && let Some((account, previous)) = stored_over {
+        let restored = tauri::async_runtime::spawn_blocking(move || {
+            restore_own(&account, previous, &SystemTokenProvider)
+        })
+        .await;
+        if !matches!(restored, Ok(Ok(()))) {
+            tracing::warn!("the file was not written, and the stored token could not be put back");
+        }
+    }
     let mut result = WizardSaveResult {
         validation,
         issues: Vec::new(),
@@ -563,6 +581,43 @@ fn admitted_base_url(
                 "could not store the token: the account is not in the file being saved".to_string(),
             )
         })
+}
+
+/// What an account's own entry held before the wizard stored over it.
+#[derive(Debug, PartialEq, Eq)]
+enum Previous {
+    /// This value, as the store returned it.
+    Value(String),
+    /// Nothing was stored.
+    Nothing,
+    /// It could not be read, so it cannot be put back either.
+    Unknown,
+}
+
+fn previous_own(account: &str, store: &dyn TokenProvider) -> Previous {
+    match store.keyring_get(
+        &SystemTokenProvider::own_service(account),
+        SystemTokenProvider::OWN_USER,
+    ) {
+        Ok(raw) => Previous::Value(raw),
+        Err(token::TokenError::NoEntry { .. }) => Previous::Nothing,
+        Err(_) => Previous::Unknown,
+    }
+}
+
+/// Put an own entry back as [`previous_own`] found it. An entry that could
+/// not be read is left as it is now: deleting it would lose more.
+fn restore_own(
+    account: &str,
+    previous: Previous,
+    store: &dyn TokenProvider,
+) -> Result<(), token::TokenError> {
+    let service = SystemTokenProvider::own_service(account);
+    match previous {
+        Previous::Value(raw) => store.keyring_set(&service, SystemTokenProvider::OWN_USER, &raw),
+        Previous::Nothing => store.keyring_delete(&service, SystemTokenProvider::OWN_USER),
+        Previous::Unknown => Ok(()),
+    }
 }
 
 /// "I'll edit config.toml": leave the wizard, writing nothing, and open
@@ -740,6 +795,69 @@ mod tests {
         c.secret = Some("glpat-typed".into());
         assert!(client_for(&c, store.clone()).is_ok());
         assert!(store.0.lock().unwrap().is_empty());
+    }
+
+    /// A credential store in memory, for the save-then-restore test.
+    #[derive(Default)]
+    struct Memory(Mutex<std::collections::BTreeMap<String, String>>);
+    impl TokenProvider for Memory {
+        fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(service)
+                .cloned()
+                .ok_or_else(|| TokenError::NoEntry {
+                    service: service.into(),
+                    user: user.into(),
+                })
+        }
+        fn keyring_set(&self, service: &str, _: &str, secret: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().insert(service.into(), secret.into());
+            Ok(())
+        }
+        fn keyring_delete(&self, service: &str, _: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().remove(service);
+            Ok(())
+        }
+        fn env(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn run(&self, _: &[String]) -> Result<String, TokenError> {
+            unreachable!()
+        }
+    }
+
+    /// ⛔ A save whose file write fails puts the account's entry back: the
+    /// token bound to the new base_url would otherwise sit beside a file still
+    /// naming the old one, and the account would refuse a token that worked.
+    #[test]
+    fn a_failed_save_puts_the_previous_own_entry_back() {
+        let store = Memory::default();
+        let account = |base: &str| Account {
+            base_url: base.into(),
+            token: TokenSource::Own(true),
+            ..Account::default()
+        };
+        token::set_own_token("gl", "https://a.example", &Secret::new("glpat-A"), &store).unwrap();
+
+        let previous = previous_own("gl", &store);
+        token::set_own_token("gl", "https://b.example", &Secret::new("glpat-B"), &store).unwrap();
+        restore_own("gl", previous, &store).unwrap();
+        assert_eq!(
+            token::resolve("gl", &account("https://a.example"), &store)
+                .unwrap()
+                .expose(),
+            "glpat-A",
+            "the old token works on the old server again"
+        );
+
+        // Nothing before: nothing after.
+        let previous = previous_own("new", &store);
+        assert_eq!(previous, Previous::Nothing);
+        token::set_own_token("new", "https://b.example", &Secret::new("glpat-B"), &store).unwrap();
+        restore_own("new", previous, &store).unwrap();
+        assert!(!store.0.lock().unwrap().contains_key("bridgewatch:new"));
     }
 
     struct NoStore;

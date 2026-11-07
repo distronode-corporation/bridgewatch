@@ -327,15 +327,23 @@ pub fn status(
 fn own_line(name: &str, account: &Account, store_provider: &dyn TokenProvider) -> (bool, String) {
     match token::own_token_status(name, account, store_provider) {
         Ok(OwnTokenStatus::Bound { origin }) => (true, format!("own token, bound to {origin}")),
-        Ok(OwnTokenStatus::Legacy) => (
-            true,
-            format!(
-                "own token stored by bridgewatch 1.x, not yet tied to a server; it is bound to \
-                 {} the first time it is used",
-                oauth::origin_of(&account.base_url)
-                    .unwrap_or_else(|| "the account's server".to_string())
+        // ⛔ Usable only when there is a server to bind it to: `resolve` refuses
+        // a 1.x value on a base_url with no origin, so this must not say "ok".
+        Ok(OwnTokenStatus::Legacy) => match oauth::origin_of(&account.base_url) {
+            Some(origin) => (
+                true,
+                format!(
+                    "own token stored by bridgewatch 1.x, not yet tied to a server; it is bound \
+                     to {origin} the first time it is used"
+                ),
             ),
-        ),
+            None => (
+                false,
+                "own token stored by bridgewatch 1.x, and the account's base_url is not an \
+                 http(s) URL, so it cannot be tied to a server and is not sent"
+                    .to_string(),
+            ),
+        },
         Ok(OwnTokenStatus::Mismatch { stored, expected }) => {
             let expected =
                 expected.unwrap_or_else(|| "an address that is not an http(s) URL".into());
@@ -827,6 +835,21 @@ pub(crate) mod tests {
         assert_eq!(
             status(&config, Some("moved"), &store, &BUILTIN, 0, &mut out).unwrap(),
             exit::ERROR
+        );
+        // A 1.x value on a base_url with no origin is not usable: there is
+        // no server to bind it to, and `resolve` refuses it.
+        let mut odd = config.clone();
+        odd.accounts.get_mut("legacy").unwrap().base_url = "https://me@gitlab.example.com".into();
+        let mut out = Vec::new();
+        assert_eq!(
+            status(&odd, Some("legacy"), &store, &BUILTIN, 0, &mut out).unwrap(),
+            exit::ERROR
+        );
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("cannot be tied to a server"), "{text}");
+        assert!(
+            token::resolve("legacy", &odd.accounts["legacy"], &store).is_err(),
+            "and resolve agrees"
         );
         // An env account still has nothing to show.
         assert_eq!(
