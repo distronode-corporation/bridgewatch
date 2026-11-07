@@ -736,6 +736,10 @@
           "$ref": "#/$defs/JobOverrides",
           "default": {}
         },
+        "mine": {
+          "description": "Only the pipelines (GitLab) or workflow runs (GitHub) that YOU\nstarted: the account's signed-in user, or the owner of its token.\nGitLab is asked with `username=`, GitHub with `actor=`; who you are is\nasked once (`GET /user`) and remembered, or read from the sign-in.",
+          "type": "boolean"
+        },
         "notify": {
           "description": "Which events raise a notification, and how they read.",
           "$ref": "#/$defs/NotifyConfig",

@@ -638,6 +638,14 @@ pub struct Watch {
     /// means all of them.
     #[serde(default)]
     pub sources: Vec<String>,
+    /// Only the pipelines (GitLab) or workflow runs (GitHub) that YOU
+    /// started: the account's signed-in user, or the owner of its token.
+    /// GitLab is asked with `username=`, GitHub with `actor=`; who you are is
+    /// asked once (`GET /user`) and remembered, or read from the sign-in.
+    // Skipped when off, like `group`: a watch written back must not gain a
+    // line nobody asked for.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mine: bool,
     /// Whether this watch drives the tray icon.
     #[serde(default)]
     pub role: Role,

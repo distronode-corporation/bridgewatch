@@ -186,12 +186,31 @@ export interface RequestLog {
   at: string;
 }
 
+/**
+ * `health::TokenHealth`: an account whose token or sign-in is about to stop
+ * working, or has (F3). Only accounts with something to say are listed.
+ */
+export interface TokenHealth {
+  account: string;
+  state: "expiring" | "expired" | "revoked" | "invalid";
+  /** A saved token (replaced in Settings), or a sign-in (signed in again). */
+  of: "token" | "sign_in";
+  /** Unix seconds, when the provider states an expiry. */
+  expires_at: number | null;
+  /** For `expiring`: the warning it is inside, 72 or 24 hours. */
+  warn_hours: number | null;
+  /** The sentence to show, with what to do. */
+  message: string;
+}
+
 export interface Snapshot {
   icon_state: IconState;
   watches: WatchView[];
   errors: string[];
   last_poll: string;
   request_log: RequestLog[];
+  /** Absent when every token is healthy: the core skips an empty list. */
+  tokens?: TokenHealth[];
 }
 
 /** One problem in a configuration file, with its position resolved. */

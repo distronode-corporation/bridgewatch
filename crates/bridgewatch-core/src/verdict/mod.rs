@@ -271,6 +271,11 @@ pub struct Snapshot {
     pub last_poll: chrono::DateTime<chrono::Utc>,
     /// The recent request ring, for the debug pane.
     pub request_log: Vec<RequestLog>,
+    /// Every account whose token or sign-in is about to stop working, or
+    /// has (F3): the popover's token strip. Left out when there is none, so
+    /// a healthy `check --json` reads as it always has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<crate::health::TokenHealth>,
 }
 
 impl Snapshot {
@@ -282,6 +287,7 @@ impl Snapshot {
             errors: Vec::new(),
             last_poll: chrono::Utc::now(),
             request_log: Vec::new(),
+            tokens: Vec::new(),
         }
     }
 

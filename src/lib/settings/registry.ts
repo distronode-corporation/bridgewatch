@@ -223,6 +223,13 @@ export const REGISTRY: RegistryEntry[] = [
     hint: "Pipeline sources (GitLab) or workflow events (GitHub) to accept. Empty means all of them.",
   },
   {
+    path: "watches.*.mine",
+    tab: "watches",
+    control: "boolean",
+    label: "Only my pipelines",
+    hint: "Only what you started: the signed-in user, or the token's owner. GitLab asks by username, GitHub by actor.",
+  },
+  {
     path: "watches.*.role",
     tab: "watches",
     control: "select",
