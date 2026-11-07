@@ -50,14 +50,14 @@
 
 <div class="flex flex-col gap-4">
   {#if loading}
-    <p class="text-muted-foreground text-sm" aria-live="polite">Loading {noun}…</p>
+    <p class="text-muted-foreground" aria-live="polite">Loading {noun}…</p>
   {:else if loadError}
     <Alert.Root variant="destructive">
       <Alert.Title>Could not list {noun}</Alert.Title>
       <Alert.Description>{loadError} Type the {github ? "repository" : "project"} below instead.</Alert.Description>
     </Alert.Root>
   {:else if listing?.mode === "type_id_or_path"}
-    <p class="text-muted-foreground text-sm" data-slot="type-reason">{listing.reason}</p>
+    <p class="text-muted-foreground" data-slot="type-reason">{listing.reason}</p>
   {:else if listing?.mode === "projects"}
     <div class="flex flex-col gap-2">
       <div class="flex gap-2">
@@ -77,12 +77,12 @@
         <Button variant="outline" size="sm" onclick={() => onSearch(search.trim())}>Search</Button>
       </div>
       {#if projects.length === 0}
-        <p class="text-muted-foreground text-sm">No {noun} match.</p>
+        <p class="text-muted-foreground">No {noun} match.</p>
       {:else}
         <fieldset class="flex max-h-56 flex-col gap-0.5 overflow-y-auto rounded-lg border p-1" aria-describedby="wizard-project-msg">
           <legend class="sr-only">{github ? "Repositories" : "Projects"}</legend>
           {#each projects as project (project.id)}
-            <label class="hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1 text-sm">
+            <label class="hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1">
               <input
                 type="radio"
                 name="project"
@@ -151,7 +151,7 @@
   {/if}
 
   {#if draft.project}
-    <p class="text-sm" data-slot="chosen-project">
+    <p data-slot="chosen-project">
       Watching <span class="font-mono">{draft.project.path}</span>
       {#if draft.project.default_branch}<span class="text-muted-foreground">(default branch {draft.project.default_branch})</span>{/if}
     </p>

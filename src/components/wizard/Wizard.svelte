@@ -663,15 +663,26 @@
   const busy = $derived(advancing || saving || skipping);
 </script>
 
-<section class="flex h-full flex-col gap-4 p-4" aria-labelledby="wizard-heading" data-slot="wizard" data-step={step.id}>
+<!-- One column, at most 560px, with the window's own padding (no second p-4).
+     Body text is 13/18 and the step title 15/20. The shared primitives set
+     14px (text-sm) or, below 768px, 16px (the input's text-base); inside the
+     wizard both become 13/18, so every step reads at one size. Hints stay
+     12px (text-xs). -->
+<section
+  class="mx-auto flex h-full w-full max-w-[560px] flex-col gap-4 text-[13px]/[18px] [&_.text-sm]:text-[13px]/[18px] [&_[data-slot=input]]:text-[13px]/[18px]"
+  aria-labelledby="wizard-heading"
+  data-slot="wizard"
+  data-step={step.id}
+>
   <Stepper steps={STEPS} current={index} onSelect={(i) => void goTo(i)} label="Setup steps" />
 
   <form class="flex min-h-0 flex-1 flex-col gap-4" onsubmit={submit} novalidate>
-    <h2 id="wizard-heading" class="text-base font-semibold outline-none" tabindex="-1" bind:this={heading}>
+    <h2 id="wizard-heading" class="text-[15px]/[20px] font-semibold outline-none" tabindex="-1" bind:this={heading}>
       {stepTitle(step, draft.provider)}
     </h2>
 
-    <div class="min-h-0 flex-1 overflow-y-auto" bind:this={body}>
+    <!-- -mx-1 px-1: room for the focus rings, which the scroll box would clip. -->
+    <div class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1" bind:this={body}>
       {#if step.id === "account"}
         <AccountStep
           bind:draft
