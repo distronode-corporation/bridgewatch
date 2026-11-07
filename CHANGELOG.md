@@ -59,6 +59,7 @@ body line with a bracket.
     are icons, each with the name a screen reader reads. The name keeps at least 12
     characters: a long status gives way first, and in a narrow popover "passed, with
     warnings" reads "warnings", with the full words in its tooltip and accessible name.
+    A dead bridge says why in its status ("no child", "never started").
   - **Job tools are 12px words.** **log**, **retry** and **play** show on hover or
     keyboard focus, and always on a failed job.
   - **Watches are separated by space** instead of a tinted band and a rule.

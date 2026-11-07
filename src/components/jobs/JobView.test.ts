@@ -337,6 +337,87 @@ describe("BridgeJobs, the job count column", () => {
   });
 });
 
+describe("BridgeJobs, a dead bridge in the same columns as a live one", () => {
+  const LIVE = bridge({ name: "trigger:website", verdict: "passed", jobs: [job({ id: 1, name: "build" })] });
+  const DEAD = bridge({
+    name: "trigger:voice_agent",
+    status: "failed",
+    verdict: "dead",
+    child_id: null,
+    child_url: null,
+    child_project_id: null,
+    dived: false,
+    jobs: [],
+    web_url: "https://gitlab.example/p/-/jobs/78",
+  });
+  const NEVER = bridge({
+    name: "release.yml",
+    status: "never_started",
+    verdict: "dead",
+    child_id: null,
+    child_url: null,
+    child_project_id: null,
+    dived: false,
+    jobs: [],
+    web_url: "https://github.com/acme/app/actions/workflows/release.yml",
+  });
+
+  function renderAll() {
+    component = mount(PipelineJobs, {
+      target: host,
+      props: { pipeline: pipeline({ parent_jobs: [], bridges: [LIVE, DEAD, NEVER] }), expansion: createExpansionStore(), onOpen: () => {}, now: T0 },
+    });
+    flushSync();
+  }
+  const part = (name: string, cls: string) => host.querySelector<HTMLElement>(`[data-bridge="${name}"] .${cls}`)!;
+
+  it("gives every row the same status, count and links columns", () => {
+    renderAll();
+    // Layout classes only: the tone (green, red) is the one thing meant to differ.
+    const layout = (el: HTMLElement) => el.className.replace(/\btext-tone-\w+/g, "").trim();
+    for (const cls of ["status", "count", "links"]) {
+      const live = layout(part(LIVE.name, cls));
+      expect(layout(part(DEAD.name, cls)), cls).toBe(live);
+      expect(layout(part(NEVER.name, cls)), cls).toBe(live);
+    }
+    // A fixed width, not a minimum: nothing in it can widen one row.
+    expect(part(DEAD.name, "links").classList).toContain("w-12");
+    expect(part(DEAD.name, "links").classList).not.toContain("min-w-12");
+  });
+
+  it("keeps the links column to icons only, and a dead bridge to its open-job icon", () => {
+    renderAll();
+    for (const name of [LIVE.name, DEAD.name, NEVER.name]) {
+      const links = part(name, "links");
+      expect(links.textContent?.trim(), name).toBe("");
+      for (const child of links.children) expect(child.tagName, name).toBe("A");
+    }
+    expect([...part(DEAD.name, "links").children].map((a) => a.getAttribute("data-slot"))).toEqual(["bridge-job-link"]);
+  });
+
+  it("says the reason in the status column, and the whole verdict to a screen reader", () => {
+    renderAll();
+    for (const [b, reason] of [
+      [DEAD, "no child"],
+      [NEVER, "never started"],
+    ] as const) {
+      const status = part(b.name, "status");
+      // The reason alone, in red; "dead" is the dot and the colour.
+      expect(status.textContent?.trim()).toBe(reason);
+      expect(status.classList).toContain("text-tone-red");
+      expect(status.getAttribute("title")).toBe(`dead, ${reason}`);
+      expect(
+        host.querySelector(`[data-bridge="${b.name}"] [data-slot="collapsible-trigger"]`)?.getAttribute("aria-label"),
+      ).toMatch(new RegExp(`^${b.name.replace(".", "\\.")}: dead, ${reason}\\. (Show|Hide) jobs$`));
+    }
+    // A live bridge reads as it always did.
+    expect(part(LIVE.name, "status").textContent?.trim()).toBe("passed");
+    expect(
+      host.querySelector(`[data-bridge="${LIVE.name}"] [data-slot="collapsible-trigger"]`)?.getAttribute("aria-label"),
+    ).toMatch(/^trigger:website: passed\. (Show|Hide) jobs$/);
+  });
+});
+
 describe("BridgeJobs, a dead bridge in words", () => {
   function render(view: BridgeView) {
     component = mount(BridgeJobs, {
@@ -390,8 +471,9 @@ describe("BridgeJobs, a dead bridge in words", () => {
     );
     const text = row("release.yml").textContent ?? "";
     expect(host.querySelector('[data-slot="bridge-never-started"]')?.textContent?.trim()).toBe("never started");
+    // The full verdict: the status shows only the reason, the red says "dead".
     expect(host.querySelector('[data-slot="bridge-never-started"]')?.getAttribute("title")).toBe(
-      "expected workflow did not run",
+      "dead, never started",
     );
     expect(text).toContain("Expected workflow did not run.");
     expect(text).not.toContain("no child");

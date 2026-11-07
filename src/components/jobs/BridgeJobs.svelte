@@ -66,6 +66,22 @@
   const shownCount = $derived(filterJobs(bridge.jobs, mode).length);
   const neverStarted = $derived(bridge.status === "never_started");
   const workflowRun = $derived(provider === "github" && !neverStarted);
+  /**
+   * Why a dead bridge is dead, said in the status column instead of "dead"
+   * (the red dot and colour already say that): "never started" for an
+   * `expect` workflow, "no child" for a trigger job that created nothing.
+   */
+  const deadReason = $derived(
+    bridge.verdict !== "dead" || workflowRun
+      ? null
+      : neverStarted
+        ? "never started"
+        : bridge.child_url
+          ? null
+          : "no child",
+  );
+  /** The whole verdict, for the trigger's aria-label and the status's title. */
+  const fullWord = $derived(deadReason ? `${bridgeWord(bridge.verdict)}, ${deadReason}` : bridgeWord(bridge.verdict));
   // Where these jobs are, for the confirm text.
   const childTools = $derived(
     tools && {
@@ -101,7 +117,7 @@
     <Collapsible.Trigger
       class="focus-visible:ring-ring/50 flex min-w-0 flex-1 items-center gap-1.5 rounded-lg py-1 pl-1 text-left outline-none focus-visible:ring-2"
       aria-controls={bodyId}
-      aria-label={`${bridge.name}: ${bridgeWord(bridge.verdict)}. ${open ? "Hide" : "Show"} jobs`}
+      aria-label={`${bridge.name}: ${fullWord}. ${open ? "Hide" : "Show"} jobs`}
     >
       <ChevronRightIcon
         class={["text-muted-foreground size-3.5 shrink-0 transition-transform", open && "rotate-90"]}
@@ -116,8 +132,14 @@
            shortened; see .bw-wide-only in app.css). The trigger's aria-label
            and the status's title keep the full verdict. -->
       <span class="name text-foreground min-w-[12ch] flex-1 truncate font-mono" title={bridge.name}>{bridge.name}</span>
-      <span class={["status ml-auto min-w-0 truncate", TONE_TEXT[tone]]} title={bridgeWord(bridge.verdict)}>
-        {#if bridgeShortWord(bridge.verdict)}
+      <span
+        class={["status ml-auto min-w-0 truncate", TONE_TEXT[tone]]}
+        title={fullWord}
+        data-slot={deadReason === "never started" ? "bridge-never-started" : deadReason ? "bridge-no-child" : undefined}
+      >
+        {#if deadReason}
+          {deadReason}
+        {:else if bridgeShortWord(bridge.verdict)}
           <span class="bw-wide-only">{bridgeWord(bridge.verdict)}</span><span class="bw-narrow-only"
             >{bridgeShortWord(bridge.verdict)}</span
           >
@@ -135,17 +157,11 @@
          name sits in a button, and an anchor nested in a button is neither
          valid nor reachable by keyboard. A bridge with no `web_url` gets no
          link rather than a dead one; its name is already plain text above.
-         ⛔ Icon-only, so the `aria-label` is the link's whole name. -->
-    <span class="links flex min-w-12 shrink-0 items-center justify-end gap-0.5">
-      {#if bridge.verdict === "dead" && !bridge.child_url && !workflowRun}
-        {#if neverStarted}
-          <span class="text-tone-red shrink-0 pr-1" title="expected workflow did not run" data-slot="bridge-never-started"
-            >never started</span
-          >
-        {:else}
-          <span class="text-tone-red shrink-0 pr-1" title="the trigger job created no child pipeline">no child</span>
-        {/if}
-      {/if}
+         ⛔ Icon-only, so the `aria-label` is the link's whole name.
+         ⛔ A FIXED width on every row, and never text: a word here widened
+         the column on one row and pushed its status and count out of line
+         with the rest. A dead bridge's reason is in the status column. -->
+    <span class="links flex w-12 shrink-0 items-center justify-end gap-0.5">
       {#if workflowRun}
         {#if bridge.web_url ?? bridge.child_url}
           <a
