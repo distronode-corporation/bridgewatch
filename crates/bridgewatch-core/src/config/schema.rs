@@ -1163,8 +1163,14 @@ fn default_title() -> String {
 /// `default(x)` substitutes only for an **undefined** value, and
 /// `failures | join(', ')` on an empty list is the defined empty string. Without
 /// `, true` a green pipeline notifies with a blank body. Measured, not assumed.
+///
+/// The second line is the first failing line (`failure_line`): GitHub's first
+/// failure annotation, or GitLab's reason code in words. A pipeline nobody
+/// said anything about keeps the one-line body it always had.
 fn default_body() -> String {
-    "{{failures | join(', ') | default('all green', true)}}".to_string()
+    "{{failures | join(', ') | default('all green', true)}}\
+     {% if failure_line %}\n{{failure_line}}{% endif %}"
+        .to_string()
 }
 
 /// Where a notification click lands.

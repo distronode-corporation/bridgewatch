@@ -12,12 +12,12 @@ pub use cache::{CacheEntry, PipelineCache};
 pub use planner::{PipelinePlan, Plan};
 pub use policy::{MAX_RETRY_AFTER, POLL_NOW_MIN_GAP, PollNow, PollPolicy};
 
-use crate::client::{CiClient, ClientError, ListQuery, RequestRing, in_order};
+use crate::client::{AnnotationAnswer, CiClient, ClientError, ListQuery, RequestRing, in_order};
 use crate::config::{Config, JobsMode, ProjectRef, Provider, Role, Watch, WatchRules};
 use crate::eta::EtaHistory;
 use crate::model::{Bridge, Pipeline, PipelineDetail};
 use crate::notify::{Notification, NotifyLedger, notifications_for};
-use crate::status::Status;
+use crate::status::{JobClass, Status};
 use crate::verdict::{
     DetailSource, PipelineView, Snapshot, VerdictScript, WatchView, evaluate_pipeline,
 };
@@ -896,7 +896,12 @@ async fn poll_watch(
                     state.policy.on_error(e);
                     error.get_or_insert_with(|| e.to_string());
                 }
-                let incomplete = !fetched.errors.is_empty();
+                // ⛔ An annotation that is still owed (a rate limit, a 5xx)
+                // stores the detail as incomplete too, or a pipeline that has
+                // settled would never be asked again and its first failing
+                // line would be missing for good (Seer, #64). It is not an
+                // error: no strip, no backoff, for a nicety.
+                let incomplete = !fetched.errors.is_empty() || fetched.annotations_owed;
                 state.last_bridges.insert(row.id, fetched.bridges);
                 state.cache.insert_partial(row, fetched.detail, incomplete);
             }
@@ -961,6 +966,8 @@ async fn poll_watch(
 struct FetchedDetail {
     detail: PipelineDetail,
     errors: Vec<ClientError>,
+    /// A first failing line could not be asked for yet; see [`annotate`].
+    annotations_owed: bool,
     /// The pipeline's own bridges, for `last_bridges` once it is applied.
     bridges: Vec<Bridge>,
 }
@@ -1000,7 +1007,7 @@ async fn fetch_detail(
 ) -> Result<FetchedDetail, ClientError> {
     // Through the row and its query rather than the id: see
     // `CiClient::listed_detail`. GitLab's answer is the same two requests.
-    let (jobs, bridges) = client.listed_detail(project, row, query).await?;
+    let (mut jobs, bridges) = client.listed_detail(project, row, query).await?;
 
     // Pipelines whose status has not moved keep their cached jobs; only the ones
     // the planner names are fetched again.
@@ -1026,6 +1033,8 @@ async fn fetch_detail(
     // Every pipeline the dive selected, at any level. Doubles as the cycle
     // guard: ids are unique, so seeing one twice means the walk is going round.
     let mut reached: HashSet<u64> = HashSet::new();
+    // The project each reached child lives in, for its annotation.
+    let mut child_projects: HashMap<u64, ProjectRef> = HashMap::new();
 
     for level in 1..=depth {
         // Decide the whole level first, in bridge order, then ask for all of it
@@ -1059,12 +1068,14 @@ async fn fetch_detail(
                     .as_ref()
                     .and_then(|d| d.child_bridges.get(&down.id).cloned());
                 let is_due = due.contains(&down.id);
+                let child_project = down
+                    .project_id
+                    .map(ProjectRef::Id)
+                    .unwrap_or_else(|| level_project.clone());
+                child_projects.insert(down.id, child_project.clone());
                 wanted.push(ChildFetch {
                     id: down.id,
-                    project: down
-                        .project_id
-                        .map(ProjectRef::Id)
-                        .unwrap_or_else(|| level_project.clone()),
+                    project: child_project,
                     jobs: is_due,
                     bridges: level < depth && (is_due || nested_previous.is_none()),
                     previous: nested_previous,
@@ -1137,6 +1148,16 @@ async fn fetch_detail(
     child_jobs.retain(|id, _| reached.contains(id));
     child_bridges.retain(|id, _| reached.contains(id));
 
+    let annotations_owed = annotate(
+        client,
+        project,
+        &mut jobs,
+        &mut child_jobs,
+        &child_projects,
+        &state.rules,
+    )
+    .await;
+
     Ok(FetchedDetail {
         detail: PipelineDetail {
             pipeline: row.clone(),
@@ -1146,8 +1167,77 @@ async fn fetch_detail(
             child_bridges,
         },
         errors,
+        annotations_owed,
         bridges,
     })
+}
+
+/// Attach the first failing line's annotation to each pipeline's first
+/// BLOCKING failure, the parent's and every reached child's (a commit group's
+/// runs are its children), asking the client for those that have none yet.
+/// Returns whether any answer is still owed ([`AnnotationAnswer::Later`]).
+///
+/// ⛔ Chosen here, under the watch's `[watches.jobs]` rules, and not in the
+/// client, which cannot see them: the first raw failed job may be one the
+/// rules ignore or call a warning, and annotating it left the failure the
+/// notification names without a line (Seer, #64). "First" is list order, the
+/// order the verdict's `failures` are in.
+///
+/// Costs nothing on GitLab (the default answer, no request) and nothing on a
+/// later tick on GitHub (the client remembers every answer). A cached child
+/// whose job already has its annotation is not asked at all.
+async fn annotate(
+    client: &dyn CiClient,
+    project: &ProjectRef,
+    jobs: &mut [crate::model::Job],
+    child_jobs: &mut BTreeMap<u64, Vec<crate::model::Job>>,
+    child_projects: &HashMap<u64, ProjectRef>,
+    rules: &WatchRules,
+) -> bool {
+    let first = |list: &[crate::model::Job]| {
+        list.iter()
+            .position(|j| crate::verdict::job::classify(j, rules) == JobClass::BlockingFailure)
+            .filter(|&i| list[i].annotation.is_none())
+    };
+    // (child id, or none for the parent; index of the job; its project)
+    let mut asks: Vec<(Option<u64>, usize, &ProjectRef)> = Vec::new();
+    if let Some(i) = first(jobs) {
+        asks.push((None, i, project));
+    }
+    for (id, list) in child_jobs.iter() {
+        if let (Some(i), Some(child_project)) = (first(list), child_projects.get(id)) {
+            asks.push((Some(*id), i, child_project));
+        }
+    }
+    if asks.is_empty() {
+        return false;
+    }
+    let answers = {
+        let (jobs, child_jobs) = (&*jobs, &*child_jobs);
+        in_order(asks.iter().map(|(child, i, p)| {
+            let job = match child {
+                None => &jobs[*i],
+                Some(id) => &child_jobs[id][*i],
+            };
+            client.failure_annotation(p, job)
+        }))
+        .await
+    };
+    let mut owed = false;
+    for ((child, i, _), answer) in asks.into_iter().zip(answers) {
+        let job = match child {
+            None => &mut jobs[i],
+            Some(id) => match child_jobs.get_mut(&id) {
+                Some(list) => &mut list[i],
+                None => continue,
+            },
+        };
+        match answer {
+            AnnotationAnswer::Known(found) => job.annotation = found,
+            AnnotationAnswer::Later => owed = true,
+        }
+    }
+    owed
 }
 
 /// The client one account is polled through: a real transport, and its

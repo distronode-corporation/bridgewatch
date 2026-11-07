@@ -64,6 +64,13 @@ pub struct JobView {
     /// Seconds the job ran; see [`job_duration`]. Null, never `0`, for a job
     /// that never started, so nothing renders a fake "0s".
     pub duration: Option<f64>,
+    /// The first failing line of a failed job, one line, at most
+    /// [`crate::model::FAILURE_LINE_MAX`] characters: GitHub's first failure
+    /// annotation (`path:line: message`), or GitLab's reason code in words.
+    /// Null for every job that did not fail, and for one nobody said why.
+    /// See [`Job::failure_line`].
+    #[serde(default)]
+    pub failure: Option<String>,
 }
 
 impl JobView {
@@ -79,6 +86,7 @@ impl JobView {
             started_at: job.started_at.clone(),
             finished_at: job.finished_at.clone(),
             duration: job_duration(job),
+            failure: job.failure_line(),
         }
     }
 }

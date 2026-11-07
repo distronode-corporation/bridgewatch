@@ -215,8 +215,8 @@ async fn templates_render_from_the_view_model() {
         .find(|n| n.kind == NotifyKind::BlockingFailure)
         .expect("the android bridge failed");
     assert_eq!(
-        failure.body, "verify:android",
-        "the default body joins the failures"
+        failure.body, "verify:android\nscript failure",
+        "the default body joins the failures, then says the first failing line"
     );
     assert_eq!(failure.pipeline_id, 2857464986);
     assert!(
@@ -1036,4 +1036,39 @@ fn the_ref_variable_renders_the_ref_name() {
     assert_eq!(out[0].kind, NotifyKind::Deployed);
     assert_eq!(out[0].title, "release/2.4 4cfaced: deployed");
     assert_eq!(out[0].body, "release/2.4|True|True|RELEASE/2.4");
+}
+
+/// ⛔ F2: a blocking failure says its first failing line under the job names,
+/// and a click on it lands on the failed job's page (`click` defaults to
+/// `first_failure_or_pipeline`).
+#[tokio::test]
+async fn a_blocking_failure_says_its_first_failing_line_and_clicks_through_to_the_job() {
+    let out = baselined_tick("ca41ab28-deployed-with-failure", &[], "failure-line").await;
+    let failure = out
+        .iter()
+        .find(|n| n.kind == NotifyKind::BlockingFailure)
+        .unwrap_or_else(|| panic!("a blocking failure is raised: {out:#?}"));
+    assert_eq!(failure.body, "verify:android\nscript failure");
+    assert_eq!(
+        failure.url.as_deref(),
+        Some("https://gitlab.com/acme-corp/monorepo/-/jobs/16558670141"),
+        "the failed job's page, not the pipeline's"
+    );
+}
+
+/// A pipeline nobody said anything about keeps the one-line body: no stray
+/// newline, no "None".
+#[test]
+fn a_failure_with_no_reason_keeps_the_one_line_body() {
+    let watch = support::config_with(&[]).watches.remove(0);
+    let mut row = row_view("failed", "absent");
+    row.failures = vec!["verify:web".into()];
+    let mut ledger = NotifyLedger::default();
+    ledger.baseline(&watch.id);
+    let out = notifications_for(&watch, &view_of(&watch, row), &mut ledger);
+    let failure = out
+        .iter()
+        .find(|n| n.kind == NotifyKind::BlockingFailure)
+        .expect("raised");
+    assert_eq!(failure.body, "verify:web");
 }

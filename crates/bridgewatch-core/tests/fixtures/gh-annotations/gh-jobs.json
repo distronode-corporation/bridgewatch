@@ -1,0 +1,41 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 9101,
+      "name": "build",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-09-18T09:00:30Z",
+      "completed_at": "2026-09-18T09:01:00Z",
+      "html_url": "https://github.example/acme-corp/monorepo/actions/runs/4101/job/9101"
+    },
+    {
+      "id": 9102,
+      "name": "test",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-09-18T09:01:00Z",
+      "completed_at": "2026-09-18T09:03:10Z",
+      "html_url": "https://github.example/acme-corp/monorepo/actions/runs/4101/job/9102"
+    },
+    {
+      "id": 9103,
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-09-18T09:01:00Z",
+      "completed_at": "2026-09-18T09:01:40Z",
+      "html_url": "https://github.example/acme-corp/monorepo/actions/runs/4101/job/9103"
+    },
+    {
+      "id": 9104,
+      "name": "publish",
+      "status": "in_progress",
+      "conclusion": null,
+      "started_at": "2026-09-18T09:03:20Z",
+      "completed_at": null,
+      "html_url": "https://github.example/acme-corp/monorepo/actions/runs/4101/job/9104"
+    }
+  ]
+}

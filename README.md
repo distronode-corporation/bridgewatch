@@ -622,6 +622,35 @@ Notifications are for news, so bridgewatch says each thing once:
 - **Secondary watches never notify**, and each kind can be turned off per watch
   (`[watches.notify]`).
 
+### Failure alerts
+
+A failure notification says which jobs failed and, on a second line, the **first failing
+line**, and clicking it opens the failed job's page (`notify.click`, default
+`first_failure_or_pipeline`).
+
+- **GitLab:** the job's failure reason, in words ("script failure", "stuck or timeout
+  failure"), from the jobs list bridgewatch already fetches. It costs nothing.
+- **GitHub:** the first `failure` annotation of the job's check run, as `file:line:
+  message` (a compiler error, a failing assertion), else GitHub's own "Process completed
+  with exit code N". Only a failed run is asked, only for its first blocking failure
+  (after `[watches.jobs]`), and only once per job: one request per failed run, none for a
+  passing one, none on later polls. A rate limit or a server error is asked again on the
+  next poll.
+  A fine-grained token needs the **Checks: read** permission for it; without it the line
+  is left out and everything else works.
+
+The same line is shown under the failed job in the popover, and a failed job's
+**copy** button puts the failure on the clipboard as Markdown (job, where it ran, the
+first failing line and the link), ready for an issue or a chat.
+
+Which desktops report a click on a notification (`tauri-plugin-notification` 2.8):
+
+| OS | Click opens the job |
+| --- | --- |
+| macOS | Yes. |
+| Linux, BSDs | Yes, on a notification server that offers actions (GNOME Shell and KDE Plasma do); one that does not reports nothing. |
+| Windows | Only while the toast is on screen; not from the Action Center. |
+
 ## The job view, and what "live" means
 
 Each pipeline row in the popover expands into its jobs: the parent's own jobs, then one
@@ -925,8 +954,8 @@ Accounts of both providers can sit in one file:
 | `notify.deployed`, `notify.blocking_failure`, `notify.finished` | Notify on these events [true]. A pipeline is reported failing once, see [Notifications and noise](#notifications-and-noise). |
 | `notify.recovered` | "Fixed again": the watch's newest settled pipeline passed where the one before it failed. It replaces that pipeline's other notifications [true]. |
 | `notify.started`, `notify.gate_opened` | Notify on these events [false]. |
-| `notify.title`, `notify.body` | MiniJinja templates over the pipeline view (`watch.id`, `kind`, `sha7`, `state`, `failures`, `warnings`, `gates`, `ref`, `source`, `url`, ...). The default title adds ", fixed again" when `kind` is `recovered`. |
-| `notify.click` | `first_failure_or_pipeline`, `pipeline`, `marker_job` or `none`. Computed, but desktop notifications cannot open a URL yet, see [Limitations](#limitations). |
+| `notify.title`, `notify.body` | MiniJinja templates over the pipeline view (`watch.id`, `kind`, `sha7`, `state`, `failures`, `failure_line`, `warnings`, `gates`, `ref`, `source`, `url`, ...). The default title adds ", fixed again" when `kind` is `recovered`; the default body puts the first failing line (`failure_line`) under the failing job names. |
+| `notify.click` | `first_failure_or_pipeline`, `pipeline`, `marker_job` or `none`: what clicking the notification opens. See [Failure alerts](#failure-alerts) for which desktops report a click. |
 
 **`[icon]`**:
 
@@ -1266,9 +1295,10 @@ npm run tauri build -- --config src-tauri/tauri.licenses.conf.json
   the newest page for the project (4 × `show.max_rows` pipelines or runs, between 30 and
   100) and filter it. A matching pipeline older than that page is not seen. On GitHub a
   page without `workflow` holds every workflow's runs, so it covers less time.
-- **Notifications cannot be clicked through on desktop.** The Tauri notification plugin
-  passes only title, body, icon and sound to macOS and Linux, so `notify.click` has no
-  effect yet. The popover row carries the same link.
+- **A notification click is reported only where the desktop reports it.** Windows reports
+  it only while the toast is on screen, not from the Action Center, and a Linux
+  notification server without actions reports nothing. The popover row carries the same
+  link.
 - **No poll on wake from sleep.** The first data after resume can be up to one interval
   stale; opening the popover polls at once.
 - **Windows is not targeted.** Nothing is tested there, the keyring code least of all.

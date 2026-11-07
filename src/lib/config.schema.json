@@ -330,7 +330,7 @@
         "body": {
           "description": "MiniJinja template for the notification body.",
           "type": "string",
-          "default": "{{failures | join(', ') | default('all green', true)}}"
+          "default": "{{failures | join(', ') | default('all green', true)}}{% if failure_line %}\n{{failure_line}}{% endif %}"
         },
         "click": {
           "description": "Where clicking the notification goes.",
@@ -741,7 +741,7 @@
           "$ref": "#/$defs/NotifyConfig",
           "default": {
             "blocking_failure": true,
-            "body": "{{failures | join(', ') | default('all green', true)}}",
+            "body": "{{failures | join(', ') | default('all green', true)}}{% if failure_line %}\n{{failure_line}}{% endif %}",
             "click": "first_failure_or_pipeline",
             "deployed": true,
             "finished": true,
