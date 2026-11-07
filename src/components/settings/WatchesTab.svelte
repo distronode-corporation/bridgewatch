@@ -3,7 +3,7 @@
 
   import { Button } from "$lib/components/ui/button/index.js";
   import { concretePath, entriesFor, providerOf } from "../../lib/settings/registry";
-  import { WATCH_GROUPS, watchGroup, type WatchGroup } from "../../lib/settings/panes";
+  import { WATCH_GROUPS, watchGroup } from "../../lib/settings/panes";
   import { getAt } from "../../lib/settings/values";
   import type { Edit } from "../../lib/types";
   import Field from "./Field.svelte";
@@ -46,15 +46,6 @@
     group,
     entries: fields.filter((e) => (watchGroup(e.path) ?? "Source") === group),
   }));
-
-  /** How many of a group's keys this watch's table sets, for the collapsed title. */
-  function setCount(group: WatchGroup, index: number): string {
-    let n = grouped
-      .find((g) => g.group === group)!
-      .entries.filter((e) => getAt(config, concretePath(e.path, index)) !== undefined).length;
-    if (group === "Jobs") n += jobRows(index).length;
-    return n === 0 ? "" : `${n} set`;
-  }
 
   /**
    * The open panel, named by WATCH rather than by position.
@@ -123,11 +114,10 @@
     </header>
 
     {#if open === id}
-      <!-- Source is open; every other group starts folded, with how many of
-           its keys the file sets beside the title. -->
+      <!-- Source is open; every other group starts folded. -->
       <div class="body mt-3 flex flex-col gap-3">
         {#each grouped as { group, entries } (group)}
-          <Section title={group} collapsible open={group === "Source"} note={setCount(group, index)}>
+          <Section title={group} collapsible open={group === "Source"}>
             {#each entries as entry (entry.path)}
               {@const path = concretePath(entry.path, index)}
               <Field

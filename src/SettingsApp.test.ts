@@ -701,3 +701,35 @@ describe("SettingsApp, the sidebar (L2)", () => {
     expect(host.querySelector("header")?.textContent).toContain("Add watch");
   });
 });
+
+describe("SettingsApp, a refused form edit on the Advanced pane (Seer, #65)", () => {
+  it("lists the reason under the pane, where it is seen, and not under the editor", async () => {
+    // ⛔ The editor lists diagnostics under its 340px box. A refused Log edit
+    // put its reason there, out of sight, while the notice said "see the
+    // errors below".
+    shell.result = {
+      ok: false,
+      diagnostics: [{ severity: "error", path: "log.level", message: "unknown variant `loud`", line: null, col: null }],
+    };
+    const h = await render();
+    await h.tab("Advanced");
+    const select = [...host.querySelectorAll<HTMLLabelElement>("label.field")]
+      .find((l) => l.textContent?.includes("Log level"))!
+      .querySelector("select")!;
+    select.value = "trace";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    await settle();
+    const outer = host.querySelector(".main > .diagnostics");
+    expect(outer?.textContent).toContain("unknown variant `loud`");
+    expect(host.querySelector("#edit-as-text")?.textContent).not.toContain("unknown variant `loud`");
+  });
+
+  it("still lists a broken file's diagnostics under the editor there, once", async () => {
+    shell.status = BROKEN;
+    shell.tab = "text";
+    await render();
+    expect(host.querySelector("#edit-as-text")?.textContent).toContain("expected `=` after a key");
+    expect(host.querySelector(".main > .diagnostics")).toBe(null);
+  });
+});

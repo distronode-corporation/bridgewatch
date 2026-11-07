@@ -251,8 +251,6 @@ describe("AccountsTab, the card (L2)", () => {
     expect(advanced.tagName).toBe("DETAILS");
     expect(advanced.open).toBe(false);
     expect(advanced.textContent).toContain("Timeout (s)");
-    // What the folded group holds that the file sets, so nothing set hides unannounced.
-    expect(advanced.querySelector('[data-slot="group-note"]')?.textContent).toBe("1 set");
   });
 
   it("names the account and its provider in the heading", () => {

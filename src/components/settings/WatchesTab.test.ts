@@ -193,15 +193,6 @@ describe("WatchesTab, groups (L2)", () => {
     expect(labels("Notifications").some((l) => /^Notif/.test(l ?? ""))).toBe(false);
   });
 
-  it("says how many of a folded group's keys the file sets", () => {
-    render([{ ...WATCHES[0], poll: { live_secs: 5, idle_secs: 60 }, notify: { deployed: true } } as (typeof WATCHES)[0]]);
-    const note = (name: string) =>
-      groups().find((g) => g.dataset.group === name)!.querySelector('[data-slot="group-note"]')?.textContent ?? "";
-    expect(note("Polling")).toBe("2 set");
-    expect(note("Notifications")).toBe("1 set");
-    expect(note("Rows")).toBe("");
-  });
-
   it("keeps a group the user opened open across a reload of the file", () => {
     const h = render();
     const polling = () => groups().find((g) => g.dataset.group === "Polling")!;

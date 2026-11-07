@@ -152,9 +152,9 @@ body line with a bracket.
     source's details, including the "Stored for" line, sit in one panel, with its buttons
     in one row under it.
   - **A watch is split into groups** named after its settings: Source, Rows, Polling,
-    Child pipelines, Deploy, Jobs and Notifications. Only Source starts open, and a folded
-    group says how many of its settings the file sets. The notification settings lose
-    their "Notify:" prefix. **Add watch** is in the Watches pane's header.
+    Child pipelines, Deploy, Jobs and Notifications. Only Source starts open. The
+    notification settings lose their "Notify:" prefix. **Add watch** is in the Watches
+    pane's header.
 - **Shared controls are 13px**, in every window. The setup wizard looks the same as
   before; its confirmation dialog, which did not get the wizard's 13px, now does.
 

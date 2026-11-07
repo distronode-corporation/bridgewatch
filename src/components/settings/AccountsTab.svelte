@@ -29,12 +29,6 @@
   const serverFields = fields.filter((e) => accountGroup(e.path) === "Server");
   // A key no group claims is shown under Advanced rather than lost; `panes.test.ts` fails on it first.
   const advancedFields = fields.filter((e) => !["Sign-in", "Server"].includes(accountGroup(e.path) ?? ""));
-
-  /** How many of the Advanced keys the account sets, for the folded title. */
-  function advancedNote(name: string): string {
-    const n = advancedFields.filter((e) => getAt(config, concretePath(e.path, name)) !== undefined).length;
-    return n === 0 ? "" : `${n} set`;
-  }
   let newName = $state("");
   /** GitLab first and the default, so adding an account works as it always did. */
   let newProvider = $state<Provider>("gitlab");
@@ -154,7 +148,7 @@
         <p class="text-tone-amber text-ui-meta m-0 px-4 py-3" data-slot="provider-switch-note">{switchNotes[name]}</p>
       {/if}
     </Section>
-    <Section title="Advanced" collapsible note={advancedNote(name)}>
+    <Section title="Advanced" collapsible>
       {#each advancedFields as entry (entry.path)}
         {@const path = concretePath(entry.path, name)}
         <Field {entry} {path} value={getAt(config, path)} onedit={(edits) => editAccount(name, edits)} />

@@ -82,6 +82,17 @@
   let text = $state("");
   let status = $state<Status | null>(null);
   let validation = $state<Validation | null>(null);
+  /**
+   * Who `validation` answers: a form edit or move, or the file (on load, or
+   * the text editor's own Validate and Save).
+   *
+   * ⛔ The Advanced pane holds form fields (Log) AND the editor, which lists
+   * the file's diagnostics under its 340px box. A refused Log edit put its
+   * reason there, out of sight below the editor, while the notice said "see
+   * the errors below" (Seer, #65). A FORM answer is listed under the pane on
+   * every pane, and the editor lists only the file's.
+   */
+  let validationFrom = $state<"form" | "file">("file");
   let notice = $state("");
   /** The text this window's last successful text-tab save wrote, if any. */
   let savedText: string | null = null;
@@ -116,6 +127,7 @@
     const keep =
       keepValidation === "if-ours" ? validation?.ok === true && text === savedText : keepValidation;
     if (keep) return;
+    validationFrom = "file";
     // A first launch has no file YET: that is the wizard's moment, not an
     // error to list in red under every tab.
     validation =
@@ -193,6 +205,7 @@
       return;
     }
     validation = result;
+    validationFrom = "form";
     notice = result.ok ? "Saved." : "Not saved — see the errors below.";
     await load(!result.ok);
   }
@@ -223,6 +236,7 @@
     // re-reads it, so the order on screen is the file's order, never a guess.
     const result = await moveWatch(id, delta);
     validation = result;
+    validationFrom = "form";
     notice = result.ok ? "Moved." : "Not moved — see the errors below.";
     await load(!result.ok);
   }
@@ -392,9 +406,12 @@
             </p>
             <TextTab
               {text}
-              {validation}
+              validation={validationFrom === "file" ? validation : null}
               diskText={readConfigText}
-              onvalidate={async (t) => (validation = await validateConfigText(t))}
+              onvalidate={async (t) => {
+                validation = await validateConfigText(t);
+                validationFrom = "file";
+              }}
               onsave={async (t, base) => {
                 const result = await confirmed(await saveConfigText(t, base), (id) =>
                   saveConfigText(t, base, id),
@@ -408,6 +425,7 @@
                   return result;
                 }
                 validation = result;
+                validationFrom = "file";
                 if (result.ok) savedText = t;
                 notice = result.ok ? "Saved." : "Not saved — the file was left alone.";
                 // ⚠ Kept either way, unlike a form save: this tab RENDERS the
@@ -424,8 +442,8 @@
       </div>
     </div>
 
-    <!-- The text editor lists its own diagnostics, so the Advanced pane does not repeat them. -->
-    {#if pane !== "advanced" && validation && !validation.ok}
+    <!-- The file's diagnostics on Advanced are the editor's to list, under its box. -->
+    {#if (pane !== "advanced" || validationFrom === "form") && validation && !validation.ok}
       <ul class="diagnostics border-border m-0 max-h-30 list-none overflow-y-auto border-t px-6 py-1.5 text-ui-meta">
         {#each validation.diagnostics as d, index (index)}
           <li class={[d.severity, d.severity === "error" ? "text-tone-red" : "text-tone-amber"]}>
