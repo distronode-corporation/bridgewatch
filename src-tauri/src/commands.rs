@@ -232,7 +232,7 @@ pub(crate) fn write_admitted(
     ) {
         return refused;
     }
-    reload_from_disk(app, false);
+    reload_after_write(app, text);
     validation
 }
 
@@ -273,6 +273,12 @@ pub(crate) fn store_admitted(
 /// [`token::bind_before_moves`] for a write: `text` measured against the file
 /// it replaces, or, when that does not load, against what is running (the
 /// same `before` as [`admit`]).
+///
+/// ⛔ And against what is running, for an account whose host there differs
+/// from the file's: an edit from outside that a reload refused leaves the
+/// file on one host and the app on another, and the reload after this write
+/// (which does not bind again, [`reload_after_write`]) measures against the
+/// running one. Each account is read once: only where the two disagree.
 fn bind_before_write(
     path: &std::path::Path,
     base: &str,
@@ -281,17 +287,26 @@ fn bind_before_write(
     provider: &dyn token::TokenProvider,
 ) -> Result<(), String> {
     let after = bridgewatch_core::config::parse_str(text, path)
-        .map_err(|_| "the configuration to be written does not load".to_string())?;
-    let before = bridgewatch_core::config::parse_str(base, path)
+        .map_err(|_| "the configuration to be written does not load".to_string())?
+        .config;
+    let on_disk = bridgewatch_core::config::parse_str(base, path)
         .ok()
-        .map(|l| l.config)
-        .or_else(|| running.cloned());
-    match before {
-        Some(before) => token::bind_before_moves(&before, &after.config, provider)
-            .map(|_| ())
-            .map_err(|e| e.to_string()),
-        None => Ok(()),
+        .map(|l| l.config);
+    let Some(before) = on_disk.clone().or_else(|| running.cloned()) else {
+        return Ok(());
+    };
+    token::bind_before_moves(&before, &after, provider).map_err(|e| e.to_string())?;
+    if let (Some(on_disk), Some(running)) = (&on_disk, running) {
+        let mut elsewhere = running.clone();
+        elsewhere.accounts.retain(|name, account| {
+            on_disk.accounts.get(name).is_none_or(|a| {
+                bridgewatch_core::oauth::origin_of(&a.base_url)
+                    != bridgewatch_core::oauth::origin_of(&account.base_url)
+            })
+        });
+        token::bind_before_moves(&elsewhere, &after, provider).map_err(|e| e.to_string())?;
     }
+    Ok(())
 }
 
 /// Everything a write must pass before it touches the disk: it loads, and
@@ -377,6 +392,25 @@ pub const CONFIG_CHANGED_EVENT: &str = "config-changed";
 /// ⚠️ Call it off the main thread (every caller does): a reload that sees an
 /// account moved reads the credential store first.
 pub fn reload_from_disk(app: &AppHandle, force: bool) {
+    reload(app, force, None);
+}
+
+/// The reload a write from either window triggers: `written` is the text
+/// [`store_admitted`] just put on disk, after binding every moved account's
+/// 1.x entry itself.
+///
+/// ⛔ So the reload does not bind again for that text. A second credential
+/// read there could fail where the first did not (the keychain locked in
+/// between, a macOS prompt answered "Deny"), and the reload would then be
+/// refused after the save had reported success: the file on disk naming the
+/// new host, the app still polling the old one. Any other text found on disk
+/// (another editor wrote in between) is bound as usual.
+pub(crate) fn reload_after_write(app: &AppHandle, written: &str) {
+    reload(app, false, Some(written));
+}
+
+/// [`reload_from_disk`], with the text a write has already bound for.
+fn reload(app: &AppHandle, force: bool, bound_for: Option<&str>) {
     let state = app.state::<Arc<AppState>>();
     let path = state.config_path.clone();
     let raw = match read_for_reload(&path) {
@@ -396,41 +430,33 @@ pub fn reload_from_disk(app: &AppHandle, force: bool) {
     if !state.note_disk_text(&raw, force) {
         return;
     }
-    // ONE read, parsed once: validating one read and loading another let a
-    // write landing in between publish diagnostics for text that never ran.
-    let validation = Validation::of(&raw, &path);
-    let loaded = bridgewatch_core::config::parse_str(&raw, &path).ok();
-
-    // ⛔ An edit this app did not write (another editor, a sync, a script) can
-    // move an account too, and nothing asked about it. Before it runs, the
-    // 1.x own entry of every moved account is tied to the server it was on,
-    // exactly as a write from either window does (`store_admitted`); if that
-    // fails, the edit does not run and the running configuration is kept, as
-    // for any failed reload. The previous server is the RUNNING one: nothing
-    // else records it, so an edit made while the app was not running is not
-    // seen as a move (see `token::bind_before_moves`).
-    if let Err(e) = bind_before_reload(
+    let (validation, loaded) = match load_for_reload(
+        &path,
+        &raw,
         state.config().as_ref(),
-        loaded.as_ref().map(|l| &l.config),
+        bound_for,
         &SystemTokenProvider,
     ) {
-        tracing::warn!(error = %e, "reload refused; the running configuration is kept");
-        {
-            let mut inner = state.lock();
-            inner.validation = Validation::error(e);
-            inner.disk_text = None;
+        Ok(next) => next,
+        Err(e) => {
+            tracing::warn!(error = %e, "reload refused; the running configuration is kept");
+            {
+                let mut inner = state.lock();
+                inner.validation = Validation::error(e);
+                inner.disk_text = None;
+            }
+            let _ = app.emit(CONFIG_CHANGED_EVENT, ());
+            crate::poller::republish_errors(app);
+            return;
         }
-        let _ = app.emit(CONFIG_CHANGED_EVENT, ());
-        crate::poller::republish_errors(app);
-        return;
-    }
+    };
 
     let changed = {
         let mut inner = state.lock();
         inner.validation = validation;
         match loaded {
-            Some(l) => {
-                inner.config = Some(l.config);
+            Some(config) => {
+                inner.config = Some(config);
                 true
             }
             None => false,
@@ -470,6 +496,38 @@ pub fn reload_from_disk(app: &AppHandle, force: bool) {
         // Nothing to restart, but the popover's error strip has to change.
         crate::poller::republish_errors(app);
     }
+}
+
+/// What a reload of `raw` publishes: its validation, and the configuration to
+/// run when it loads. `Err` is a refused reload, and the running
+/// configuration is kept.
+///
+/// ⛔ ONE read, parsed once: validating one read and loading another let a
+/// write landing in between publish diagnostics for text that never ran.
+///
+/// ⛔ An edit this app did not write (another editor, a sync, a script) can
+/// move an account too, and nothing asked about it. Before it runs, the 1.x
+/// own entry of every moved account is tied to the server it was on, exactly
+/// as a write from either window does (`store_admitted`); if that fails, the
+/// edit does not run. The previous server is the RUNNING one: nothing else
+/// records it, so an edit made while the app was not running is not seen as a
+/// move (see `token::bind_before_moves`). Text equal to `bound_for`, which a
+/// write has just bound for, is not bound again (see [`reload_after_write`]).
+fn load_for_reload(
+    path: &std::path::Path,
+    raw: &str,
+    running: Option<&bridgewatch_core::config::Config>,
+    bound_for: Option<&str>,
+    provider: &dyn token::TokenProvider,
+) -> Result<(Validation, Option<bridgewatch_core::config::Config>), String> {
+    let validation = Validation::of(raw, path);
+    let loaded = bridgewatch_core::config::parse_str(raw, path)
+        .ok()
+        .map(|l| l.config);
+    if bound_for != Some(raw) {
+        bind_before_reload(running, loaded.as_ref(), provider)?;
+    }
+    Ok((validation, loaded))
 }
 
 /// [`token::bind_before_moves`] for a reload: the file as it now loads,
@@ -972,12 +1030,17 @@ mod tests {
     struct Store {
         entry: std::sync::Mutex<Option<String>>,
         locked: bool,
+        /// Reads that answer before every later one fails, as a keychain
+        /// locked (or a prompt denied) after the first does; `None` is no
+        /// limit.
+        reads_left: std::sync::Mutex<Option<usize>>,
     }
     impl Store {
         fn legacy(locked: bool) -> std::sync::Arc<Self> {
             std::sync::Arc::new(Self {
                 entry: std::sync::Mutex::new(Some("glpat-legacy".into())),
                 locked,
+                reads_left: std::sync::Mutex::new(None),
             })
         }
         fn entry(&self) -> Option<String> {
@@ -996,6 +1059,15 @@ mod tests {
     impl token::TokenProvider for Store {
         fn keyring_get(&self, service: &str, user: &str) -> Result<String, token::TokenError> {
             self.refuse(service)?;
+            if let Some(left) = self.reads_left.lock().unwrap().as_mut() {
+                if *left == 0 {
+                    return Err(token::TokenError::Store {
+                        service: service.into(),
+                        message: "the keychain is locked".into(),
+                    });
+                }
+                *left -= 1;
+            }
             match (service, user, self.entry()) {
                 ("bridgewatch:gl", "token", Some(v)) => Ok(v),
                 _ => Err(token::TokenError::NoEntry {
@@ -1124,5 +1196,76 @@ mod tests {
         // A first launch has nothing running to measure against.
         let fresh = Store::legacy(true);
         assert!(bind_before_reload(None, Some(&new), fresh.as_ref()).is_ok());
+    }
+
+    /// ⛔ Seer, on the 2.0 release PR. A write binds the moved account's 1.x
+    /// entry and then reloads; the reload used to bind AGAIN, so a second
+    /// credential read that failed (the keychain locked in between, a prompt
+    /// denied) refused the reload after the save had reported success: the
+    /// new host on disk, the old one still running. The reload after a write
+    /// no longer reads the store for the text that write bound for, while an
+    /// edit from outside still binds.
+    #[test]
+    fn the_reload_after_a_write_does_not_bind_again() {
+        let path = scratch("reload-after-write");
+        let store = Store::legacy(false);
+        *store.reads_left.lock().unwrap() = Some(1);
+        store_admitted(&path, OWN, ON_NEW, None, store.as_ref()).expect("written");
+        let parse = |raw: &str| {
+            bridgewatch_core::config::parse_str(raw, Path::new("x.toml"))
+                .unwrap()
+                .config
+        };
+        let running = parse(OWN);
+        let raw = std::fs::read_to_string(&path).unwrap();
+
+        let (validation, loaded) =
+            load_for_reload(&path, &raw, Some(&running), Some(ON_NEW), store.as_ref())
+                .expect("the reload after the write was refused");
+        assert!(validation.ok, "{:?}", validation.diagnostics);
+        // No error; the fixture's "no watches" warning is all there is.
+        assert!(
+            validation.diagnostics.iter().all(|d| d.severity != "error"),
+            "{:?}",
+            validation.diagnostics
+        );
+        assert_eq!(
+            loaded.expect("the new file runs").accounts["gl"].base_url,
+            "https://evil.example",
+        );
+
+        // The same text from outside (a reload the user started, another
+        // editor) still binds, and so meets the failed read.
+        let e = load_for_reload(&path, &raw, Some(&running), None, store.as_ref()).unwrap_err();
+        assert!(e.contains("the keychain is locked"), "{e}");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A file a refused reload left on another host than the app runs: a
+    /// write from Settings that keeps the file's host still binds against the
+    /// RUNNING host, because the reload after it measures against that one
+    /// and does not bind again.
+    #[test]
+    fn a_write_also_binds_against_the_running_host() {
+        let path = scratch("write-vs-running");
+        std::fs::write(&path, ON_NEW).unwrap();
+        let running = bridgewatch_core::config::parse_str(OWN, Path::new("x.toml"))
+            .unwrap()
+            .config;
+        let edited = format!("{ON_NEW}timeout_secs = 30\n");
+        let store = Store::legacy(false);
+        store_admitted(&path, ON_NEW, &edited, Some(&running), store.as_ref()).expect("written");
+        assert!(
+            store
+                .entry()
+                .unwrap()
+                .contains(r#""origin":"https://gitlab.com""#),
+            "bound to the running host"
+        );
+        let locked = Store::legacy(true);
+        std::fs::write(&path, ON_NEW).unwrap();
+        assert!(store_admitted(&path, ON_NEW, &edited, Some(&running), locked.as_ref()).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ON_NEW);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
