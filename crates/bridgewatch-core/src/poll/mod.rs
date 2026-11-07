@@ -107,6 +107,9 @@ pub struct Poller {
     /// interval before it knows this tick's answer, and last tick's is the only
     /// honest guess.
     last_any_live: bool,
+    /// The accounts [`Poller::from_config_per_account`] built a refusing
+    /// client for, because their credential failed. Empty otherwise.
+    refused: Vec<String>,
 }
 
 impl Poller {
@@ -175,6 +178,7 @@ impl Poller {
             clock: Arc::new(chrono::Utc::now),
             sender,
             last_any_live: false,
+            refused: Vec::new(),
         })
     }
 
@@ -227,6 +231,7 @@ impl Poller {
         // watch names has no client, which is exactly what a watch naming an
         // account that does not exist already gets.
         let used: HashSet<&str> = config.watches.iter().map(|w| w.account.as_str()).collect();
+        let mut refused = Vec::new();
         for (name, account) in config
             .accounts
             .iter()
@@ -237,17 +242,30 @@ impl Poller {
                 Ok(client) => client,
                 Err(PollerError::Token(_, e)) if per_account => {
                     tracing::warn!(account = %name, error = %e, "the account's token is not usable");
+                    refused.push(name.clone());
                     refused_client(name, account, e.to_string(), ring.clone())?
                 }
                 Err(PollerError::SignIn(_, e)) if per_account => {
                     tracing::warn!(account = %name, error = %e, "the account cannot sign in");
+                    refused.push(name.clone());
                     refused_client(name, account, e.to_string(), ring.clone())?
                 }
                 Err(e) => return Err(e),
             };
             clients.insert(name.clone(), client);
         }
-        Self::with_clients(config, clients, ring).map_err(PollerError::Config)
+        let mut poller = Self::with_clients(config, clients, ring).map_err(PollerError::Config)?;
+        poller.refused = refused;
+        Ok(poller)
+    }
+
+    /// The accounts whose credential failed when this poller was built, and
+    /// whose every request is refused. ⚠ A refusal is fixed at build time:
+    /// some causes pass on their own (a locked keychain, a Secret Service not
+    /// up yet, a command that timed out), so the owner rebuilds the poller,
+    /// backing off, while this is not empty.
+    pub fn refused_accounts(&self) -> &[String] {
+        &self.refused
     }
 
     /// The client each account polls through, by account name.

@@ -38,6 +38,20 @@ pub fn build_retry_delay(attempt: u32) -> Duration {
     Duration::from_secs(FIRST.saturating_mul(1u64 << attempt.min(16)).min(CAP))
 }
 
+/// When to rebuild a poller that refused some accounts, or `None` when it
+/// refused none.
+///
+/// ⛔ A refused account's client is fixed when the poller is built, and some
+/// causes pass on their own: a keychain that was locked, a Secret Service not
+/// up yet at login, a command that timed out. Before D4 such an error failed
+/// the whole build, which retried on [`build_retry_delay`]; the refused
+/// account now gets the same schedule, so it heals without a reload. A cause
+/// that does not pass (a token bound to another server) costs one credential
+/// read per backed-off interval, at most every five minutes.
+pub fn refused_rebuild_delay(any_refused: bool, attempt: u32) -> Option<Duration> {
+    any_refused.then(|| build_retry_delay(attempt))
+}
+
 /// Run until the process exits, restarting the poll loop if it panics.
 ///
 /// ⛔ A panic anywhere in the loop used to end the task for good: the tray kept
@@ -101,6 +115,7 @@ where
 /// have to be rebuilt anyway when the config changes.
 async fn run_loop(app: AppHandle, state: Arc<AppState>) {
     let mut failed_builds: u32 = 0;
+    let mut refused_rebuilds: u32 = 0;
     loop {
         let Some(config) = state.config() else {
             // No usable configuration. Show it in the tray and wait to be told
@@ -150,6 +165,17 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             }
         };
 
+        // Rebuilt on its own schedule while any account was refused.
+        let rebuild =
+            refused_rebuild_delay(!poller.refused_accounts().is_empty(), refused_rebuilds);
+        refused_rebuilds = if rebuild.is_some() {
+            refused_rebuilds.saturating_add(1)
+        } else {
+            0
+        };
+        let rebuild_at =
+            tokio::time::Instant::now() + rebuild.unwrap_or(Duration::from_secs(365 * 86_400));
+
         loop {
             let tick = poller.tick().await;
 
@@ -166,6 +192,7 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
                 _ = tokio::time::sleep(tick.next_interval) => {}
                 _ = state.poll_now.notified() => {}
                 _ = state.reload.notified() => break,
+                _ = tokio::time::sleep_until(rebuild_at), if rebuild.is_some() => break,
             }
         }
     }
@@ -560,6 +587,12 @@ mod tests {
 
     #[test]
     fn a_failed_build_backs_off_and_caps() {
+        assert_eq!(refused_rebuild_delay(false, 3), None);
+        assert_eq!(refused_rebuild_delay(true, 0), Some(Duration::from_secs(5)));
+        assert_eq!(
+            refused_rebuild_delay(true, 99),
+            Some(Duration::from_secs(300))
+        );
         let secs: Vec<u64> = (0..8).map(|a| build_retry_delay(a).as_secs()).collect();
         assert_eq!(secs, [5, 10, 20, 40, 80, 160, 300, 300]);
         assert_eq!(build_retry_delay(u32::MAX).as_secs(), 300);

@@ -1001,6 +1001,8 @@ async fn a_token_error_fails_only_its_own_account_in_the_apps_poller() {
     let mut poller =
         bridgewatch_core::poll::Poller::from_config_per_account(&config, &OwnSavedForGitlabCom)
             .expect("the app's poller builds around the broken account");
+    // Named, so the app can rebuild while it is: some causes pass on their own.
+    assert_eq!(poller.refused_accounts(), ["moved"]);
     let tick = poller.tick().await;
     let error_of = |id: &str| {
         tick.snapshot
