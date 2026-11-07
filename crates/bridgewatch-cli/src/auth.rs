@@ -366,6 +366,9 @@ pub enum OwnExpiry {
     Refused(Refusal),
     /// The request failed for another reason.
     Unread(String),
+    /// The server accepts the token, and would not say when it ends: GitLab
+    /// refused the expiry lookup (a job token, say) and `/user` worked.
+    AcceptedUnread,
 }
 
 /// How [`own_expiries`] gets a transport for an account.
@@ -407,15 +410,31 @@ pub async fn own_expiries(
                 // GitLab's `/personal_access_tokens/self` refusing says nothing
                 // about the token itself (a job token is refused there too),
                 // so the core does not count it; ask `/user`, which every
-                // usable token may read, what the refusal is.
+                // usable token may read, whether the token is refused. ⛔ Only
+                // a FAILED `/user` replaces the lookup's answer: an accepted
+                // one says the token works, and nothing about when it ends
+                // (cubic, #66).
+                let mut accepted_unread = false;
                 if matches!(read, Err(ClientError::Auth { .. }))
                     && client.credential().refused.is_none()
                 {
-                    read = client.current_user().await.map(|_| ());
+                    match client.current_user().await {
+                        Ok(_) => accepted_unread = true,
+                        Err(e) => read = Err(e),
+                    }
                 }
                 let seen = client.credential();
                 match (read, seen.refused, seen.expiry) {
+                    // `health::assess`'s rule: a bare refusal at or past a
+                    // stated expiry is the expiry (GitHub's 401 says only
+                    // "Bad credentials").
+                    (_, Some(Refusal::Invalid), Some(e))
+                        if e.at <= i64::try_from(oauth::now()).unwrap_or(i64::MAX) =>
+                    {
+                        OwnExpiry::Refused(Refusal::Expired)
+                    }
                     (_, Some(why), _) => OwnExpiry::Refused(why),
+                    _ if accepted_unread => OwnExpiry::AcceptedUnread,
                     (Ok(()), None, Some(e)) => OwnExpiry::At(e.at),
                     (Ok(()), None, None) => match account.provider {
                         Provider::Gitlab => OwnExpiry::Never,
@@ -486,6 +505,10 @@ fn own_line(
                         ),
                     )
                 }
+                Some(OwnExpiry::AcceptedUnread) => (
+                    true,
+                    format!("{bound}; the server accepts it; its expiry could not be read"),
+                ),
                 Some(OwnExpiry::Unread(e)) => {
                     (true, format!("{bound}; its expiry could not be read ({e})"))
                 }
@@ -1195,6 +1218,78 @@ pub(crate) mod tests {
         );
         assert!(!line("legacy").contains("expires"), "{text}");
         assert!(!text.contains("tok-FIXTURE"), "{text}");
+    }
+
+    /// GitLab refusing the expiry lookup while `/user` accepts the token (a CI
+    /// job token, say): the token is accepted, its expiry unknown. Never "does
+    /// not expire", never "refused", and the exit code is an accepted token's
+    /// (cubic, #66).
+    #[tokio::test]
+    async fn an_accepted_token_whose_expiry_lookup_is_refused_is_accepted_expiry_unknown() {
+        let config = config(
+            "[accounts.lab]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n",
+        );
+        let store = Memory::default();
+        let secret = bridgewatch_core::token::Secret::new("tok-FIXTURE");
+        token::set_own_token("lab", "https://gitlab.example.com", &secret, &store).unwrap();
+        let t = Arc::new(ScriptTransport::new());
+        t.reply(
+            "/personal_access_tokens/self",
+            401,
+            r#"{"message":"401 Unauthorized"}"#,
+        );
+        t.reply(
+            "/user",
+            200,
+            r#"{"id":7,"username":"ci-bot","name":"CI","bot":true}"#,
+        );
+        let transport = t.clone();
+        let transport_for = move |_: &Account| Ok(transport.clone() as Arc<dyn Transport>);
+        let expiries = own_expiries(&config, None, &store, &transport_for).await;
+        assert_eq!(expiries["lab"], OwnExpiry::AcceptedUnread);
+
+        let mut out = Vec::new();
+        let code = status(&config, None, &store, &BUILTIN, &expiries, 0, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::OK, "{text}");
+        assert_eq!(
+            text,
+            "lab (gitlab.example.com): own token, bound to https://gitlab.example.com; the \
+             server accepts it; its expiry could not be read\n"
+        );
+        for wrong in ["does not expire", "refuses", "not authorised", "invalid"] {
+            assert!(!text.contains(wrong), "{wrong}: {text}");
+        }
+    }
+
+    /// A GitHub token refused with a 401 after the expiry its own header
+    /// states is expired, not "not accepted": `health::assess`'s rule.
+    #[tokio::test]
+    async fn a_github_token_refused_past_its_stated_expiry_shows_as_expired() {
+        let config = config("[accounts.gh]\nprovider = \"github\"\ntoken = { own = true }\n");
+        let store = Memory::default();
+        let secret = bridgewatch_core::token::Secret::new("tok-FIXTURE");
+        token::set_own_token("gh", "https://api.github.com", &secret, &store).unwrap();
+        let t = Arc::new(ScriptTransport::new());
+        let mut refused =
+            bridgewatch_core::client::HttpResponse::plain(401, r#"{"message":"Bad credentials"}"#);
+        let past = i64::try_from(oauth::now()).unwrap() - 2 * 86_400;
+        refused.token_expiration =
+            Some(bridgewatch_core::health::stamp(past).replace(" UTC", ":00 UTC"));
+        t.reply_with("/user", refused);
+        let transport = t.clone();
+        let transport_for = move |_: &Account| Ok(transport.clone() as Arc<dyn Transport>);
+        let expiries = own_expiries(&config, None, &store, &transport_for).await;
+        assert_eq!(expiries["gh"], OwnExpiry::Refused(Refusal::Expired));
+
+        let mut out = Vec::new();
+        let code = status(&config, None, &store, &BUILTIN, &expiries, 0, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::ERROR, "{text}");
+        assert!(
+            text.ends_with("the server refuses it: it has expired; save a new one in Settings\n"),
+            "{text}"
+        );
     }
 
     /// A sign-in inside 72 h of its end says to sign in again.
