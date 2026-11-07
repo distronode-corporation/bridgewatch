@@ -10,6 +10,7 @@
   import CrashReportsAsk from "./CrashReportsAsk.svelte";
   import DebugPane from "./DebugPane.svelte";
   import ErrorStrip from "./ErrorStrip.svelte";
+  import NeedsApprovalStrip from "./NeedsApprovalStrip.svelte";
   import NotificationsPaused from "./NotificationsPaused.svelte";
   import TokenHealthStrip from "./TokenHealthStrip.svelte";
   import { UpdatedAgo, createExpansionStore, type ExpansionStore } from "./jobs";
@@ -71,9 +72,21 @@
     ...snapshot.watches.filter((w) => w.role !== "primary"),
   ]);
 
+  /**
+   * The strip's errors: the snapshot's, less the ones a watch section below
+   * already shows. ⛔ The core lists each watch's error in `errors` too, as
+   * `<watch id>: <error>`, for `check` and the CLI; shown in both places, a
+   * refused account's reason (a host move, a cancelled prompt) appeared in the
+   * strip AND under every one of its watches.
+   */
+  const stripErrors = $derived.by(() => {
+    const shown = new Set(snapshot.watches.filter((w) => w.error).map((w) => `${w.id}: ${w.error}`));
+    return snapshot.errors.filter((e) => !shown.has(e));
+  });
+
   // The strip's lines, Status included, so the empty-list message below agrees
   // with what the strip says.
-  const hasErrors = $derived(errorLines(snapshot.errors, status).length > 0);
+  const hasErrors = $derived(errorLines(stripErrors, status).length > 0);
 
   // Forget open/closed choices for pipelines that have left the popover, so the
   // store does not grow for the life of the process.
@@ -127,7 +140,9 @@
     </p>
   {/if}
 
-  <ErrorStrip errors={snapshot.errors} {status} {onfix} {onsetup} />
+  <ErrorStrip errors={stripErrors} {status} {onfix} {onsetup} />
+
+  <NeedsApprovalStrip accounts={status?.needsApproval ?? []} onretry={onrefresh} />
 
   <TokenHealthStrip tokens={snapshot.tokens ?? []} {onsettings} />
 

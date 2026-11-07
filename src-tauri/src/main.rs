@@ -178,7 +178,10 @@ fn main() {
 
             // A click on a notification opens its target (`notify.click`).
             // ⛔ Registered before the poller starts: the plugin reports
-            // actions only for notifications shown while a handler exists.
+            // actions only for notifications shown while a handler exists,
+            // and on macOS only for one that carries an action
+            // (`poller::carries_open_action` says why).
+            poller::register_click_action(notifier);
             let clicked = app.handle().clone();
             let _ = notifier.on_action(move |performed| {
                 poller::on_notification_action(&clicked, performed);

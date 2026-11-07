@@ -393,6 +393,10 @@ pub fn status_of(
 
 /// Who an account is signed in as, and until when, and whether the running
 /// configuration would use it. Never a token; `None` when it is not signed in.
+///
+/// ⛔ A quiet read ([`bridgewatch_core::token::Quiet`]): a status is never
+/// worth a Keychain dialog. A sign-in the store would have to ask about is
+/// an error saying so, which Settings shows as "Could not read the sign-in".
 #[tauri::command]
 pub async fn oauth_status(account: String, app: AppHandle) -> Result<Option<SignInView>, String> {
     let running = app.state::<Arc<AppState>>().config();
@@ -400,7 +404,7 @@ pub async fn oauth_status(account: String, app: AppHandle) -> Result<Option<Sign
         status_of(
             &account,
             running.as_ref(),
-            &SystemTokenProvider,
+            &bridgewatch_core::token::Quiet(&SystemTokenProvider),
             &BuiltinClients::shipped(),
         )
     })

@@ -73,6 +73,8 @@
 
 use crate::config::TokenSource;
 
+mod quiet;
+
 /// A token, wrapped so it cannot be printed by accident.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Secret(String);
@@ -198,6 +200,22 @@ pub enum TokenError {
         /// Why there is no client id, and what to write.
         message: String,
     },
+    /// The credential store needs a person's say-so to read this entry: the
+    /// read was not allowed to ask ([`TokenProvider::keyring_get_quiet`]), or
+    /// it asked and the prompt was cancelled or denied (`refused`).
+    ///
+    /// ⛔ A refusal is never asked again on a timer: the macOS Keychain shows
+    /// a new dialog for every read, so a retry every few seconds after a
+    /// Cancel was a dialog every few seconds. Only a person asks again
+    /// (Retry, Refresh, saving a token).
+    #[error("{}", needs_approval_message(.service, *.refused))]
+    NeedsApproval {
+        /// The service whose entry was to be read.
+        service: String,
+        /// `true` when a prompt was shown and cancelled or denied; `false`
+        /// when the read was not allowed to show one.
+        refused: bool,
+    },
     /// The credential carries a `go-keyring-*` envelope that would not decode.
     #[error(
         "the credential is wrapped in a {envelope:?} envelope that will not decode: {message}. \
@@ -229,6 +247,21 @@ fn bound_elsewhere_message(account: &str, stored: &str, expected: Option<&str>) 
     }
 }
 
+/// The sentence [`TokenError::NeedsApproval`] displays.
+fn needs_approval_message(service: &str, refused: bool) -> String {
+    if refused {
+        format!(
+            "the credential store's prompt for {service:?} was cancelled or denied, so \
+             bridgewatch does not ask again on its own. Use Retry (or Refresh) to be asked once more"
+        )
+    } else {
+        format!(
+            "reading {service:?} needs your approval in a credential store prompt, and this \
+             read may not ask for it. It is asked when the account is polled"
+        )
+    }
+}
+
 /// The side effects token resolution needs, behind a trait so the selection
 /// logic can be tested without touching a real credential store.
 ///
@@ -237,6 +270,22 @@ fn bound_elsewhere_message(account: &str, stored: &str, expected: Option<&str>) 
 pub trait TokenProvider: Send + Sync {
     /// Read a credential from the OS store. `user` may be the empty string.
     fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError>;
+
+    /// Read a credential from the OS store WITHOUT any prompt. A read that
+    /// would raise one (a macOS Keychain access dialog, a Secret Service
+    /// unlock) fails with [`TokenError::NeedsApproval`] instead.
+    ///
+    /// ⛔ Every read made only to SHOW something (`own_token_status`, the
+    /// sign-in status) goes through here. Settings mounts hidden at launch and
+    /// read every own entry through [`Self::keyring_get`], which put up a
+    /// Keychain dialog per account, and again after every configuration
+    /// change: eleven dialogs in two and a half minutes on one Mac.
+    ///
+    /// The default is [`Self::keyring_get`], right for every store that never
+    /// prompts (and for test fakes); [`SystemTokenProvider`] overrides it.
+    fn keyring_get_quiet(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        self.keyring_get(service, user)
+    }
 
     /// Write a credential to the OS store.
     fn keyring_set(&self, service: &str, user: &str, secret: &str) -> Result<(), TokenError>;
@@ -280,12 +329,18 @@ impl TokenProvider for SystemTokenProvider {
                 user: String::new(),
             })?
         } else {
+            let _turn = quiet::interactive_turn();
             keyring::Entry::new(service, user)
                 .and_then(|e| e.get_password())
                 .map_err(|e| classify_keyring_error(e, service, user))?
         };
         // Whoever wrote the credential decides whether it is enveloped, so this
         // runs on both read paths.
+        decode_keyring_envelope(&raw)
+    }
+
+    fn keyring_get_quiet(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        let raw = quiet::get(service, user)?;
         decode_keyring_envelope(&raw)
     }
 
@@ -303,6 +358,7 @@ impl TokenProvider for SystemTokenProvider {
                     .to_string(),
             });
         }
+        let _turn = quiet::interactive_turn();
         keyring::Entry::new(service, user)
             .and_then(|e| e.set_password(secret))
             .map_err(|e| classify_keyring_error(e, service, user))
@@ -312,6 +368,7 @@ impl TokenProvider for SystemTokenProvider {
         if user.is_empty() {
             return Ok(());
         }
+        let _turn = quiet::interactive_turn();
         match keyring::Entry::new(service, user).and_then(|e| e.delete_credential()) {
             Ok(()) => Ok(()),
             Err(e) => match classify_keyring_error(e, service, user) {
@@ -565,6 +622,12 @@ impl Drain {
 /// Map a `keyring` error onto ours, collapsing every "it is not there" spelling
 /// the crate has used across versions onto [`TokenError::NoEntry`].
 fn classify_keyring_error(err: keyring::Error, service: &str, user: &str) -> TokenError {
+    if let Some(refused) = quiet::approval_of(&err) {
+        return TokenError::NeedsApproval {
+            service: service.to_string(),
+            refused,
+        };
+    }
     let message = err.to_string();
     let missing = matches!(err, keyring::Error::NoEntry)
         || message.to_ascii_lowercase().contains("no matching entry")
@@ -665,6 +728,7 @@ fn empty_user_lookup(service: &str) -> Result<Option<String>, TokenError> {
         service,
         run_captured(&argv, COMMAND_TIMEOUT, MAX_STDOUT_BYTES),
         COMMAND_TIMEOUT,
+        cfg!(target_os = "macos"),
     )
 }
 
@@ -680,10 +744,15 @@ fn empty_user_lookup(service: &str) -> Result<Option<String>, TokenError> {
 ///
 /// Not starting and exiting non-zero both still mean "not there": the tool is
 /// not installed, or has no such item (`security` exits 44).
+///
+/// ⛔ Except a `security` prompt that was cancelled or denied (`security_exits`,
+/// macOS only): that is [`TokenError::NeedsApproval`], so it is not asked
+/// again on a timer. `security` exits with the low byte of the `OSStatus`.
 fn lookup_outcome(
     service: &str,
     ran: Ran,
     timeout: std::time::Duration,
+    security_exits: bool,
 ) -> Result<Option<String>, TokenError> {
     match ran {
         Ran::NotStarted(_) => Ok(None),
@@ -695,6 +764,14 @@ fn lookup_outcome(
                 timeout.as_secs_f32().round()
             ),
         }),
+        Ran::Exited { status, .. }
+            if security_exits && status.code().is_some_and(security_exit_was_refused) =>
+        {
+            Err(TokenError::NeedsApproval {
+                service: service.to_string(),
+                refused: true,
+            })
+        }
         Ran::Exited { status, .. } if !status.success() => Ok(None),
         Ran::Exited { out, .. } => {
             let secret = String::from_utf8_lossy(&out)
@@ -703,6 +780,16 @@ fn lookup_outcome(
             Ok((!secret.is_empty()).then_some(secret))
         }
     }
+}
+
+/// Whether `security find-generic-password` exiting with `code` means its
+/// prompt was cancelled or denied: the low byte of `errSecUserCanceled`
+/// (-128, exit 128) or `errSecAuthFailed` (-25293, exit 51, which a Deny
+/// gives).
+fn security_exit_was_refused(code: i32) -> bool {
+    [quiet::ERR_SEC_USER_CANCELED, quiet::ERR_SEC_AUTH_FAILED]
+        .iter()
+        .any(|status| code == status & 0xff)
 }
 
 /// `security`'s arguments for an empty-account lookup of `service`.
@@ -733,6 +820,19 @@ fn secret_tool_lookup_args(service: &str) -> Vec<&str> {
         vec!["lookup", "--", "service", service, "username", ""]
     } else {
         vec!["lookup", "service", service, "username", ""]
+    }
+}
+
+/// The credential-store service an account's credential is read from, or
+/// `None` for a source that reads no store (an environment variable, a
+/// command). What [`AskOnce::refused`] is matched against to say which
+/// accounts are waiting for approval.
+pub fn read_service(account_name: &str, account: &crate::config::Account) -> Option<String> {
+    match &account.token {
+        TokenSource::Keyring { service, .. } => Some(service.clone()),
+        TokenSource::Own(true) => Some(SystemTokenProvider::own_service(account_name)),
+        TokenSource::Oauth(_) => Some(crate::oauth::store::service(account_name)),
+        TokenSource::Own(false) | TokenSource::Env(_) | TokenSource::Command(_) => None,
     }
 }
 
@@ -1131,21 +1231,27 @@ pub enum OwnTokenStatus {
         /// The origin of the account's `base_url`; `None` when it has none.
         expected: Option<String>,
     },
+    /// The credential store would have to ask before the entry can be read,
+    /// so it was not read: a status is never worth a prompt.
+    NeedsApproval,
 }
 
 /// [`OwnTokenStatus`] for an account, by reading its own entry. Binds nothing
 /// and sends nothing.
 ///
-/// ⚠️ It reads the credential store, which on macOS can raise a prompt.
+/// ⛔ Through [`TokenProvider::keyring_get_quiet`]: it never raises a prompt.
+/// An entry the store would have to ask about is
+/// [`OwnTokenStatus::NeedsApproval`], not a dialog.
 pub fn own_token_status(
     account_name: &str,
     account: &crate::config::Account,
     provider: &dyn TokenProvider,
 ) -> Result<OwnTokenStatus, TokenError> {
     let service = SystemTokenProvider::own_service(account_name);
-    let raw = match provider.keyring_get(&service, SystemTokenProvider::OWN_USER) {
+    let raw = match provider.keyring_get_quiet(&service, SystemTokenProvider::OWN_USER) {
         Ok(raw) => raw,
         Err(TokenError::NoEntry { .. }) => return Ok(OwnTokenStatus::None),
+        Err(TokenError::NeedsApproval { .. }) => return Ok(OwnTokenStatus::NeedsApproval),
         Err(e) => return Err(e),
     };
     Ok(match read_own_entry(&raw, &service)? {
@@ -1158,6 +1264,124 @@ pub fn own_token_status(
             expected: crate::oauth::origin_of(&account.base_url),
         },
     })
+}
+
+/// A provider whose every read is quiet: [`TokenProvider::keyring_get`] is
+/// the inner provider's [`TokenProvider::keyring_get_quiet`]. For code that
+/// reads only to show a status through an API written for any provider (a
+/// sign-in's status, `oauth::store::load`).
+pub struct Quiet<'a>(pub &'a dyn TokenProvider);
+
+impl TokenProvider for Quiet<'_> {
+    fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        self.0.keyring_get_quiet(service, user)
+    }
+
+    fn keyring_get_quiet(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        self.0.keyring_get_quiet(service, user)
+    }
+
+    fn keyring_set(&self, service: &str, user: &str, secret: &str) -> Result<(), TokenError> {
+        self.0.keyring_set(service, user, secret)
+    }
+
+    fn keyring_delete(&self, service: &str, user: &str) -> Result<(), TokenError> {
+        self.0.keyring_delete(service, user)
+    }
+
+    fn env(&self, name: &str) -> Option<String> {
+        self.0.env(name)
+    }
+
+    fn run(&self, argv: &[String]) -> Result<String, TokenError> {
+        self.0.run(argv)
+    }
+}
+
+/// A provider that asks about an entry at most once until a person says to
+/// ask again: after a prompt for `service` was cancelled or denied
+/// ([`TokenError::NeedsApproval`] with `refused`), every later read of it
+/// fails the same way WITHOUT touching the store, until [`AskOnce::ask_again`].
+///
+/// ⛔ This is what makes "one dialog per account" hold across everything
+/// that reads on its own: the poller's timed retries, and a rebuild after a
+/// configuration reload, which reads every polled account afresh. A clone
+/// shares the memory.
+#[derive(Clone)]
+pub struct AskOnce<P> {
+    inner: P,
+    refused: std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+}
+
+impl<P: TokenProvider> AskOnce<P> {
+    /// Nothing refused yet.
+    pub fn new(inner: P) -> Self {
+        Self {
+            inner,
+            refused: Default::default(),
+        }
+    }
+
+    /// A person asked (Retry, Refresh, a token saved): forget every refusal,
+    /// so the next read of each entry may ask once more.
+    pub fn ask_again(&self) {
+        self.lock().clear();
+    }
+
+    /// The services whose prompt was refused and is not asked again yet.
+    pub fn refused(&self) -> Vec<String> {
+        self.lock().iter().cloned().collect()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeSet<String>> {
+        self.refused.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl<P: TokenProvider> TokenProvider for AskOnce<P> {
+    fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        if self.lock().contains(service) {
+            return Err(TokenError::NeedsApproval {
+                service: service.to_string(),
+                refused: true,
+            });
+        }
+        let read = self.inner.keyring_get(service, user);
+        if let Err(TokenError::NeedsApproval { refused: true, .. }) = &read {
+            self.lock().insert(service.to_string());
+        }
+        read
+    }
+
+    fn keyring_get_quiet(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        self.inner.keyring_get_quiet(service, user)
+    }
+
+    /// A write is a person's action on that entry, and it replaces the item
+    /// (and its access list), so the entry may be asked about again.
+    fn keyring_set(&self, service: &str, user: &str, secret: &str) -> Result<(), TokenError> {
+        let written = self.inner.keyring_set(service, user, secret);
+        if written.is_ok() {
+            self.lock().remove(service);
+        }
+        written
+    }
+
+    fn keyring_delete(&self, service: &str, user: &str) -> Result<(), TokenError> {
+        let deleted = self.inner.keyring_delete(service, user);
+        if deleted.is_ok() {
+            self.lock().remove(service);
+        }
+        deleted
+    }
+
+    fn env(&self, name: &str) -> Option<String> {
+        self.inner.env(name)
+    }
+
+    fn run(&self, argv: &[String]) -> Result<String, TokenError> {
+        self.inner.run(argv)
+    }
 }
 
 /// Store a token in bridgewatch's own credential entry for an account, which is
@@ -1205,6 +1429,7 @@ mod tests {
             "glab:gitlab.com:token",
             run_captured(&argv, timeout, MAX_STDOUT_BYTES),
             timeout,
+            true,
         )
     }
 
@@ -1246,8 +1471,44 @@ mod tests {
         let argv = ["bridgewatch-no-such-program-anywhere".to_string()];
         let timeout = std::time::Duration::from_secs(5);
         assert_eq!(
-            lookup_outcome("s", run_captured(&argv, timeout, MAX_STDOUT_BYTES), timeout).unwrap(),
+            lookup_outcome(
+                "s",
+                run_captured(&argv, timeout, MAX_STDOUT_BYTES),
+                timeout,
+                true
+            )
+            .unwrap(),
             None
+        );
+    }
+
+    /// ⛔ A `security` prompt that was cancelled (exit 128) or denied (exit
+    /// 51) is "needs approval", so the poller does not ask again on a timer;
+    /// "no such item" (44) is still nothing there, and so is any exit where
+    /// the tool is not `security`.
+    #[cfg(unix)]
+    #[test]
+    fn a_cancelled_or_denied_security_prompt_is_needs_approval() {
+        for code in [128, 51] {
+            let err = lookup(&format!("exit {code}"), 5_000).expect_err("refused");
+            assert!(
+                matches!(err, TokenError::NeedsApproval { refused: true, .. }),
+                "{code}: {err:?}"
+            );
+        }
+        assert_eq!(lookup("exit 44", 5_000).unwrap(), None);
+        let timeout = std::time::Duration::from_secs(5);
+        let argv = ["sh", "-c", "exit 128"].map(String::from);
+        assert_eq!(
+            lookup_outcome(
+                "s",
+                run_captured(&argv, timeout, MAX_STDOUT_BYTES),
+                timeout,
+                false
+            )
+            .unwrap(),
+            None,
+            "secret-tool's exit codes mean nothing of the kind"
         );
     }
 

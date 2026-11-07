@@ -577,6 +577,10 @@ pub async fn wizard_save(
         }
     }
 
+    // Saving from the wizard is a person acting on the credential store: the
+    // reload the write triggers may ask about a prompt cancelled earlier.
+    state.approvals.ask_again();
+
     // On a blocking thread: a write that moves an account reads and writes
     // the credential store first (`commands::store_admitted`).
     let validation = {

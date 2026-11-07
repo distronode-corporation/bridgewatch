@@ -34,6 +34,9 @@ struct Fake {
     refuse_writes: bool,
     /// Every `keyring_get` fails, as a locked keychain does.
     refuse_reads: bool,
+    /// Every read would raise a prompt (an item another program wrote): a
+    /// quiet read is refused, an ordinary one is answered, as after Allow.
+    asks: bool,
 }
 
 impl Fake {
@@ -70,6 +73,27 @@ impl TokenProvider for Fake {
             return Err(TokenError::Store {
                 service: service.into(),
                 message: "the keychain is locked".into(),
+            });
+        }
+        self.keyring
+            .lock()
+            .unwrap()
+            .get(&(service.to_string(), user.to_string()))
+            .cloned()
+            .ok_or_else(|| TokenError::NoEntry {
+                service: service.into(),
+                user: user.into(),
+            })
+    }
+    fn keyring_get_quiet(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("keyring_get_quiet {service}|{user}"));
+        if self.asks {
+            return Err(TokenError::NeedsApproval {
+                service: service.into(),
+                refused: false,
             });
         }
         self.keyring
@@ -720,8 +744,8 @@ fn a_1x_value_is_bound_on_first_use_then_used() {
     );
     assert_eq!(
         fake.calls(),
-        ["keyring_get bridgewatch:gl|token"],
-        "a status binds nothing"
+        ["keyring_get_quiet bridgewatch:gl|token"],
+        "a status binds nothing, and reads quietly"
     );
 
     let secret = token::resolve("gl", &account, &fake).expect("binds and resolves");
@@ -1069,5 +1093,150 @@ fn only_a_move_of_an_own_account_reads_the_store() {
         token::bind_before_moves(&before, &after, &Fake::default())
             .unwrap()
             .is_empty()
+    );
+}
+
+/// ⛔ The prompt policy. A read made only to show a status is QUIET, so an
+/// entry the store would ask about is "needs approval" and no prompt; the
+/// read that resolves a token to send it is the one that may ask.
+#[test]
+fn a_status_never_asks_and_only_resolving_a_token_may() {
+    let fake = Fake {
+        asks: true,
+        ..Fake::default()
+    }
+    .with_keyring("bridgewatch:gl", "token", "glpat-legacy");
+    let account = own_on("https://gitlab.example.com");
+    assert_eq!(
+        token::own_token_status("gl", &account, &fake).unwrap(),
+        token::OwnTokenStatus::NeedsApproval
+    );
+    assert_eq!(fake.calls(), ["keyring_get_quiet bridgewatch:gl|token"]);
+
+    token::resolve("gl", &account, &fake).expect("the poll asks, and is answered");
+    assert_eq!(fake.calls()[1], "keyring_get bridgewatch:gl|token");
+}
+
+/// `Quiet` turns every read into a quiet one, so a status written against
+/// any provider (a sign-in's) never asks either.
+#[test]
+fn the_quiet_wrapper_makes_every_read_quiet() {
+    let fake = Fake::default().with_keyring("bridgewatch:oauth:gl", "oauth", "{}");
+    let quiet = token::Quiet(&fake);
+    let _ = quiet.keyring_get("bridgewatch:oauth:gl", "oauth");
+    let _ = quiet.keyring_get_quiet("bridgewatch:oauth:gl", "oauth");
+    assert_eq!(
+        fake.calls(),
+        [
+            "keyring_get_quiet bridgewatch:oauth:gl|oauth",
+            "keyring_get_quiet bridgewatch:oauth:gl|oauth"
+        ]
+    );
+}
+
+/// A store that refuses every prompt (the user pressed Cancel), counting
+/// how often it was asked.
+#[derive(Clone, Default)]
+struct Cancels(std::sync::Arc<Mutex<u32>>);
+
+impl TokenProvider for Cancels {
+    fn keyring_get(&self, service: &str, _: &str) -> Result<String, TokenError> {
+        *self.0.lock().unwrap() += 1;
+        Err(TokenError::NeedsApproval {
+            service: service.into(),
+            refused: true,
+        })
+    }
+    fn keyring_set(&self, _: &str, _: &str, _: &str) -> Result<(), TokenError> {
+        Ok(())
+    }
+    fn keyring_delete(&self, _: &str, _: &str) -> Result<(), TokenError> {
+        Ok(())
+    }
+    fn env(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn run(&self, _: &[String]) -> Result<String, TokenError> {
+        Err(TokenError::Empty)
+    }
+}
+
+/// ⛔ `AskOnce`: after a cancelled prompt the entry is not asked about
+/// again, however often it is read, until `ask_again` (Retry) or a write;
+/// then exactly once more. Other entries are unaffected.
+#[test]
+fn a_cancelled_prompt_is_asked_once_until_a_person_says_so() {
+    let keychain = Cancels::default();
+    let once = token::AskOnce::new(keychain.clone());
+    let asked = |_: &token::AskOnce<Cancels>| *keychain.0.lock().unwrap();
+    for _ in 0..5 {
+        let err = once.keyring_get("bridgewatch:gl", "token").unwrap_err();
+        assert!(
+            matches!(err, TokenError::NeedsApproval { refused: true, .. }),
+            "{err:?}"
+        );
+    }
+    assert_eq!(asked(&once), 1, "one prompt however many reads");
+    assert_eq!(once.refused(), ["bridgewatch:gl"]);
+    let _ = once.keyring_get("bridgewatch:other", "token");
+    assert_eq!(asked(&once), 2, "another entry is asked about on its own");
+
+    once.ask_again();
+    assert!(once.refused().is_empty());
+    let _ = once.keyring_get("bridgewatch:gl", "token");
+    assert_eq!(asked(&once), 3, "Retry asks exactly once more");
+    let _ = once.keyring_get("bridgewatch:gl", "token");
+    assert_eq!(asked(&once), 3);
+
+    assert_eq!(once.refused(), ["bridgewatch:gl"]);
+    once.keyring_set("bridgewatch:gl", "token", "glpat-new")
+        .unwrap();
+    assert!(once.refused().is_empty(), "a write lets it ask again");
+}
+
+/// Which store entry each source reads, which is what says an account is
+/// waiting for approval: none for a source that reads no store.
+#[test]
+fn each_source_names_the_entry_it_reads() {
+    let on = |token: TokenSource| bridgewatch_core::config::Account {
+        token,
+        ..Default::default()
+    };
+    assert_eq!(
+        token::read_service("gl", &on(TokenSource::Own(true))).as_deref(),
+        Some("bridgewatch:gl")
+    );
+    assert_eq!(
+        token::read_service(
+            "gl",
+            &on(TokenSource::Keyring {
+                service: "glab:gitlab.com:token".into(),
+                user: String::new()
+            })
+        )
+        .as_deref(),
+        Some("glab:gitlab.com:token")
+    );
+    assert_eq!(
+        token::read_service("gl", &on(TokenSource::Env("TOK".into()))),
+        None
+    );
+    assert_eq!(
+        token::read_service("gl", &on(TokenSource::Command(vec!["pass".into()]))),
+        None
+    );
+    assert_eq!(
+        token::read_service("gl", &on(TokenSource::Own(false))),
+        None
+    );
+    assert_eq!(
+        token::read_service(
+            "gl",
+            &on(TokenSource::Oauth(
+                bridgewatch_core::config::OAuthSource::default()
+            ))
+        )
+        .as_deref(),
+        Some("bridgewatch:oauth:gl")
     );
 }

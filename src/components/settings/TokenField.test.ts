@@ -722,6 +722,60 @@ describe("TokenField, the server an own token is stored for", () => {
     expect(line()?.textContent).toBe("Stored for https://gitlab.example.com.");
   });
 
+  it("reads once, and not again after a save that changed nothing about this account", async () => {
+    // ⛔ The effect read `current`, a new object on every re-read of the file,
+    // so every save of any field re-read every own entry: on macOS, a Keychain
+    // dialog per account per save (eleven in two and a half minutes).
+    const h = renderOwn([{ kind: "bound", origin: "https://gitlab.example.com" }]);
+    await settle();
+    expect(h.ownStatus).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 3; i++) {
+      h.props.value = JSON.parse(JSON.stringify(h.props.value)) as unknown;
+      flushSync();
+      await settle();
+    }
+    expect(h.ownStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not read an account no watch polls, and says why", async () => {
+    const h = renderOwn([{ kind: "bound", origin: "https://gitlab.example.com" }]);
+    await settle();
+    expect(h.ownStatus).toHaveBeenCalledTimes(1);
+    host.remove();
+    void unmount(component!);
+
+    host = document.createElement("div");
+    document.body.append(host);
+    const ownStatus = vi.fn(async () => ({ kind: "none" as const }));
+    const props = reactive({
+      account: "spare",
+      value: { own: true },
+      onedit: () => Promise.resolve(),
+      ownStatus,
+      watched: false,
+    }) as ComponentProps<typeof TokenField>;
+    component = mount(TokenField, { target: host, props });
+    flushSync();
+    await settle();
+    expect(ownStatus).not.toHaveBeenCalled();
+    expect(line()?.textContent).toBe("No watch polls this account, so its stored token is not read here.");
+
+    // A watch starts using it: now it is read.
+    props.watched = true;
+    flushSync();
+    await settle();
+    expect(ownStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("says an entry the store would ask about needs approval, without asking", async () => {
+    renderOwn([{ kind: "needs_approval" }]);
+    await settle();
+    expect(line()?.textContent).toBe(
+      "A token is stored, and the credential store asks before bridgewatch may read it. It asks when the account is polled, not to show this.",
+    );
+    expect(line()?.getAttribute("role")).toBeNull();
+  });
+
   it("says a failed read is a failed read, not 'nothing stored'", async () => {
     host = document.createElement("div");
     document.body.append(host);

@@ -829,10 +829,12 @@ pub async fn set_own_token(
     .map_err(|e| e.to_string())?;
     // A refused account is retried in place, so no other watch loses its
     // state; an account that was working gets its new token through a
-    // reload, as before (its client holds the old one).
+    // reload, as before (its client holds the old one). Saving is a person
+    // acting on the credential store, so a cancelled prompt may be shown again.
     if state.is_refused(&account_name) {
-        state.retry_refused.notify_one();
+        state.ask_again();
     } else {
+        state.approvals.ask_again();
         state.request_reload();
     }
     Ok(())
@@ -892,6 +894,7 @@ pub async fn clear_own_token(account: String, state: Shared<'_>) -> Result<(), S
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
+    state.approvals.ask_again();
     state.request_reload();
     Ok(())
 }

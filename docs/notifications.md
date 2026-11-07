@@ -50,6 +50,6 @@ Which desktops report a click on a notification (`tauri-plugin-notification` 2.8
 
 | OS | Click opens the job |
 | --- | --- |
-| macOS | Yes. |
+| macOS | Yes. A notification with a link carries an **Open** button; a click on it or on the banner opens the job. |
 | Linux, BSDs | Yes, on a notification server that offers actions (GNOME Shell and KDE Plasma do); one that does not reports nothing. |
 | Windows | Only while the toast is on screen; not from the Action Center. |

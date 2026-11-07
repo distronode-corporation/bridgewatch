@@ -37,6 +37,13 @@
     oauth?: OAuthApi;
     /** What the own entry holds: the shell's in the app, a fake in a test, none elsewhere. */
     ownStatus?: (account: string) => Promise<OwnTokenStatus>;
+    /**
+     * Whether a watch polls this account. ⛔ Only then is its stored
+     * credential read to show a status: Settings mounts hidden at launch, and
+     * reading every account's entry is a credential store visit per account
+     * that nothing is waiting on.
+     */
+    watched?: boolean;
   }
 
   let {
@@ -47,6 +54,7 @@
     baseUrl = "",
     oauth = inTauri() ? oauthApi() : undefined,
     ownStatus = inTauri() ? ownTokenStatus : undefined,
+    watched = true,
   }: Props = $props();
 
   /** The instance the account talks to: its `base_url`, or the provider's default when the file has none. */
@@ -136,6 +144,12 @@
    * ⛔ Read again whenever the account's address changes, because that is what
    * turns "Stored for X" into "Stored for X; paste one for Y". The shell compares
    * against the FILE's base_url, so this re-reads after the file did.
+   *
+   * ⛔ And ONLY then. The effect below depends on one string, not on `current`:
+   * `current` is a new object on every re-read of the file, so an effect
+   * reading `current.kind` ran again after every save of any field, and every
+   * run was a credential store read (on macOS, before reads were quiet, a
+   * Keychain dialog each time).
    */
   async function loadStored() {
     const api = ownStatus;
@@ -152,10 +166,9 @@
       storedError = `Could not read the stored token: ${messageOf(error)}`;
     }
   }
+  const storedKey = $derived(kind === "own" && current.kind === "own" && watched ? `${account}\n${baseUrl}` : "");
   $effect(() => {
-    void baseUrl;
-    void account;
-    if (kind === "own" && current.kind === "own") void untrack(() => loadStored());
+    if (storedKey) void untrack(() => loadStored());
   });
   const storedLine = $derived(stored ? ownTokenText(stored, instance) : null);
 
@@ -209,8 +222,10 @@
       statusError = `Could not read the sign-in: ${messageOf(error)}`;
     }
   }
+  /** One string, for the reason `storedKey` is one. */
+  const signInKey = $derived(current.kind === "oauth" && watched ? account : "");
   $effect(() => {
-    if (current.kind === "oauth") void untrack(() => loadStatus());
+    if (signInKey) void untrack(() => loadStatus());
   });
 
   /**
@@ -442,6 +457,8 @@
           </p>
         {:else if statusError}
           <p class="text-tone-red text-ui-body m-0" data-slot="oauth-status" role="alert">{statusError}</p>
+        {:else if current.kind === "oauth" && !watched}
+          <p class={["hint m-0", HINT]} data-slot="oauth-status">No watch polls this account, so its sign-in is not read here.</p>
         {:else if current.kind === "oauth"}
           <p class={["hint m-0", HINT]} data-slot="oauth-status">Not signed in.</p>
         {/if}
@@ -504,6 +521,8 @@
           <p class={["hint m-0", HINT]} data-slot="own-status">{storedLine.text}</p>
         {:else if storedError}
           <p class="text-tone-red text-ui-body m-0" data-slot="own-status" role="alert">{storedError}</p>
+        {:else if current.kind === "own" && !watched}
+          <p class={["hint m-0", HINT]} data-slot="own-status">No watch polls this account, so its stored token is not read here.</p>
         {/if}
         <input
           type="password"

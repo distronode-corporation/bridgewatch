@@ -12,7 +12,6 @@ use std::time::Duration;
 use bridgewatch_core::eta::EtaHistory;
 use bridgewatch_core::notify::{Notification, NotifyLedger};
 use bridgewatch_core::poll::Poller;
-use bridgewatch_core::token::SystemTokenProvider;
 use bridgewatch_core::verdict::{IconState, Snapshot};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::{ActionPerformed, NotificationExt};
@@ -123,7 +122,10 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
         // another server fails ITS watches, with the reason on them, and the
         // others keep polling. Only a poller that cannot be built at all
         // (a transport, the configuration) lands in the arm below.
-        let mut poller = match Poller::from_config_per_account(&config, &SystemTokenProvider) {
+        // ⛔ Through `state.approvals`, never the bare system store: an entry
+        // whose prompt was cancelled is not asked about again by this build,
+        // nor by any rebuild after a reload, until a person says so.
+        let mut poller = match Poller::from_config_per_account(&config, &state.approvals) {
             Ok(p) => {
                 failed_builds = 0;
                 state.set_clients(p.clients().clone());
@@ -165,6 +167,9 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
 
         loop {
             let tick = poller.tick().await;
+            // An account read for the first time by this tick (a sign-in) may
+            // have just been refused; the popover's strip follows on its own
+            // (`Status`), and the timed retry below leaves it out.
 
             set_icon(&app, tick.snapshot.icon_state);
             state.record_tick(tick.next_interval);
@@ -177,7 +182,10 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
 
             let tick_at = tokio::time::Instant::now() + tick.next_interval;
             let reload = loop {
-                let refused = !poller.refused_accounts().is_empty();
+                let refused = has_timed_retry(
+                    poller.refused_accounts(),
+                    &state.needs_approval(Some(&config)),
+                );
                 tokio::select! {
                     _ = tokio::time::sleep_until(tick_at) => break false,
                     _ = state.poll_now.notified() => break false,
@@ -202,6 +210,18 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             }
         }
     }
+}
+
+/// Whether any refused account is due a timed retry: one refused for any
+/// reason but a cancelled or denied prompt.
+///
+/// ⛔ An account waiting for approval is never retried on a timer. The retry
+/// read it again, and on macOS every read of an item whose dialog was
+/// cancelled is a new dialog: a Cancel raised another one 5, 10 and 20
+/// seconds later. It waits for Retry (or Refresh); a locked keychain, a
+/// Secret Service not up yet and a command that timed out keep the backoff.
+pub fn has_timed_retry(refused: &[String], needs_approval: &[String]) -> bool {
+    refused.iter().any(|a| !needs_approval.contains(a))
 }
 
 /// One in-place retry of the poller's refused accounts, and the shell's view
@@ -432,6 +452,65 @@ impl IconMemo {
 /// `extra` payload, which every desktop platform hands back on a click.
 pub const CLICK_URL_KEY: &str = "bridgewatch_url";
 
+/// The action type a notification with a click target carries on macOS: one
+/// action, [`OPEN_ACTION`], registered at startup (`register_click_action`).
+pub const OPEN_ACTION_TYPE: &str = "bridgewatch-open";
+
+/// The one action of [`OPEN_ACTION_TYPE`]: the banner's "Open" button.
+pub const OPEN_ACTION: &str = "open";
+
+/// Whether a notification with a click target carries [`OPEN_ACTION_TYPE`].
+///
+/// ⛔ macOS only, and not decoration: without an action, no click on a
+/// notification is ever delivered there. `tauri-plugin-notification` 2.8.0
+/// waits for the response with notify-rust 4.18.2's `wait_for_response`
+/// (`desktop.rs`, `fn wait`), which sends the notification through
+/// mac-notification-sys 0.6.15 with `asynchronous(false)` and never calls
+/// `wait_for_click(true)` (it is commented out in
+/// `macos/nsusernotifications.rs`). mac-notification-sys waits only when the
+/// notification `needs_response()`: a main button, a close button or
+/// `wait_for_click` (`notification.rs`). A notification with none of the three
+/// is sent fire-and-forget: `send` returns `None` once it is delivered, the
+/// plugin's handler sees `Closed(Expired)` and reports nothing, and the click
+/// that comes later reaches a delegate with no one waiting for it
+/// (`rust_notification_activated` finds no pending entry). One action is a
+/// main button, so the plugin's thread waits, and a click on the banner
+/// (`Click`, reported as `tap`) or on "Open" comes back to
+/// [`on_notification_action`].
+///
+/// Linux reports a click through the D-Bus `default` action, which the plugin
+/// adds on its own, and an action would add a button there for nothing;
+/// Windows reports a click without one.
+pub const fn carries_open_action() -> bool {
+    cfg!(target_os = "macos")
+}
+
+/// Register [`OPEN_ACTION_TYPE`], once, at startup, where
+/// [`carries_open_action`].
+pub fn register_click_action<R: tauri::Runtime>(
+    notifier: &tauri_plugin_notification::Notification<R>,
+) {
+    if !carries_open_action() {
+        return;
+    }
+    let open = tauri_plugin_notification::ActionType::builder(OPEN_ACTION_TYPE)
+        .actions(vec![
+            tauri_plugin_notification::Action::builder(OPEN_ACTION, "Open").build(),
+        ])
+        .build();
+    if let Err(e) = notifier.register_action_types(vec![open]) {
+        tracing::warn!(error = %e, "could not register the notification's Open action");
+    }
+}
+
+/// The environment variable that makes the app click its own notifications,
+/// for a harness that cannot click (see [`simulated_click`]).
+pub const SIMULATE_CLICK_ENV: &str = "BRIDGEWATCH_SIMULATE_NOTIFICATION_CLICK";
+
+/// How long after showing a notification the simulated click comes, so the
+/// banner is on screen when it does.
+pub const SIMULATED_CLICK_DELAY: Duration = Duration::from_secs(2);
+
 /// Hand a tick's notifications to the OS.
 ///
 /// The core has already decided what is worth interrupting somebody over, has
@@ -443,11 +522,14 @@ pub const CLICK_URL_KEY: &str = "bridgewatch_url";
 /// the notification is clicked. `tauri-plugin-notification` reports a click on
 /// desktop since 2.6.0 (`Notification::on_action`, action `tap`): on Linux and
 /// the BSDs through the D-Bus `default` action, on macOS and Windows through
-/// notify-rust's `wait_for_response`. ⚠️ Windows reports it only while the
-/// toast is on screen, not from the Action Center, and a Linux notification
-/// server that does not offer actions (`notify-send --action` support) reports
-/// nothing; in both cases the same link is one click away in the popover.
+/// notify-rust's `wait_for_response`, which on macOS needs the notification to
+/// carry an action ([`carries_open_action`]). ⚠️ Windows reports it only while
+/// the toast is on screen, not from the Action Center, and a Linux
+/// notification server that does not offer actions (`notify-send --action`
+/// support) reports nothing; in both cases the same link is one click away in
+/// the popover.
 fn deliver(app: &AppHandle, notifications: &[Notification]) {
+    let simulate = std::env::var_os(SIMULATE_CLICK_ENV).is_some_and(|v| v == "1");
     for n in notifications {
         let mut builder = app.notification().builder().title(&n.title);
         if !n.body.is_empty() {
@@ -455,20 +537,84 @@ fn deliver(app: &AppHandle, notifications: &[Notification]) {
         }
         if let Some(url) = &n.url {
             builder = builder.extra(CLICK_URL_KEY, url);
+            if carries_open_action() {
+                builder = builder.action_type_id(OPEN_ACTION_TYPE);
+            }
         }
         if let Err(e) = builder.show() {
             tracing::warn!(error = %e, watch = %n.watch, "could not show a notification");
+            continue;
+        }
+        if simulate && let Some(performed) = n.url.as_deref().and_then(simulated_click) {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(SIMULATED_CLICK_DELAY);
+                tracing::info!(
+                    env = SIMULATE_CLICK_ENV,
+                    "simulating a click on the notification just shown"
+                );
+                on_notification_action(&app, &performed);
+            });
         }
     }
 }
 
+/// What the plugin hands [`on_notification_action`] for a click (`tap`) on a
+/// notification [`deliver`] attached `url` to: `{ actionId, inputValue,
+/// notification }`, where `notification` is the builder's `NotificationData`
+/// serialised whole (camelCase, `extra` included). Written out by hand from
+/// `tauri-plugin-notification` 2.8.0's `desktop.rs` (`performed`) and
+/// `models.rs` (`NotificationData`), because neither is constructible outside
+/// the crate.
+///
+/// ⚠️ For [`SIMULATE_CLICK_ENV`] and the tests: it runs the SAME handler a
+/// real click runs, from the same payload, so it proves the routing and the
+/// opening, and NOT that macOS delivered a click.
+pub fn simulated_click(url: &str) -> Option<ActionPerformed> {
+    performed_payload("tap", serde_json::json!({ CLICK_URL_KEY: url }))
+}
+
+/// The plugin's `ActionPerformed` for `action`, carrying `extra`.
+fn performed_payload(action: &str, extra: serde_json::Value) -> Option<ActionPerformed> {
+    serde_json::from_value(serde_json::json!({
+        "actionId": action,
+        "inputValue": null,
+        "notification": {
+            "id": 1_234_567,
+            "channelId": null,
+            "title": "bridgewatch",
+            "body": null,
+            "schedule": null,
+            "largeBody": null,
+            "summary": null,
+            "actionTypeId": null,
+            "group": null,
+            "groupSummary": false,
+            "sound": null,
+            "inboxLines": [],
+            "icon": null,
+            "largeIcon": null,
+            "iconColor": null,
+            "attachments": [],
+            "extra": extra,
+            "ongoing": false,
+            "autoCancel": false,
+            "silent": false,
+            "when": null,
+            "usesChronometer": false,
+            "chronometerCountDown": false,
+        },
+    }))
+    .ok()
+}
+
 /// The URL a performed notification action should open: the click target
-/// [`deliver`] attached, for a click on the notification itself (`tap`).
-/// Anything else (an action button, which bridgewatch never adds, a
-/// notification without a target, a payload the platform described
-/// differently) opens nothing.
+/// [`deliver`] attached, for a click on the notification itself (`tap`) or
+/// on its "Open" button ([`OPEN_ACTION`], macOS). Anything else (another
+/// action, a notification without a target, a payload the platform
+/// described differently) opens nothing.
 pub fn click_url_of(performed: &ActionPerformed) -> Option<&str> {
-    if performed.action_id() != "tap" {
+    if !matches!(performed.action_id(), "tap" | OPEN_ACTION) {
         return None;
     }
     performed
@@ -482,10 +628,25 @@ pub fn click_url_of(performed: &ActionPerformed) -> Option<&str> {
 /// A notification was clicked: open its target, through the same door as
 /// every other link (`links::open`, which refuses a host that is not a
 /// configured account's). Runs on the plugin's own thread.
+///
+/// ⛔ One info line every time it fires with a target, naming the source and
+/// the URL: the iMac's harness proves a click by this line, with no person
+/// clicking. A job URL is not a secret, and `links::open` refuses one that
+/// carries credentials.
 pub fn on_notification_action(app: &AppHandle, performed: &ActionPerformed) {
     let Some(url) = click_url_of(performed) else {
+        tracing::debug!(
+            action = performed.action_id(),
+            "a notification action with nothing to open"
+        );
         return;
     };
+    tracing::info!(
+        source = "notification click",
+        action = performed.action_id(),
+        url,
+        "opening a notification's link"
+    );
     let config = app.state::<Arc<AppState>>().config();
     if let Err(e) = crate::links::open(app, url, config.as_ref()) {
         tracing::warn!(error = %e, "a notification's link was not opened");
@@ -510,44 +671,8 @@ mod tests {
     use crate::config::DiagnosticView;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    /// The payload the plugin's desktop implementation hands an `on_action`
-    /// handler: `{ actionId, inputValue, notification }`, where
-    /// `notification` is the builder's `NotificationData` serialised whole
-    /// (camelCase, `extra` included). Written out by hand from
-    /// `tauri-plugin-notification` 2.8.0's `desktop.rs` (`performed`) and
-    /// `models.rs` (`NotificationData`), because neither is constructible
-    /// outside the crate.
     fn performed(action: &str, extra: serde_json::Value) -> ActionPerformed {
-        serde_json::from_value(serde_json::json!({
-            "actionId": action,
-            "inputValue": null,
-            "notification": {
-                "id": 1_234_567,
-                "channelId": null,
-                "title": "main-push abc1234: failed",
-                "body": "verify:web\nscript failure",
-                "schedule": null,
-                "largeBody": null,
-                "summary": null,
-                "actionTypeId": null,
-                "group": null,
-                "groupSummary": false,
-                "sound": null,
-                "inboxLines": [],
-                "icon": null,
-                "largeIcon": null,
-                "iconColor": null,
-                "attachments": [],
-                "extra": extra,
-                "ongoing": false,
-                "autoCancel": false,
-                "silent": false,
-                "when": null,
-                "usesChronometer": false,
-                "chronometerCountDown": false,
-            },
-        }))
-        .expect("the plugin's payload decodes")
+        performed_payload(action, extra).expect("the plugin's payload decodes")
     }
 
     #[test]
@@ -555,6 +680,49 @@ mod tests {
         let url = "https://gitlab.example.com/acme/app/-/jobs/42";
         let tapped = performed("tap", serde_json::json!({ CLICK_URL_KEY: url }));
         assert_eq!(click_url_of(&tapped), Some(url));
+    }
+
+    /// macOS: a click on the banner's "Open" button opens the same target as
+    /// a click on the banner itself.
+    #[test]
+    fn the_open_button_opens_the_same_url_as_a_click() {
+        let url = "https://gitlab.example.com/acme/app/-/jobs/42";
+        let open = performed(OPEN_ACTION, serde_json::json!({ CLICK_URL_KEY: url }));
+        assert_eq!(click_url_of(&open), Some(url));
+    }
+
+    /// The simulated click (`BRIDGEWATCH_SIMULATE_NOTIFICATION_CLICK`) is the
+    /// payload a real click hands the handler, so it routes the same way.
+    #[test]
+    fn a_simulated_click_routes_exactly_as_a_real_one() {
+        let url = "https://gitlab.example.com/acme/app/-/jobs/42";
+        let simulated = simulated_click(url).expect("the payload decodes");
+        assert_eq!(simulated.action_id(), "tap");
+        assert_eq!(click_url_of(&simulated), Some(url));
+    }
+
+    /// ⛔ The action that makes a macOS click reach the app at all is there
+    /// on macOS and nowhere else (a Linux banner would grow a button).
+    #[test]
+    fn only_macos_notifications_carry_the_open_action() {
+        assert_eq!(carries_open_action(), cfg!(target_os = "macos"));
+    }
+
+    /// A refused account waits for a person only when its prompt was
+    /// refused; any other refusal keeps the timed retry.
+    #[test]
+    fn an_account_waiting_for_approval_is_never_retried_on_a_timer() {
+        let refused = vec!["gl".to_string(), "gh".to_string()];
+        assert!(
+            !has_timed_retry(&refused, &refused),
+            "both wait for approval"
+        );
+        assert!(
+            has_timed_retry(&refused, &["gl".to_string()]),
+            "gh has another cause"
+        );
+        assert!(has_timed_retry(&refused, &[]));
+        assert!(!has_timed_retry(&[], &[]));
     }
 
     #[test]

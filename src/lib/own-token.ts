@@ -11,7 +11,8 @@ export type OwnTokenStatus =
   | { kind: "none" }
   | { kind: "legacy" }
   | { kind: "bound"; origin: string }
-  | { kind: "mismatch"; stored: string; expected: string | null };
+  | { kind: "mismatch"; stored: string; expected: string | null }
+  | { kind: "needs_approval" };
 
 /** What the token field says about the stored entry, and whether it is a problem. */
 export function ownTokenText(status: OwnTokenStatus, instance: string): { text: string; alert: boolean } {
@@ -25,6 +26,12 @@ export function ownTokenText(status: OwnTokenStatus, instance: string): { text: 
       };
     case "bound":
       return { text: `Stored for ${status.origin}.`, alert: false };
+    case "needs_approval":
+      // ⛔ A status read never raises a prompt, so this is all it can say.
+      return {
+        text: "A token is stored, and the credential store asks before bridgewatch may read it. It asks when the account is polled, not to show this.",
+        alert: false,
+      };
     case "mismatch": {
       const expected = status.expected ?? "this account's address";
       return {
