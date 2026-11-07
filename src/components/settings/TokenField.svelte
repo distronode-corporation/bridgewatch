@@ -16,7 +16,7 @@
   import DeviceSignIn from "../DeviceSignIn.svelte";
   import { setOwnToken, clearOwnToken, inTauri, oauthApi } from "../../lib/ipc";
   import { messageOf } from "../../lib/format";
-  import type { OAuthApi, OAuthAvailability, SignInStatus } from "../../lib/oauth";
+  import { mismatchText, type OAuthApi, type OAuthAvailability, type SignInStatus } from "../../lib/oauth";
   import { cliName, defaultBaseUrl, providerName } from "../../lib/providers";
   import type { Edit, Provider } from "../../lib/types";
   import { concretePath, entry as registryEntry } from "../../lib/settings/registry";
@@ -383,7 +383,12 @@
         {/if}
         The sign-in is kept in the OS credential store and renews itself.
       </p>
-      {#if status}
+      {#if status?.mismatch}
+        <!-- The poller never sends a sign-in that does not fit the account, so it is not shown as signed in. -->
+        <p class="text-tone-red m-0 text-[13px]" data-slot="oauth-status" role="alert">
+          {mismatchText(status.mismatch)}
+        </p>
+      {:else if status}
         <p class="signed-in m-0 text-[13px]" data-slot="oauth-status">
           Signed in as <code>@{status.login ?? "unknown"}</code>
         </p>

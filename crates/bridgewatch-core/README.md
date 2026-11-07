@@ -242,14 +242,20 @@ an editor gutter. Warnings come back on a successful load, in `Loaded::warnings`
 
 ```rust,no_run
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider};
-use bridgewatch_core::config::TokenSource;
+use bridgewatch_core::config::{Account, TokenSource};
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
-let source = TokenSource::Keyring {
-    service: "glab:gitlab.com:token".into(),
-    user: String::new(),                       // ⚠️ empty is legal and is what glab writes
+let account = Account {
+    token: TokenSource::Keyring {
+        service: "glab:gitlab.com:token".into(),
+        user: String::new(),                   // ⚠️ empty is legal and is what glab writes
+    },
+    ..Account::default()
 };
-let secret: Secret = token::resolve(&source, "gitlab", &SystemTokenProvider)?;
+// The account's name, and the account itself: a sign-in
+// (`token = { oauth = .. }`) is checked against its `base_url` and client id,
+// and one issued by another instance or application is refused, never returned.
+let secret: Secret = token::resolve("gitlab", &account, &SystemTokenProvider)?;
 
 // The GUI's "paste a token" field writes bridgewatch's own entry, which
 // `token = { own = true }` reads back.

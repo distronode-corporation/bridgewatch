@@ -11,6 +11,19 @@ use std::sync::Mutex;
 use bridgewatch_core::config::TokenSource;
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider, TokenError, TokenProvider};
 
+/// `token::resolve` for an account whose only setting is `source`.
+fn resolve(
+    source: &TokenSource,
+    name: &str,
+    provider: &dyn TokenProvider,
+) -> Result<Secret, TokenError> {
+    let account = bridgewatch_core::config::Account {
+        token: source.clone(),
+        ..Default::default()
+    };
+    token::resolve(name, &account, provider)
+}
+
 #[derive(Default)]
 struct Fake {
     keyring: Mutex<BTreeMap<(String, String), String>>,
@@ -111,7 +124,7 @@ fn a_keyring_source_allows_an_empty_user() {
         user: String::new(),
     };
 
-    let secret = token::resolve(&source, "gitlab", &fake).expect("resolves");
+    let secret = resolve(&source, "gitlab", &fake).expect("resolves");
     assert_eq!(secret.expose(), "glpat-from-glab");
     assert_eq!(fake.calls(), ["keyring_get glab:gitlab.com:token|"]);
 }
@@ -125,7 +138,7 @@ fn a_missing_keyring_entry_names_the_address() {
         service: "glab:gitlab.example:token".into(),
         user: "sean".into(),
     };
-    let err = token::resolve(&source, "gitlab", &fake).unwrap_err();
+    let err = resolve(&source, "gitlab", &fake).unwrap_err();
     let message = err.to_string();
     assert!(message.contains("glab:gitlab.example:token"), "{message}");
     assert!(message.contains("sean"), "{message}");
@@ -138,20 +151,20 @@ fn an_env_source_reads_the_named_variable() {
     let source = TokenSource::Env("BRIDGEWATCH_TOKEN_GITLAB".into());
 
     assert_eq!(
-        token::resolve(&source, "gitlab", &fake).unwrap().expose(),
+        resolve(&source, "gitlab", &fake).unwrap().expose(),
         "glpat-env",
         "surrounding whitespace is trimmed, because a heredoc adds a newline"
     );
 
     let missing = TokenSource::Env("NOT_SET".into());
     assert!(matches!(
-        token::resolve(&missing, "gitlab", &fake),
+        resolve(&missing, "gitlab", &fake),
         Err(TokenError::MissingEnv(_))
     ));
 
     let empty = Fake::default().with_env("EMPTY", "");
     assert!(matches!(
-        token::resolve(&TokenSource::Env("EMPTY".into()), "gitlab", &empty),
+        resolve(&TokenSource::Env("EMPTY".into()), "gitlab", &empty),
         Err(TokenError::MissingEnv(_)),
         // An empty variable is not a token; treating it as one produces a 401
         // that reads like a scope problem.
@@ -167,12 +180,12 @@ fn a_command_source_trims_stdout_and_fails_on_a_bad_exit() {
 
     let source = TokenSource::Command(vec!["pass".into(), "gitlab/pat".into()]);
     assert_eq!(
-        token::resolve(&source, "gitlab", &fake).unwrap().expose(),
+        resolve(&source, "gitlab", &fake).unwrap().expose(),
         "glpat-from-pass"
     );
 
     let bad = TokenSource::Command(vec!["pass".into(), "missing".into()]);
-    let err = token::resolve(&bad, "gitlab", &fake).unwrap_err();
+    let err = resolve(&bad, "gitlab", &fake).unwrap_err();
     assert!(err.to_string().contains("no such entry"), "{err}");
 }
 
@@ -182,7 +195,7 @@ fn the_own_source_addresses_bridgewatchs_own_entry() {
     let fake = Fake::default();
     token::set_own_token("gitlab", &Secret::new("glpat-own"), &fake).expect("stores");
 
-    let secret = token::resolve(&TokenSource::Own(true), "gitlab", &fake).expect("reads back");
+    let secret = resolve(&TokenSource::Own(true), "gitlab", &fake).expect("reads back");
     assert_eq!(secret.expose(), "glpat-own");
     assert_eq!(
         fake.calls(),
@@ -198,7 +211,7 @@ fn the_own_source_addresses_bridgewatchs_own_entry() {
     );
 
     token::clear_own_token("gitlab", &fake).expect("clears");
-    assert!(token::resolve(&TokenSource::Own(true), "gitlab", &fake).is_err());
+    assert!(resolve(&TokenSource::Own(true), "gitlab", &fake).is_err());
 }
 
 /// `own = false` selects nothing, and says so rather than silently sending an
@@ -207,7 +220,7 @@ fn the_own_source_addresses_bridgewatchs_own_entry() {
 fn own_false_is_not_a_source() {
     let fake = Fake::default();
     assert!(matches!(
-        token::resolve(&TokenSource::Own(false), "gitlab", &fake),
+        resolve(&TokenSource::Own(false), "gitlab", &fake),
         Err(TokenError::NotConfigured(_))
     ));
 }
@@ -221,7 +234,7 @@ fn a_whitespace_only_token_is_refused() {
         user: "u".into(),
     };
     assert!(matches!(
-        token::resolve(&source, "a", &fake),
+        resolve(&source, "a", &fake),
         Err(TokenError::Empty)
     ));
 }
@@ -243,7 +256,7 @@ fn no_error_message_leaks_a_token() {
         TokenSource::Env("V".into()),
         TokenSource::Command(vec!["prog".into()]),
     ] {
-        let secret = token::resolve(&source, "a", &fake).unwrap();
+        let secret = resolve(&source, "a", &fake).unwrap();
         seen.borrow_mut().push(format!("{secret} {secret:?}"));
     }
     for rendered in seen.borrow().iter() {
@@ -261,7 +274,7 @@ fn a_token_that_cannot_be_a_header_is_refused_with_advice() {
     // A credential store entry with a non-ASCII character in it: nothing can
     // make this a header value, and there is no line to fall back to.
     let fake = Fake::default().with_env("TOK", "glpat-real\u{a0}token");
-    let err = token::resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake)
+    let err = resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake)
         .expect_err("must not reach reqwest");
     let message = err.to_string();
     assert!(matches!(err, TokenError::Malformed { .. }), "{err:?}");
@@ -294,13 +307,13 @@ fn a_command_source_reads_the_first_line_and_ignores_the_rest() {
         "token".into(),
     ]);
     assert_eq!(
-        token::resolve(&source, "gitlab", &fake).unwrap().expose(),
+        resolve(&source, "gitlab", &fake).unwrap().expose(),
         "glpat-real-token"
     );
 
     let pass = TokenSource::Command(vec!["pass".into(), "gitlab/pat".into()]);
     assert_eq!(
-        token::resolve(&pass, "gitlab", &fake).unwrap().expose(),
+        resolve(&pass, "gitlab", &fake).unwrap().expose(),
         "glpat-padded",
         "the line is trimmed, so a padded field is still a token"
     );
@@ -308,7 +321,7 @@ fn a_command_source_reads_the_first_line_and_ignores_the_rest() {
     // An empty first line is still nothing, and says so rather than sending "".
     let empty = TokenSource::Command(vec!["prints".into(), "nothing".into()]);
     assert!(matches!(
-        token::resolve(&empty, "gitlab", &fake),
+        resolve(&empty, "gitlab", &fake),
         Err(TokenError::Empty)
     ));
 }
@@ -369,7 +382,7 @@ fn a_chatty_token_command_is_bounded_but_still_works() {
         .expect("it exits, so it succeeds");
     assert!(out.len() <= 4096, "stdout is capped: {} bytes", out.len());
     assert_eq!(
-        token::resolve(
+        resolve(
             &TokenSource::Command(argv.clone()),
             "gitlab",
             &bridgewatch_core::token::SystemTokenProvider
@@ -535,13 +548,13 @@ fn resolve_unwraps_an_envelope_from_any_source() {
         "-w".into(),
     ]);
     assert_eq!(
-        token::resolve(&source, "gitlab", &fake).unwrap().expose(),
+        resolve(&source, "gitlab", &fake).unwrap().expose(),
         "glpat-abcdefghijklmnop",
         "and NOT the 102-character enveloped string, which is a 401"
     );
 
     assert_eq!(
-        token::resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake)
+        resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake)
             .unwrap()
             .expose(),
         "glpat-abcdefghijklmnop"
@@ -553,7 +566,7 @@ fn resolve_unwraps_an_envelope_from_any_source() {
 #[test]
 fn resolve_refuses_a_malformed_envelope() {
     let fake = Fake::default().with_env("TOK", "go-keyring-base64:!!!nope!!!");
-    let err = token::resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake).unwrap_err();
+    let err = resolve(&TokenSource::Env("TOK".into()), "gitlab", &fake).unwrap_err();
     assert!(matches!(err, TokenError::Envelope { .. }), "{err:?}");
     assert!(
         !err.to_string().contains("nope"),
