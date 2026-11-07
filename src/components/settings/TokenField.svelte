@@ -22,7 +22,7 @@
   import type { Edit, Provider } from "../../lib/types";
   import { concretePath, entry as registryEntry } from "../../lib/settings/registry";
   import { cliKeyringService, formatCommand, parseCommand } from "../wizard/model";
-  import { CHECK, FIELD_LABEL, FIELD_ROW, HINT, INPUT } from "./styles";
+  import { CHECK, FIELD_LABEL, HINT, INPUT, ROW, ROW_TEXT } from "./styles";
 
   interface Props {
     account: string;
@@ -384,12 +384,21 @@
   }
 </script>
 
-<div class={["token", FIELD_ROW]}>
-  <div class={["label", FIELD_LABEL]}>{meta.label}</div>
-  <div class="body flex flex-col gap-1.5">
-    <div class="choices flex flex-wrap gap-x-3 gap-y-1 pt-1" role="radiogroup" aria-label={meta.label}>
+<!-- The Sign-in card's first row: the methods, then an inset panel holding the
+     chosen one's details (its status line included), then ONE row of actions. -->
+<div class={["token", ROW]}>
+  <div class={ROW_TEXT}>
+    <div class={["label", FIELD_LABEL]}>{meta.label}</div>
+    <p class={["hint m-0", HINT]}>{meta.hint}</p>
+  </div>
+  <div class="body flex basis-full flex-col gap-3">
+    <div
+      class="choices flex flex-wrap gap-x-4 gap-y-2"
+      role="radiogroup"
+      aria-label={meta.label}
+    >
       {#each choices as [id, label] (id)}
-        <label class="choice flex cursor-pointer items-center gap-1.5 text-[13px]">
+        <label class="choice text-ui-body flex cursor-pointer items-center gap-1.5">
           <input
             type="radio"
             class={CHECK}
@@ -403,39 +412,113 @@
       {/each}
     </div>
 
-    {#if kind === "oauth" && oauth}
-      <input
-        type="text"
-        class={INPUT}
-        placeholder={availability?.builtin ? "client id (empty: bridgewatch's own application)" : "client id of your OAuth application"}
-        aria-label="OAuth client id"
-        spellcheck={false}
-        autocomplete="off"
-        bind:value={clientId}
-      />
-      <p class={["hint m-0", HINT]}>
-        {#if provider === "github"}
-          A GitHub App with "Enable Device Flow" ticked; GitHub Enterprise Server needs one of its own.
-        {:else}
-          An application that is not confidential, with the read_api scope; a self-managed GitLab needs one of its own.
+    <div class="panel bg-muted/40 flex flex-col gap-2 rounded-lg p-3" data-slot="token-panel" data-kind={kind}>
+      {#if kind === "oauth" && oauth}
+        <input
+          type="text"
+          class={INPUT}
+          placeholder={availability?.builtin ? "client id (empty: bridgewatch's own application)" : "client id of your OAuth application"}
+          aria-label="OAuth client id"
+          spellcheck={false}
+          autocomplete="off"
+          bind:value={clientId}
+        />
+        <p class={["hint m-0", HINT]}>
+          {#if provider === "github"}
+            A GitHub App with "Enable Device Flow" ticked; GitHub Enterprise Server needs one of its own.
+          {:else}
+            An application that is not confidential, with the read_api scope; a self-managed GitLab needs one of its own.
+          {/if}
+          The sign-in is kept in the OS credential store and renews itself.
+        </p>
+        {#if status?.mismatch}
+          <!-- The poller never sends a sign-in that does not fit the account, so it is not shown as signed in. -->
+          <p class="text-tone-red text-ui-body m-0" data-slot="oauth-status" role="alert">
+            {mismatchText(status.mismatch)}
+          </p>
+        {:else if status}
+          <p class="signed-in text-ui-body m-0" data-slot="oauth-status">
+            Signed in as <code>@{status.login ?? "unknown"}</code>
+          </p>
+        {:else if statusError}
+          <p class="text-tone-red text-ui-body m-0" data-slot="oauth-status" role="alert">{statusError}</p>
+        {:else if current.kind === "oauth"}
+          <p class={["hint m-0", HINT]} data-slot="oauth-status">Not signed in.</p>
         {/if}
-        The sign-in is kept in the OS credential store and renews itself.
-      </p>
-      {#if status?.mismatch}
-        <!-- The poller never sends a sign-in that does not fit the account, so it is not shown as signed in. -->
-        <p class="text-tone-red m-0 text-[13px]" data-slot="oauth-status" role="alert">
-          {mismatchText(status.mismatch)}
+        {#if provider === "github" && availability?.install_url}
+          <p class={["hint m-0", HINT]} data-slot="install-app">
+            The app sees only repositories on accounts it is installed on.
+            <button type="button" class="underline" onclick={() => void oauth?.openInstall(provider, instance)}
+              >Install it on an organisation</button
+            >
+          </p>
+        {/if}
+      {:else if kind === "keyring"}
+        <div class="pair flex gap-2">
+          <input type="text" class={INPUT} placeholder="service" aria-label="Keyring service" bind:value={service} />
+          <input type="text" class={INPUT} placeholder="user (may be empty)" aria-label="Keyring user" bind:value={user} />
+        </div>
+        {#if github}
+          <p class={["hint m-0", HINT]}>
+            <code>gh</code> keeps two items per host; the one with an empty user is its active account,
+            which follows <code>gh auth switch</code>. The command <code>gh auth token</code> is the
+            portable alternative.
+          </p>
+        {:else}
+          <p class={["hint m-0", HINT]}>
+            An empty user is legal and is what <code>glab</code> writes. The core shells out to
+            <code>security</code> / <code>secret-tool</code> for that case, because the keyring crate
+            refuses it before reaching the store.
+          </p>
+        {/if}
+      {:else if kind === "env"}
+        <input
+          type="text"
+          class={INPUT}
+          aria-label="Environment variable"
+          placeholder={github ? "BRIDGEWATCH_TOKEN_GITHUB" : "BRIDGEWATCH_TOKEN_GITLAB"}
+          bind:value={envVar}
+        />
+      {:else if kind === "command"}
+        <input
+          type="text"
+          class={INPUT}
+          aria-label="Command"
+          placeholder={github ? "gh auth token" : "pass gitlab/pat"}
+          bind:value={command}
+        />
+        <p class={["hint m-0", HINT]}>
+          Runs on every token refresh. A program that prints anything besides the token is refused at
+          resolve time, with advice.
         </p>
-      {:else if status}
-        <p class="signed-in m-0 text-[13px]" data-slot="oauth-status">
-          Signed in as <code>@{status.login ?? "unknown"}</code>
+      {:else}
+        <p class={["hint m-0", HINT]}>
+          Read from <code>bridgewatch:{account}</code> in the OS credential store. Paste a token below
+          to write it; it is never put in the configuration file. It is sent only to the server it was
+          saved for.
         </p>
-      {:else if statusError}
-        <p class="text-tone-red m-0 text-[13px]" data-slot="oauth-status" role="alert">{statusError}</p>
-      {:else if current.kind === "oauth"}
-        <p class={["hint m-0", HINT]} data-slot="oauth-status">Not signed in.</p>
+        {#if storedLine?.alert}
+          <!-- The core never sends a token saved for another server, so this is not shown as stored. -->
+          <p class="text-tone-red text-ui-body m-0" data-slot="own-status" role="alert">{storedLine.text}</p>
+        {:else if storedLine}
+          <p class={["hint m-0", HINT]} data-slot="own-status">{storedLine.text}</p>
+        {:else if storedError}
+          <p class="text-tone-red text-ui-body m-0" data-slot="own-status" role="alert">{storedError}</p>
+        {/if}
+        <input
+          type="password"
+          class={INPUT}
+          aria-label="Token to save"
+          placeholder={github ? "ghp_… or github_pat_…" : "glpat-…"}
+          bind:value={pasted}
+          autocomplete="off"
+        />
       {/if}
-      <div class="pair flex flex-wrap items-start gap-1.5">
+    </div>
+
+    <!-- One row of actions for the chosen method. -->
+    <div class="actions flex flex-wrap items-start gap-2" data-slot="token-actions">
+      {#if kind === "oauth" && oauth}
         <DeviceSignIn
           api={oauth}
           request={() => {
@@ -463,83 +546,24 @@
         {#if status}
           <Button variant="ghost" size="sm" class="sign-out" onclick={signOut}>Sign out</Button>
         {/if}
-      </div>
-      {#if provider === "github" && availability?.install_url}
-        <p class={["hint m-0", HINT]} data-slot="install-app">
-          The app sees only repositories on accounts it is installed on.
-          <button type="button" class="underline" onclick={() => void oauth?.openInstall(provider, instance)}
-            >Install it on an organisation</button
-          >
-        </p>
-      {/if}
-    {:else if kind === "keyring"}
-      <div class="pair flex gap-1.5">
-        <input type="text" class={INPUT} placeholder="service" aria-label="Keyring service" bind:value={service} />
-        <input type="text" class={INPUT} placeholder="user (may be empty)" aria-label="Keyring user" bind:value={user} />
-      </div>
-      {#if preset}
-        <Button variant="outline" size="sm" class="preset self-start" onclick={usePreset}>
-          Fill in {cli}'s item ({preset})
-        </Button>
-      {/if}
-      {#if github}
-        <p class={["hint m-0", HINT]}>
-          <code>gh</code> keeps two items per host; the one with an empty user is its active account,
-          which follows <code>gh auth switch</code>. The command <code>gh auth token</code> is the
-          portable alternative.
-        </p>
-      {:else}
-        <p class={["hint m-0", HINT]}>
-          An empty user is legal and is what <code>glab</code> writes. The core shells out to
-          <code>security</code> / <code>secret-tool</code> for that case, because the keyring crate
-          refuses it before reaching the store.
-        </p>
-      {/if}
-    {:else if kind === "env"}
-      <input
-        type="text"
-        class={INPUT}
-        placeholder={github ? "BRIDGEWATCH_TOKEN_GITHUB" : "BRIDGEWATCH_TOKEN_GITLAB"}
-        bind:value={envVar}
-      />
-    {:else if kind === "command"}
-      <input type="text" class={INPUT} placeholder={github ? "gh auth token" : "pass gitlab/pat"} bind:value={command} />
-      <p class={["hint m-0", HINT]}>
-        Runs on every token refresh. A program that prints anything besides the token is refused at
-        resolve time, with advice.
-      </p>
-    {:else}
-      <p class={["hint m-0", HINT]}>
-        Read from <code>bridgewatch:{account}</code> in the OS credential store. Paste a token below
-        to write it; it is never put in the configuration file. It is sent only to the server it was
-        saved for.
-      </p>
-      {#if storedLine?.alert}
-        <!-- The core never sends a token saved for another server, so this is not shown as stored. -->
-        <p class="text-tone-red m-0 text-[13px]" data-slot="own-status" role="alert">{storedLine.text}</p>
-      {:else if storedLine}
-        <p class={["hint m-0", HINT]} data-slot="own-status">{storedLine.text}</p>
-      {:else if storedError}
-        <p class="text-tone-red m-0 text-[13px]" data-slot="own-status" role="alert">{storedError}</p>
-      {/if}
-      <div class="pair flex gap-1.5">
-        <input
-          type="password"
-          class={INPUT}
-          placeholder={github ? "ghp_… or github_pat_…" : "glpat-…"}
-          bind:value={pasted}
-          autocomplete="off"
-        />
+      {:else if kind === "keyring"}
+        {#if preset}
+          <Button variant="outline" size="sm" class="preset" onclick={usePreset}>
+            Fill in {cli}'s item ({preset})
+          </Button>
+        {/if}
+      {:else if kind !== "env" && kind !== "command"}
+        <!-- The own entry: the same branch as the panel's last one. -->
         <Button variant="outline" size="sm" onclick={saveToken} disabled={pasted.trim() === ""}>Save token</Button>
         <Button variant="ghost" size="sm" onclick={forgetToken}>Forget</Button>
-      </div>
-    {/if}
+      {/if}
+      <!-- Not for a sign-in the file already uses: a successful sign-in writes its
+           source itself, so the button would only rewrite what is there. -->
+      {#if !(kind === "oauth" && fileHasThisSignIn)}
+        <Button variant="secondary" size="sm" class="apply" onclick={apply}>Use this source</Button>
+      {/if}
+    </div>
 
-    <!-- Not for a sign-in the file already uses: a successful sign-in writes its
-         source itself, so the button would only rewrite what is there. -->
-    {#if !(kind === "oauth" && fileHasThisSignIn)}
-      <Button variant="secondary" size="sm" class="apply self-start" onclick={apply}>Use this source</Button>
-    {/if}
     {#if message}
       <p class={["message m-0", HINT]}>{message}</p>
     {/if}
@@ -548,10 +572,9 @@
            dialog is also only a GUI courtesy — the core runs whatever the file
            says, however the file came to say it — so the account that does it
            says so on the form for as long as it is true. -->
-      <p class="warning text-tone-amber m-0 text-[11px]">
+      <p class="warning text-tone-amber text-ui-meta m-0">
         This account runs <code>{current.command}</code> on every token refresh.
       </p>
     {/if}
-    <p class={["hint m-0", HINT]}>{meta.hint}</p>
   </div>
 </div>

@@ -236,14 +236,13 @@ describe("the stepper", () => {
 
 describe("type and width", () => {
   /**
-   * Elements asking for a size the root does not map to 13px: text-sm is
-   * mapped (the primitives use it), and so is the input's text-base; any
-   * other text-base or larger is an oversized body.
+   * Elements asking for a body size other than 13px. The shared primitives are
+   * 13/18 themselves, so nothing maps text-sm (14px) or the input's old
+   * text-base (16px) down any more, and neither may appear.
    */
   const oversized = () =>
     all('[data-slot="wizard"] [class]')
-      .filter((el) => !el.matches('[data-slot="input"]'))
-      .filter((el) => /(^|\s)text-(base|lg|xl)(\s|$)/.test(el.getAttribute("class") ?? ""))
+      .filter((el) => /(^|\s)(md:)?text-(sm|base|lg|xl)(\s|$)/.test(el.getAttribute("class") ?? ""))
       .map((el) => `${el.tagName.toLowerCase()}.${el.getAttribute("class")}`);
   /** Controls with a fixed width that would clip longer text at the narrowest window. */
   const fixedWidths = () =>
@@ -257,9 +256,13 @@ describe("type and width", () => {
     expect(root.className).toContain("max-w-[560px]");
     expect(root.classList.contains("p-4")).toBe(false);
     expect(root.className).toContain("text-[13px]/[18px]");
-    // The shared primitives' 14px (text-sm) and the input's 16px both map to 13/18 here.
-    expect(root.className).toContain("[&_.text-sm]:text-[13px]/[18px]");
-    expect(root.className).toContain("[&_[data-slot=input]]:text-[13px]/[18px]");
+    // ⛔ No override: the shared primitives are 13/18 themselves (L2), so the
+    // wizard maps nothing down. A primitive back at 14px fails here and in
+    // the "asks for no other body size" walk below.
+    expect(root.className).not.toContain("[&_");
+    for (const input of all('[data-slot="wizard"] [data-slot="input"]')) {
+      expect(input.getAttribute("class")).toContain("text-[13px]/[18px]");
+    }
     expect(q("#wizard-heading")?.className).toContain("text-[15px]/[20px]");
   });
 

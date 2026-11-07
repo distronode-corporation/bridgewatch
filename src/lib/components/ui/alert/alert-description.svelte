@@ -14,7 +14,7 @@
 	bind:this={ref}
 	data-slot="alert-description"
 	class={cn(
-		"text-muted-foreground text-sm text-balance md:text-pretty [&_p:not(:last-child)]:mb-4 [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground",
+		"text-muted-foreground text-[13px]/[18px] text-balance md:text-pretty [&_p:not(:last-child)]:mb-4 [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground",
 		className
 	)}
 	{...restProps}

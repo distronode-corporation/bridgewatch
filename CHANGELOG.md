@@ -138,6 +138,26 @@ body line with a bracket.
   12px hints, and the column is at most 560px wide. Fields that had a fixed width now
   shrink with the window.
 
+- **Settings has a sidebar.** Five panes replace the seven tabs: **Accounts**,
+  **Watches**, **General** (the icon and the app), **Verdict**, and **Advanced** (the log,
+  and **Edit as text**). Settings opens on the pane you used last. The arrow keys, Home
+  and End move between panes. The file's path, **Open file** and **Reload** are in a bar
+  at the bottom, and **Setup wizard…** is at the foot of the sidebar.
+  - **Every pane is grouped into cards** of rows, at most 600px wide: the name and its
+    hint on the left, and the control on the right, or underneath when it needs the
+    width. Numbers and menus are as wide as what they hold, not the whole window. Hints
+    wrap at about 60 characters.
+  - **An account starts with how it signs in**, then its server, then an **Advanced**
+    group (API path, auth header, timeout, backoff), folded away. The chosen token
+    source's details, including the "Stored for" line, sit in one panel, with its buttons
+    in one row under it.
+  - **A watch is split into groups** named after its settings: Source, Rows, Polling,
+    Child pipelines, Deploy, Jobs and Notifications. Only Source starts open, and a folded
+    group says how many of its settings the file sets. The notification settings lose
+    their "Notify:" prefix. **Add watch** is in the Watches pane's header.
+- **Shared controls are 13px**, in every window. The setup wizard looks the same as
+  before; its confirmation dialog, which did not get the wizard's 13px, now does.
+
 ### Fixed
 
 - **A token problem stops only its own account in the app.** One account whose token is

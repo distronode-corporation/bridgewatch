@@ -121,6 +121,8 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(() => {
+  // The window restores the last pane used: every test starts from none.
+  localStorage.clear();
   shell.status = HEALTHY;
   shell.tab = null;
   shell.edits = [];
@@ -395,7 +397,7 @@ describe("SettingsApp, launch at login (H13)", () => {
 
   it("writes the key the shell routes to the OS login item", async () => {
     const h = await render();
-    await h.tab("UI");
+    await h.tab("General");
     const box = checkbox();
     expect(box.checked).toBe(false);
     box.click();
@@ -421,7 +423,7 @@ describe("SettingsApp, launch at login (H13)", () => {
       ],
     };
     const h = await render();
-    await h.tab("UI");
+    await h.tab("General");
     checkbox().click();
     await settle();
     await settle();
@@ -432,7 +434,7 @@ describe("SettingsApp, launch at login (H13)", () => {
   it("follows the OS state the shell reports", async () => {
     shell.config = { ...CONFIG, ui: { launch_at_login: true } };
     const h = await render();
-    await h.tab("UI");
+    await h.tab("General");
     expect(checkbox().checked).toBe(true);
   });
 });
@@ -572,5 +574,130 @@ describe("SettingsApp, a first launch with no file yet", () => {
     shell.status = { ...BROKEN, firstRun: true };
     await render();
     expect(host.querySelector(".first-run")).toBeTruthy();
+  });
+});
+
+describe("SettingsApp, the sidebar (L2)", () => {
+  const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
+  const selected = () => tabs().find((t) => t.getAttribute("aria-selected") === "true")?.textContent?.trim();
+  const title = () => host.querySelector("header h2")?.textContent?.trim();
+
+  it("lists five panes in a vertical tab list, Accounts first", async () => {
+    await render();
+    const list = host.querySelector('[role="tablist"]')!;
+    expect(list.getAttribute("aria-orientation")).toBe("vertical");
+    expect(tabs().map((t) => t.textContent?.trim())).toEqual(["Accounts", "Watches", "General", "Verdict", "Advanced"]);
+    expect(selected()).toBe("Accounts");
+    expect(title()).toBe("Accounts");
+    // Only the selected tab is in the Tab order, and the pane names it.
+    expect(tabs().map((t) => t.tabIndex)).toEqual([0, -1, -1, -1, -1]);
+    const panel = host.querySelector('[role="tabpanel"]')!;
+    expect(panel.getAttribute("aria-labelledby")).toBe(tabs()[0].id);
+    expect(tabs()[0].getAttribute("aria-controls")).toBe(panel.id);
+  });
+
+  it("moves with the arrow keys, Home and End, wrapping, and takes the focus along", async () => {
+    await render();
+    const key = async (k: string) => {
+      (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+      await settle();
+    };
+    tabs()[0].focus();
+    await key("ArrowDown");
+    expect(selected()).toBe("Watches");
+    expect(document.activeElement).toBe(tabs()[1]);
+    await key("End");
+    expect(selected()).toBe("Advanced");
+    await key("ArrowDown");
+    expect(selected()).toBe("Accounts");
+    await key("ArrowUp");
+    expect(selected()).toBe("Advanced");
+    await key("Home");
+    expect(selected()).toBe("Accounts");
+    expect(document.activeElement).toBe(tabs()[0]);
+    expect(title()).toBe("Accounts");
+  });
+
+  it("opens on the last pane used", async () => {
+    const h = await render();
+    await h.tab("Verdict");
+    void unmount(component!);
+    component = null;
+    host.remove();
+    await render();
+    expect(selected()).toBe("Verdict");
+    expect(host.textContent).toContain("Inline script");
+  });
+
+  it("opens on Accounts when the window's storage refuses", async () => {
+    const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    try {
+      const h = await render();
+      expect(selected()).toBe("Accounts");
+      // A refused write is not an error either: the pane still changes.
+      await h.tab("Watches");
+      expect(selected()).toBe("Watches");
+    } finally {
+      get.mockRestore();
+      set.mockRestore();
+    }
+  });
+
+  it("shows the shell's 'text' as Advanced with the editor, and does not remember it", async () => {
+    // The shell still names the old tabs: a broken file and the wizard's
+    // "I'll edit config.toml" both ask for "text".
+    shell.tab = "text";
+    await render();
+    expect(selected()).toBe("Advanced");
+    expect(host.querySelector("#edit-as-text textarea.editor")).toBeTruthy();
+    expect(localStorage.getItem("bridgewatch.settings.pane")).toBe(null);
+  });
+
+  it.each([
+    ["icon", "General"],
+    ["ui", "General"],
+    ["log", "Advanced"],
+    ["watches", "Watches"],
+  ])("maps the shell's old tab %s to %s", async (tab, pane) => {
+    shell.tab = tab;
+    await render();
+    expect(selected()).toBe(pane);
+  });
+
+  it("keeps the pane it has for a name it does not know", async () => {
+    shell.tab = "nonsense";
+    await render();
+    expect(selected()).toBe("Accounts");
+  });
+
+  it("puts General's two groups and Advanced's log and editor under their titles", async () => {
+    const h = await render();
+    await h.tab("General");
+    const groups = () => [...host.querySelectorAll(".pane .settings-group h3")].map((e) => e.textContent?.trim());
+    expect(groups()).toEqual(["Icon", "App"]);
+    expect(host.textContent).toContain("Launch at login");
+    expect(host.textContent).toContain("State glyphs");
+    await h.tab("Advanced");
+    expect(groups()).toEqual(["Log", "Edit as text"]);
+    expect(host.querySelector("textarea.editor")).toBeTruthy();
+  });
+
+  it("keeps the file path, Open file and Reload in the footer bar", async () => {
+    await render();
+    const footer = host.querySelector("footer")!;
+    expect(footer.querySelector(".path")?.textContent).toBe("/tmp/bridgewatch.toml");
+    expect([...footer.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual(["Open file", "Reload"]);
+  });
+
+  it("puts Add watch in the Watches pane's header, and only there", async () => {
+    const h = await render();
+    expect(host.querySelector("header")?.textContent).not.toContain("Add watch");
+    await h.tab("Watches");
+    expect(host.querySelector("header")?.textContent).toContain("Add watch");
   });
 });

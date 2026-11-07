@@ -698,12 +698,11 @@
 </script>
 
 <!-- One column, at most 560px, with the window's own padding (no second p-4).
-     Body text is 13/18 and the step title 15/20. The shared primitives set
-     14px (text-sm) or, below 768px, 16px (the input's text-base); inside the
-     wizard both become 13/18, so every step reads at one size. Hints stay
-     12px (text-xs). -->
+     Body text is 13/18 and the step title 15/20; the shared primitives are
+     13/18 themselves, so every step reads at one size. Hints stay 12px
+     (text-xs). -->
 <section
-  class="mx-auto flex h-full w-full max-w-[560px] flex-col gap-4 text-[13px]/[18px] [&_.text-sm]:text-[13px]/[18px] [&_[data-slot=input]]:text-[13px]/[18px]"
+  class="mx-auto flex h-full w-full max-w-[560px] flex-col gap-4 text-[13px]/[18px]"
   aria-labelledby="wizard-heading"
   data-slot="wizard"
   data-step={step.id}

@@ -41,7 +41,6 @@ function render(watches = WATCHES) {
     },
     onremove: () => {},
     onmove: () => {},
-    onadd: () => {},
   }) as ComponentProps<typeof WatchesTab>;
   component = mount(WatchesTab, { target: host, props });
   flushSync();
@@ -122,8 +121,7 @@ describe("WatchesTab, keys for the other provider", () => {
       onedit: () => Promise.resolve(),
       onremove: () => {},
       onmove: () => {},
-      onadd: () => {},
-    }) as ComponentProps<typeof WatchesTab>;
+      }) as ComponentProps<typeof WatchesTab>;
     component = mount(WatchesTab, { target: host, props });
     flushSync();
   }
@@ -166,5 +164,56 @@ describe("WatchesTab, keys for the other provider", () => {
     for (const label of ["Dive into bridges", "Dive exclusions", "Dive only when"]) {
       expect(row(label).dataset.inapplicable, label).toBeUndefined();
     }
+  });
+});
+
+describe("WatchesTab, groups (L2)", () => {
+  const groups = () => [...host.querySelectorAll<HTMLDetailsElement>("section.watch .body details.settings-group")];
+
+  it("splits the open watch into seven groups by config path, only Source open", () => {
+    render();
+    expect(groups().map((g) => g.dataset.group)).toEqual([
+      "Source",
+      "Rows",
+      "Polling",
+      "Child pipelines",
+      "Deploy",
+      "Jobs",
+      "Notifications",
+    ]);
+    expect(groups().map((g) => g.open)).toEqual([true, false, false, false, false, false, false]);
+    const labels = (name: string) =>
+      [...groups().find((g) => g.dataset.group === name)!.querySelectorAll(".label")].map((l) => l.textContent);
+    expect(labels("Source")).toContain("Project");
+    expect(labels("Polling")).toEqual(["Poll while live (s)", "Poll while idle (s)"]);
+    expect(labels("Jobs")).toContain("Job class overrides");
+    expect(labels("Notifications")).toContain("Fixed again");
+    expect(labels("Notifications")).toContain("Click opens");
+    // The heading says "Notifications", so no label repeats it.
+    expect(labels("Notifications").some((l) => /^Notif/.test(l ?? ""))).toBe(false);
+  });
+
+  it("says how many of a folded group's keys the file sets", () => {
+    render([{ ...WATCHES[0], poll: { live_secs: 5, idle_secs: 60 }, notify: { deployed: true } } as (typeof WATCHES)[0]]);
+    const note = (name: string) =>
+      groups().find((g) => g.dataset.group === name)!.querySelector('[data-slot="group-note"]')?.textContent ?? "";
+    expect(note("Polling")).toBe("2 set");
+    expect(note("Notifications")).toBe("1 set");
+    expect(note("Rows")).toBe("");
+  });
+
+  it("keeps a group the user opened open across a reload of the file", () => {
+    const h = render();
+    const polling = () => groups().find((g) => g.dataset.group === "Polling")!;
+    polling().open = true;
+    polling().dispatchEvent(new Event("toggle"));
+    flushSync();
+    h.reload(WATCHES.map((w) => ({ ...w })));
+    expect(polling().open).toBe(true);
+  });
+
+  it("says so when there are no watches", () => {
+    render([]);
+    expect(host.querySelector(".empty")?.textContent).toContain("No watches yet");
   });
 });

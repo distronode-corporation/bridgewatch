@@ -131,7 +131,7 @@
 
 <div class="device-sign-in flex flex-col gap-2" data-slot="device-sign-in">
   {#if phase === "waiting" && started}
-    <p class="m-0 text-sm">
+    <p class="m-0 text-[13px]/[18px]">
       Enter this code at <span class="font-mono">{shortUrl(started.verification_uri)}</span>:
     </p>
     <div class="flex items-center gap-2">
