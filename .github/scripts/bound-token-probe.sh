@@ -113,6 +113,7 @@ stored() {
 cat > "$work/standin.py" <<'PY'
 import http.server
 import pathlib
+import socketserver
 import sys
 
 work = pathlib.Path(sys.argv[1])
@@ -133,13 +134,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+class Server(http.server.HTTPServer):
+    # HTTPServer.server_bind also resolves the host's FQDN, and on the macOS
+    # runner that lookup took over 30 seconds. The name is never used.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
+
+
+server = Server(("127.0.0.1", 0), Handler)
 (work / f"{name}.port.tmp").write_text(str(server.server_address[1]), encoding="utf-8")
 (work / f"{name}.port.tmp").rename(work / f"{name}.port")
 server.serve_forever()
 PY
 start_standin() {
-  local pid
+  local pid started=$SECONDS
   python3 -I "$work/standin.py" "$work" "$1" </dev/null 2>"$work/$1.err" &
   pid=$!
   servers+=("$pid")
@@ -162,6 +172,7 @@ start_standin() {
     python3 --version
     exit 1
   fi
+  echo "stand-in $1 started in $((SECONDS - started))s"
   : > "$work/$1.headers"
 }
 start_standin a
