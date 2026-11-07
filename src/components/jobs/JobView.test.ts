@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { reactive } from "../../lib/__tests__/props.svelte";
 import type { BridgeView, JobsMode, PipelineView } from "../../lib/types";
-import { PARENT_JOBS, RUNNING_JOB, T0, bridge, pipeline } from "./__fixtures__/pipeline";
+import { PARENT_JOBS, RUNNING_JOB, T0, bridge, job, pipeline } from "./__fixtures__/pipeline";
 import BridgeJobs from "./BridgeJobs.svelte";
 import JobList from "./JobList.svelte";
 import PipelineJobs from "./PipelineJobs.svelte";
@@ -35,6 +35,17 @@ const stages = () => [...host.querySelectorAll<HTMLElement>("[data-stage]")].map
 const jobNames = () => [...host.querySelectorAll<HTMLElement>("[data-job-id] a, [data-job-id] > span.font-mono")].map(
   (a) => a.textContent?.trim(),
 );
+/**
+ * A bridge link is an icon with no visible words: its whole accessible name is
+ * the `aria-label`, so that must be there, and the icon must be hidden from
+ * assistive tech rather than read as an unnamed image.
+ */
+function expectIconOnly(link: HTMLElement) {
+  expect(link.textContent?.trim()).toBe("");
+  expect(link.getAttribute("aria-label")).toBeTruthy();
+  expect(link.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+}
+
 const bridgeOpen = (name: string) =>
   host.querySelector<HTMLElement>(`[data-bridge="${name}"] [data-slot="collapsible-trigger"]`)?.getAttribute(
     "aria-expanded",
@@ -265,6 +276,148 @@ describe("BridgeJobs, the two links on the header", () => {
   });
 });
 
+describe("BridgeJobs, a long name beside a long status", () => {
+  const NAME = "trigger:android-release-build";
+
+  it("keeps the name first and lets the status give way, with the full verdict for a screen reader", () => {
+    component = mount(BridgeJobs, {
+      target: host,
+      props: {
+        bridge: bridge({ name: NAME, verdict: "passed_with_warnings" }),
+        pipelineId: 5000,
+        expansion: createExpansionStore(),
+        onOpen: () => {},
+        now: T0,
+      },
+    });
+    flushSync();
+    const row = host.querySelector<HTMLElement>(`[data-bridge="${NAME}"]`)!;
+    const name = row.querySelector<HTMLElement>(".name")!;
+    const status = row.querySelector<HTMLElement>(".status")!;
+    // The name keeps at least 12ch; the status is the one that shrinks.
+    expect(name.classList).toContain("min-w-[12ch]");
+    expect(name.getAttribute("title")).toBe(NAME);
+    expect(status.classList).toContain("min-w-0");
+    expect(status.classList).toContain("truncate");
+    expect(status.classList).not.toContain("shrink-0");
+    // Both forms are there; app.css shows "warnings" only in a narrow window.
+    expect(status.querySelector(".bw-wide-only")?.textContent).toBe("passed, with warnings");
+    expect(status.querySelector(".bw-narrow-only")?.textContent).toBe("warnings");
+    // The full verdict is never lost.
+    expect(status.getAttribute("title")).toBe("passed, with warnings");
+    expect(row.querySelector('[data-slot="collapsible-trigger"]')?.getAttribute("aria-label")).toBe(
+      `${NAME}: passed, with warnings. Show jobs`,
+    );
+  });
+});
+
+describe("BridgeJobs, the job count column", () => {
+  it("grows for a failures-mode count like 5/11 instead of spilling into the status", () => {
+    const jobs = Array.from({ length: 11 }, (_, i) =>
+      job({ id: 100 + i, name: `j${i}`, status: i < 5 ? "failed" : "success", class: i < 5 ? "blocking_failure" : "passed" }),
+    );
+    component = mount(BridgeJobs, {
+      target: host,
+      props: {
+        bridge: bridge({ name: "trigger:android", verdict: "failed", jobs }),
+        pipelineId: 5000,
+        expansion: createExpansionStore(),
+        mode: "failures",
+        onOpen: () => {},
+        now: T0,
+      },
+    });
+    flushSync();
+    const count = host.querySelector<HTMLElement>('[data-bridge="trigger:android"] .count')!;
+    expect(count.textContent?.trim()).toBe("5/11");
+    // A minimum, never a fixed width: four characters do not fit in w-6.
+    expect(count.classList).toContain("min-w-6");
+    expect(count.classList).not.toContain("w-6");
+    expect(count.classList).toContain("shrink-0");
+  });
+});
+
+describe("BridgeJobs, a dead bridge in the same columns as a live one", () => {
+  const LIVE = bridge({ name: "trigger:website", verdict: "passed", jobs: [job({ id: 1, name: "build" })] });
+  const DEAD = bridge({
+    name: "trigger:voice_agent",
+    status: "failed",
+    verdict: "dead",
+    child_id: null,
+    child_url: null,
+    child_project_id: null,
+    dived: false,
+    jobs: [],
+    web_url: "https://gitlab.example/p/-/jobs/78",
+  });
+  const NEVER = bridge({
+    name: "release.yml",
+    status: "never_started",
+    verdict: "dead",
+    child_id: null,
+    child_url: null,
+    child_project_id: null,
+    dived: false,
+    jobs: [],
+    web_url: "https://github.com/acme/app/actions/workflows/release.yml",
+  });
+
+  function renderAll() {
+    component = mount(PipelineJobs, {
+      target: host,
+      props: { pipeline: pipeline({ parent_jobs: [], bridges: [LIVE, DEAD, NEVER] }), expansion: createExpansionStore(), onOpen: () => {}, now: T0 },
+    });
+    flushSync();
+  }
+  const part = (name: string, cls: string) => host.querySelector<HTMLElement>(`[data-bridge="${name}"] .${cls}`)!;
+
+  it("gives every row the same status, count and links columns", () => {
+    renderAll();
+    // Layout classes only: the tone (green, red) is the one thing meant to differ.
+    const layout = (el: HTMLElement) => el.className.replace(/\btext-tone-\w+/g, "").trim();
+    for (const cls of ["status", "count", "links"]) {
+      const live = layout(part(LIVE.name, cls));
+      expect(layout(part(DEAD.name, cls)), cls).toBe(live);
+      expect(layout(part(NEVER.name, cls)), cls).toBe(live);
+    }
+    // A fixed width, not a minimum: nothing in it can widen one row.
+    expect(part(DEAD.name, "links").classList).toContain("w-12");
+    expect(part(DEAD.name, "links").classList).not.toContain("min-w-12");
+  });
+
+  it("keeps the links column to icons only, and a dead bridge to its open-job icon", () => {
+    renderAll();
+    for (const name of [LIVE.name, DEAD.name, NEVER.name]) {
+      const links = part(name, "links");
+      expect(links.textContent?.trim(), name).toBe("");
+      for (const child of links.children) expect(child.tagName, name).toBe("A");
+    }
+    expect([...part(DEAD.name, "links").children].map((a) => a.getAttribute("data-slot"))).toEqual(["bridge-job-link"]);
+  });
+
+  it("says the reason in the status column, and the whole verdict to a screen reader", () => {
+    renderAll();
+    for (const [b, reason] of [
+      [DEAD, "no child"],
+      [NEVER, "never started"],
+    ] as const) {
+      const status = part(b.name, "status");
+      // The reason alone, in red; "dead" is the dot and the colour.
+      expect(status.textContent?.trim()).toBe(reason);
+      expect(status.classList).toContain("text-tone-red");
+      expect(status.getAttribute("title")).toBe(`dead, ${reason}`);
+      expect(
+        host.querySelector(`[data-bridge="${b.name}"] [data-slot="collapsible-trigger"]`)?.getAttribute("aria-label"),
+      ).toMatch(new RegExp(`^${b.name.replace(".", "\\.")}: dead, ${reason}\\. (Show|Hide) jobs$`));
+    }
+    // A live bridge reads as it always did.
+    expect(part(LIVE.name, "status").textContent?.trim()).toBe("passed");
+    expect(
+      host.querySelector(`[data-bridge="${LIVE.name}"] [data-slot="collapsible-trigger"]`)?.getAttribute("aria-label"),
+    ).toMatch(/^trigger:website: passed\. (Show|Hide) jobs$/);
+  });
+});
+
 describe("BridgeJobs, a dead bridge in words", () => {
   function render(view: BridgeView) {
     component = mount(BridgeJobs, {
@@ -296,7 +449,7 @@ describe("BridgeJobs, a dead bridge in words", () => {
     expect(text).toContain("Child pipeline not inspected.");
     expect(text).not.toContain("never started");
     expect(text).not.toContain("Expected workflow did not run.");
-    expect(jobLink().textContent).toBe("job");
+    expectIconOnly(jobLink());
     expect(jobLink().getAttribute("title")).toBe("the trigger job");
     expect(jobLink().getAttribute("aria-label")).toBe("Open trigger job trigger:website in GitLab");
     expect(host.querySelector('[data-slot="bridge-never-started"]')).toBeNull();
@@ -318,13 +471,14 @@ describe("BridgeJobs, a dead bridge in words", () => {
     );
     const text = row("release.yml").textContent ?? "";
     expect(host.querySelector('[data-slot="bridge-never-started"]')?.textContent?.trim()).toBe("never started");
+    // The full verdict: the status shows only the reason, the red says "dead".
     expect(host.querySelector('[data-slot="bridge-never-started"]')?.getAttribute("title")).toBe(
-      "expected workflow did not run",
+      "dead, never started",
     );
     expect(text).toContain("Expected workflow did not run.");
     expect(text).not.toContain("no child");
     expect(text).not.toContain("Child pipeline");
-    expect(jobLink().textContent).toBe("workflow");
+    expectIconOnly(jobLink());
     expect(jobLink().getAttribute("href")).toBe(url);
     expect(jobLink().getAttribute("aria-label")).toBe("Open workflow release.yml");
     expect(jobLink().getAttribute("aria-label")).not.toContain("GitLab");
@@ -362,7 +516,9 @@ describe("BridgeJobs, a GitHub workflow run in a commit group", () => {
     expect(links).toHaveLength(1);
     const only = links[0];
     expect(only.dataset.slot).toBe("bridge-run-link");
-    expect(only.textContent).toBe("workflow run");
+    // An icon, not the words "workflow run" repeated on every row: the name
+    // a screen reader reads is the aria-label below.
+    expectIconOnly(only);
     expect(only.getAttribute("title")).toBe("the workflow run");
     expect(only.getAttribute("aria-label")).toBe("Open workflow run CI");
     expect(only.getAttribute("href")).toBe(RUN);
@@ -406,7 +562,7 @@ describe("BridgeJobs, a GitHub workflow run in a commit group", () => {
     );
     expect(host.querySelector('[data-slot="bridge-run-link"]')).toBeNull();
     const job = host.querySelector<HTMLAnchorElement>('[data-slot="bridge-job-link"]')!;
-    expect(job.textContent).toBe("workflow");
+    expectIconOnly(job);
     expect(job.getAttribute("aria-label")).toBe("Open workflow release.yml");
     expect(host.querySelector('[data-slot="bridge-never-started"]')?.textContent?.trim()).toBe("never started");
   });
@@ -443,7 +599,7 @@ describe("BridgeJobs, a GitHub workflow run in a commit group", () => {
     });
     flushSync();
     expect(host.querySelector('[role="list"]')?.getAttribute("aria-label")).toBe("workflow runs");
-    expect(host.querySelector('[data-slot="bridge-run-link"]')?.textContent).toBe("workflow run");
+    expect(host.querySelector('[data-slot="bridge-run-link"]')?.getAttribute("aria-label")).toBe("Open workflow run CI");
     expect(host.querySelector('[data-slot="bridge-job-link"]')).toBeNull();
   });
 });

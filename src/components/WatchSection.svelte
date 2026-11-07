@@ -28,8 +28,10 @@
   const provider = $derived(watch.provider ?? "gitlab");
 </script>
 
-<section class="watch border-border border-b last:border-b-0" data-watch={watch.id} data-role={watch.role}>
-  <header class="bg-muted/60 flex items-center gap-2 px-3 pt-1.5 pb-1">
+<!-- Watches are set apart by 16px of space above each header (`pt-4`), with
+     no tinted band and no rule: the space is the separator. -->
+<section class="watch pt-4" data-watch={watch.id} data-role={watch.role}>
+  <header class="flex min-w-0 items-center gap-2 px-3 pb-1">
     {#if secondary}
       <button
         class="disclosure text-muted-foreground hover:text-foreground -ml-1 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -41,26 +43,29 @@
         <ChevronRightIcon class={["size-3.5 transition-transform", open && "rotate-90"]} aria-hidden="true" />
       </button>
     {/if}
-    <span class="id text-[13px] font-semibold">{watch.id}</span>
-    {#if watch.icon_state}
-      <span class={["headline text-xs", TONE_TEXT[stateTone(watch.icon_state)]]} data-headline={watch.icon_state}
-        >{stateWord(watch.icon_state)}</span
-      >
-    {:else if secondary}
+    <span class="id text-ui-body min-w-0 truncate font-semibold" title={watch.id}>{watch.id}</span>
+    {#if !watch.icon_state && secondary}
       <!-- ⛔ The label is the ROLE, so it is read off the role. Branching on
            `icon_state` labelled a PRIMARY watch "secondary" whenever it had no
            state to show — which is exactly a fresh install whose ref filter
            matched nothing, i.e. the first thing a new user sees. -->
-      <span class="role text-muted-foreground text-[11px]">secondary</span>
+      <span class="role text-muted-foreground text-ui-badge shrink-0">secondary</span>
     {/if}
     <span class="flex-1"></span>
     {#if watch.rows.length === 0 && !watch.error}
-      <span class="empty text-muted-foreground text-[11px]">no matching pipelines</span>
+      <span class="empty text-muted-foreground text-ui-meta shrink-0">no matching pipelines</span>
+    {/if}
+    {#if watch.icon_state}
+      <!-- The watch's verdict, right-aligned, said once for the watch. -->
+      <span
+        class={["headline text-ui-meta shrink-0", TONE_TEXT[stateTone(watch.icon_state)]]}
+        data-headline={watch.icon_state}>{stateWord(watch.icon_state)}</span
+      >
     {/if}
   </header>
 
   {#if watch.error}
-    <div class={["error px-3 py-1 text-xs", TONE_TEXT.red, TONE_BG.red]}>{watch.error}</div>
+    <div class={["error text-ui-meta mx-3 mt-1 rounded-md px-2 py-1", TONE_TEXT.red, TONE_BG.red]}>{watch.error}</div>
   {/if}
 
   {#each watch.rows as row, index (row.id)}
@@ -76,6 +81,7 @@
         collapsed={!expanded}
         watchId={watch.id}
         actions={watch.actions ?? false}
+        watchState={watch.icon_state}
       />
     {/if}
   {/each}
