@@ -800,6 +800,51 @@ fn a_sign_in_fits_only_its_own_origin_and_application() {
     assert!(!why.contains("hunter2"), "{why}");
 }
 
+/// ⛔ Fail-closed: when either side has no origin (`origin_of` cannot parse
+/// it), the answer is "another instance", never a match. Two unparsable URLs
+/// are `None == None`, which used to read as the same server.
+#[test]
+fn a_sign_in_with_no_origin_on_either_side_never_fits() {
+    let unparsable = "gitlab.example.com";
+    let account = oauth_account(
+        Provider::Gitlab,
+        Some("https://gitlab.example.com"),
+        Some("gl-app-0001"),
+    );
+
+    // The stored origin is None.
+    let stored_none = set("a", None, None, unparsable);
+    assert!(
+        matches!(
+            stored_none.fit(&account, "gl-app-0001"),
+            oauth::Fit::OtherInstance { .. }
+        ),
+        "{:?}",
+        stored_none.fit(&account, "gl-app-0001")
+    );
+
+    // The account's base_url origin is None.
+    let mut moved = account.clone();
+    moved.base_url = unparsable.into();
+    let issued = set("a", None, None, "https://gitlab.example.com");
+    assert!(
+        matches!(
+            issued.fit(&moved, "gl-app-0001"),
+            oauth::Fit::OtherInstance { .. }
+        ),
+        "{:?}",
+        issued.fit(&moved, "gl-app-0001")
+    );
+
+    // Both None: still not a match.
+    let both = set("a", None, None, unparsable);
+    assert!(!both.fits(&moved, "gl-app-0001"));
+    let memory = MemoryStore::new();
+    store::save("gl", &both, memory.as_ref()).unwrap();
+    let err = token::resolve("gl", &moved, memory.as_ref()).unwrap_err();
+    assert!(matches!(err, TokenError::SignedInElsewhere { .. }), "{err}");
+}
+
 /// The poller's client, over a script, for an account that signs in.
 fn polled_client(
     account: &Account,

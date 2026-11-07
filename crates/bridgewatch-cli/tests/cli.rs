@@ -1078,6 +1078,16 @@ fn init_never_carries_a_token_source_to_another_host() {
     let text = stdout(&out);
     assert!(!text.contains("glab:gitlab.com:token"), "{text}");
     assert!(text.contains("token = { own = true }"), "{text}");
+    // ⛔ The exact path of the 1.x bug: a repointed own account. Its stored
+    // token is bound to the old server now, and init says so.
+    assert!(
+        stderr(&out).contains(
+            "note: account \"gitlab\" moves from https://gitlab.com to https://gitlab.acme.com. \
+             A token it stored stays with gitlab.com and is not sent to gitlab.acme.com"
+        ),
+        "{}",
+        stderr(&out)
+    );
 
     // Enterprise -> github.com, named explicitly: the built-in sign-in, not
     // the Enterprise application.

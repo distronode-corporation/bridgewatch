@@ -657,6 +657,11 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
             ),
         ));
     }
+    // An explicit --account moving an existing account: where it was.
+    let repointed_from = current
+        .as_ref()
+        .filter(|_| !same_instance)
+        .map(|a| a.base_url.clone());
     // The source already in the file, on this same instance only: a token
     // source never carries across hosts.
     let kept_source = current
@@ -740,6 +745,9 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         Ok(built) => {
             for w in &built.warnings {
                 eprintln!("warning: {}: {}", w.path, w.message);
+            }
+            if let Some(note) = repoint_note(&answers, repointed_from.as_deref()) {
+                eprintln!("{note}");
             }
             if let Some(primary) = &built.secondary_because {
                 eprintln!(
@@ -836,6 +844,29 @@ fn next_step(
              sign in: bridgewatch {config}auth login --account {}",
             path.display(),
             shell_word(&answers.account)
+        )
+    })
+}
+
+/// What `init` says when `--account` moves an account whose token is its own
+/// entry to another server: that token is bound to the old one and is not
+/// sent, so the account polls nothing until a token is saved for the new one.
+fn repoint_note(
+    answers: &bridgewatch_core::wizard::WizardAnswers,
+    from: Option<&str>,
+) -> Option<String> {
+    let from = from?;
+    matches!(answers.token, config::TokenSource::Own(true)).then(|| {
+        format!(
+            "note: account {:?} moves from {} to {}. A token it stored stays with {} and is \
+             not sent to {}: save a token for the new server in the app's Settings (Accounts, \
+             Token source) before checking it",
+            answers.account,
+            from.trim_end_matches('/'),
+            answers.base_url.trim_end_matches('/'),
+            bridgewatch_core::oauth::host_of(from).unwrap_or_else(|| "the old server".into()),
+            bridgewatch_core::oauth::host_of(&answers.base_url)
+                .unwrap_or_else(|| "the new one".into()),
         )
     })
 }

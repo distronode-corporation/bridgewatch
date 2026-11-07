@@ -374,7 +374,11 @@ pub enum TokenSource {
     /// A non-zero exit is an error.
     Command(Vec<String>),
     /// bridgewatch's own credential-store entry, `bridgewatch:<account>`,
-    /// written by the GUI or by `set_own_token`.
+    /// written by the GUI or by `set_own_token`. The token is bound to the
+    /// server it was saved for and sent nowhere else: after a change of
+    /// `base_url` it is not sent until a token is saved for the new server.
+    /// A value stored by bridgewatch 1.x is bound to the account's server the
+    /// first time it is used.
     Own(bool),
     /// Sign in with GitHub or GitLab (the OAuth device flow). `oauth = true`
     /// uses bridgewatch's own application on github.com or gitlab.com;

@@ -105,7 +105,9 @@ impl TokenSet {
     /// session, which keeps those rather than the whole account.
     pub(crate) fn fit_for(&self, base_url: &str, client_id: &str) -> Fit {
         let (issued, expected) = (origin_of(&self.base_url), origin_of(base_url));
-        if issued != expected {
+        // ⛔ Fail-closed: a side with no origin matches nothing. Two unparsable
+        // URLs are `None == None`, which used to read as the same instance.
+        if issued.is_none() || issued != expected {
             // The host alone reads best; the whole origin only when the hosts
             // agree and the scheme or port is what differs.
             let (mut issued, mut expected) = (label(&self.base_url), label(base_url));
