@@ -1,5 +1,5 @@
-import { mount, unmount } from "svelte";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { flushSync, mount, unmount } from "svelte";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import fixture from "../lib/__fixtures__/ca41ab28.json" with { type: "json" };
 import type { Snapshot, Status } from "../lib/types";
@@ -66,7 +66,7 @@ describe("Popover, rendered from a recorded pipeline", () => {
     );
   });
 
-  it("shows the pipeline row: sha, ref, source and the deploy word", () => {
+  it("shows the pipeline row on two lines, with the verdict said once", () => {
     // ⚠ Asserted against the ROW's own cells, not against the popover's whole
     // text. Every one of these substrings also occurs in the watch id
     // (`main-push`) and the tray headline, so the text-wide version of this
@@ -74,12 +74,25 @@ describe("Popover, rendered from a recorded pipeline", () => {
     // all. The empty case is now its own test below.
     const rows = host.querySelectorAll('[data-watch="main-push"] .row');
     expect(rows.length).toBe(1);
+    // Line 1 is the ref; line 2 is what the pipeline is.
     const head = rows[0].querySelector(".head");
-    expect(head?.querySelector(".sha")?.textContent?.trim()).toBe("ca41ab2");
+    const sub = rows[0].querySelector(".sub");
     expect(head?.querySelector(".ref")?.textContent?.trim()).toBe("main");
-    expect(head?.querySelector(".source")?.textContent?.trim()).toBe("push");
-    // `deploy: "live"` is rendered as the thing a person says.
-    expect(head?.querySelector(".deploy")?.textContent?.trim()).toBe("deployed");
+    expect(sub?.querySelector(".sha")?.textContent?.trim()).toBe("ca41ab2");
+    expect(sub?.querySelector(".source")?.textContent?.trim()).toBe("push");
+    // The deploy marker is labelled, not a lone job name that reads as wrapped text.
+    expect(sub?.querySelector(".marker")?.textContent?.replace(/\s+/g, " ").trim()).toBe("deploy job deploy:origins");
+    // ⛔ Said once. `deploy: "live"` on a "deployed with failure" row added
+    // nothing, and the README shot read "deployed deployed": no pill. The
+    // watch header right above already says the state, so the row says it to
+    // screen readers only.
+    expect(head?.querySelector(".deploy")).toBe(null);
+    const state = head?.querySelector(".state");
+    expect(state?.textContent?.trim()).toBe("deployed with failure");
+    expect(state?.classList.contains("sr-only")).toBe(true);
+    expect(rows[0].closest("[data-watch]")?.querySelector("[data-headline]")?.textContent?.trim()).toBe(
+      "deployed with failure",
+    );
   });
 
   it("links a sibling failure to the trigger job, not to nothing", () => {
@@ -142,7 +155,8 @@ describe("Popover, rendered from a recorded pipeline", () => {
   });
 
   it("says when it last polled", () => {
-    expect(host.querySelector('[data-slot="updated-ago"]')?.textContent).toMatch(/^updated /);
+    // "deployed with failure · 4m ago": the header is one line, so no "updated".
+    expect(host.querySelector('[data-slot="updated-ago"]')?.textContent?.trim()).toMatch(/^\d+[smhd] ago$/);
   });
 
   it("keeps the secondary watches collapsed and unlabelled by state", () => {
@@ -165,6 +179,91 @@ describe("Popover, rendered from a recorded pipeline", () => {
     const rows = host.querySelectorAll(".requests tbody tr");
     expect(rows.length).toBe(snapshot.request_log.length);
     expect(host.querySelector(".requests")?.textContent).toContain("GET");
+  });
+});
+
+describe("Popover, the header and the footer", () => {
+  let host: HTMLDivElement;
+  let component: Record<string, unknown>;
+  const handlers = {
+    onrefresh: vi.fn(),
+    onpipelines: vi.fn(),
+    onsettings: vi.fn(),
+    onquit: vi.fn(),
+  };
+
+  beforeEach(() => {
+    for (const fn of Object.values(handlers)) fn.mockClear();
+    host = document.createElement("div");
+    document.body.append(host);
+    component = mount(Popover, {
+      target: host,
+      props: { snapshot, now: Date.parse("2026-09-17T15:00:00Z"), ...handlers },
+    });
+    flushSync();
+  });
+
+  afterEach(() => {
+    void unmount(component);
+    host.remove();
+  });
+
+  const header = () => host.querySelector("header")!;
+  const footer = () => host.querySelector<HTMLElement>('[data-slot="popover-footer"]')!;
+  const named = (root: Element, name: string) =>
+    [...root.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => (b.getAttribute("aria-label") ?? b.textContent?.trim()) === name,
+    );
+
+  it("has two icon buttons in the header, each named for a screen reader", () => {
+    const buttons = [...header().querySelectorAll("button")];
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Refresh", "Pipelines"]);
+    for (const b of buttons) {
+      // No visible words: the aria-label is the whole name, the icon is hidden.
+      expect(b.textContent?.trim()).toBe("");
+      expect(b.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+      expect(b.getAttribute("title")).toBeTruthy();
+      expect(b.tabIndex).not.toBe(-1);
+    }
+    named(header(), "Refresh")!.click();
+    named(header(), "Pipelines")!.click();
+    expect(handlers.onrefresh).toHaveBeenCalledOnce();
+    expect(handlers.onpipelines).toHaveBeenCalledOnce();
+  });
+
+  it("puts the state and the age on one line, with nothing else in words", () => {
+    // "deployed with failure · 4m ago": the state, a dot and the age.
+    const text = header().textContent?.replace(/\s+/g, " ").trim();
+    expect(text).toMatch(/^deployed with failure · \d+[smhd] ago$/);
+    expect(named(header(), "Settings")).toBeUndefined();
+    expect(named(header(), "Quit")).toBeUndefined();
+  });
+
+  it("moves Settings and Quit to the footer", () => {
+    expect([...footer().querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual([
+      "Debug",
+      "Settings…",
+      "Quit",
+    ]);
+    named(footer(), "Settings…")!.click();
+    named(footer(), "Quit")!.click();
+    expect(handlers.onsettings).toHaveBeenCalledOnce();
+    expect(handlers.onquit).toHaveBeenCalledOnce();
+  });
+
+  it("opens the debug pane from the footer, and says so to a screen reader", () => {
+    const toggle = named(footer(), "Debug")!;
+    const pane = host.querySelector<HTMLElement>(".debug")!;
+    expect(toggle.getAttribute("aria-controls")).toBe(pane.id);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(pane.hidden).toBe(true);
+    toggle.click();
+    flushSync();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(pane.hidden).toBe(false);
+    toggle.click();
+    flushSync();
+    expect(pane.hidden).toBe(true);
   });
 });
 

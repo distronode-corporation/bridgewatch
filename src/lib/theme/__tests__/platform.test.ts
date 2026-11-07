@@ -146,3 +146,35 @@ describe("app.css", () => {
     expect(css).not.toMatch(pattern);
   });
 });
+
+describe("app.css, the type scale", () => {
+  const css = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it.each([
+    ["title", "15px", "20px"],
+    ["body", "13px", "18px"],
+    ["meta", "12px", "16px"],
+    ["badge", "11px", "14px"],
+  ])("defines text-ui-%s as %s/%s", (name, size, lineHeight) => {
+    expect(css).toContain(`--text-ui-${name}: ${size};`);
+    expect(css).toContain(`--text-ui-${name}--line-height: ${lineHeight};`);
+  });
+
+  it("defines exactly four sizes", () => {
+    expect(css.match(/--text-ui-[a-z]+:/g)).toHaveLength(4);
+  });
+});
+
+describe("app.css, the narrow-window word swap", () => {
+  const css = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it("swaps .bw-wide-only for .bw-narrow-only below 400px, with a query 2.36 understands", () => {
+    expect(css).toMatch(/\.bw-narrow-only\s*\{\s*display:\s*none;/);
+    const block = css.slice(css.indexOf("@media (max-width: 399px)"));
+    expect(block).toMatch(/^@media \(max-width: 399px\)\s*\{\s*\.bw-wide-only\s*\{\s*display:\s*none;/);
+    expect(block).toMatch(/\.bw-narrow-only\s*\{\s*display:\s*inline;/);
+    // Range syntax (`width < 400px`) is what Tailwind's max-* variants emit, and 2.36 lacks it.
+    expect(css).not.toMatch(/\(\s*width\s*[<>]/);
+  });
+});
+

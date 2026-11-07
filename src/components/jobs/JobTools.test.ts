@@ -255,3 +255,57 @@ describe("helpers", () => {
     await expect(flight.run("k", () => Promise.resolve(2))).resolves.toBe(2);
   });
 });
+
+describe("the tools' look: 12px words, on hover or focus, always on a failed job", () => {
+  const failed = job({ id: 1, name: "lint", status: "failed", class: "blocking_failure" });
+  const canceled = job({ id: 2, name: "e2e", status: "canceled", class: "not_built" });
+  const manual = job({ id: 3, name: "deploy", status: "manual", class: "gate" });
+
+  const toolsOf = (id: number) => $(`[data-job-id="${id}"] [data-slot="job-tools"]`)!;
+
+  it("always shows a failed job's tools", () => {
+    mountList(tools(), [failed]);
+    expect(toolsOf(1).hasAttribute("data-always")).toBe(true);
+    expect(toolsOf(1).classList.contains("opacity-0")).toBe(false);
+  });
+
+  it("shows another job's tools on hover or focus, and keeps them in the tab order", () => {
+    mountList(tools(), [canceled, manual]);
+    for (const id of [2, 3]) {
+      const wrapper = toolsOf(id);
+      expect(wrapper.hasAttribute("data-always")).toBe(false);
+      // ⛔ Opacity, never `invisible` or `hidden`: either would take the
+      // buttons out of the tab order, and focus is what reveals them.
+      expect(wrapper.classList).toContain("opacity-0");
+      expect(wrapper.classList).toContain("group-hover/job:opacity-100");
+      expect(wrapper.classList).toContain("focus-within:opacity-100");
+      expect(wrapper.classList).not.toContain("invisible");
+      expect(wrapper.hidden).toBe(false);
+      for (const button of wrapper.querySelectorAll("button")) expect(button.tabIndex).toBe(0);
+    }
+    const retry = $('[data-job-id="2"] [data-slot="job-retry"]') as HTMLButtonElement;
+    retry.focus();
+    expect(document.activeElement).toBe(retry);
+  });
+
+  it("keeps a row's tools shown while its panel is open", () => {
+    mountList(tools(), [canceled]);
+    click($('[data-slot="job-retry"]'));
+    expect(toolsOf(2).classList.contains("opacity-0")).toBe(false);
+    click($('[data-slot="job-retry"]'));
+    expect(toolsOf(2).classList.contains("opacity-0")).toBe(true);
+  });
+
+  it("is 12px words with a visible focus ring, not 10px capitals", () => {
+    mountList(tools(), [failed, manual]);
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('[data-slot="job-tools"] button')];
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual(["log", "retry", "play"]);
+    for (const button of buttons) {
+      expect(button.className).not.toMatch(/uppercase|text-\[10px\]/);
+      expect(button.className).toContain("focus-visible:ring-2");
+      expect(button.getAttribute("aria-label")).toBeTruthy();
+    }
+    // The size comes from the list, at the 12px step of the type scale.
+    expect($('[data-slot="job-list"]')!.classList).toContain("text-ui-meta");
+  });
+});
