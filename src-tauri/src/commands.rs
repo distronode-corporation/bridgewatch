@@ -6,6 +6,7 @@
 //! the validator and the TOML editor are all the core's.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bridgewatch_core::config::edit::{ConfigEditor, Edit, EditValue};
 use bridgewatch_core::poll::PollNow;
@@ -491,6 +492,9 @@ fn reload(app: &AppHandle, force: bool, bound_for: Option<&str>) {
     let _ = app.emit(CONFIG_CHANGED_EVENT, ());
 
     if changed {
+        // A new `[ui].popover` width or ceiling applies now, not at the next
+        // change of the content's height.
+        fit_popover(app);
         state.request_reload();
     } else {
         // Nothing to restart, but the popover's error strip has to change.
@@ -720,16 +724,58 @@ pub fn take_settings_tab(state: Shared<'_>) -> Option<String> {
 /// width is taken from the configuration rather than from the caller so a
 /// layout bug cannot resize the window to something unusable.
 #[tauri::command]
-pub fn resize_popover(height: f64, app: AppHandle, state: Shared<'_>) {
-    let Some(window) = crate::windows::popover(&app) else {
+pub fn resize_popover(height: f64, app: AppHandle) {
+    POPOVER_HEIGHT.store(height.to_bits(), Ordering::Relaxed);
+    fit_popover(&app);
+}
+
+/// The content height the frontend last asked for, as `f64` bits; NaN until
+/// it asks. Kept so a reload that changes `[ui].popover` refits the window at
+/// once: the frontend asks again only when the content's height changes.
+static POPOVER_HEIGHT: AtomicU64 = AtomicU64::new(0x7ff8_0000_0000_0000);
+
+/// Size the popover for the last content height and the running `[ui].popover`.
+/// Nothing before the frontend has measured anything.
+pub(crate) fn fit_popover(app: &AppHandle) {
+    let height = f64::from_bits(POPOVER_HEIGHT.load(Ordering::Relaxed));
+    if height.is_nan() {
+        return;
+    }
+    let Some(window) = crate::windows::popover(app) else {
         return;
     };
-    let (width, max) = state
+    let (width, max) = app
+        .state::<Arc<AppState>>()
         .config()
-        .map(|c| (c.ui.popover.width as f64, c.ui.popover.max_height as f64))
-        .unwrap_or((440.0, 720.0));
-    let clamped = height.clamp(80.0, max.max(80.0));
-    let _ = window.set_size(tauri::LogicalSize::new(width, clamped));
+        .map(|c| (c.ui.popover.width, c.ui.popover.max_height))
+        .unwrap_or((440, 720));
+    let size = popover_size(height, width, max);
+    // ⛔ Linux: a GTK window that is not resizable keeps the size it was
+    // created with. tao maps `resizable(false)` to `gtk_window_set_resizable`,
+    // and GTK then pins the geometry hints' minimum and maximum to that size
+    // and ignores any hints given, so `set_size` changed nothing, width
+    // included (measured: hints stayed 440x720 after a 346 request). So the
+    // popover is resizable on Linux (`tauri.linux.conf.json`), and pinning
+    // both hints to the wanted size before each `set_size` is what keeps
+    // anyone from dragging it to another one. Flipping `set_resizable(true)`
+    // here is not enough: tao applies the configured value on the window's
+    // first configure event, which comes with the first show and undid it.
+    // macOS honours `set_size` on a window that is not resizable.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = window.set_min_size(Some(size));
+        let _ = window.set_max_size(Some(size));
+    }
+    let _ = window.set_size(size);
+}
+
+/// The popover's size for a content height: the configured width, and the
+/// height between 80 and `max_height`. A height that is not a number (a
+/// layout that measured nothing) gets the ceiling rather than a NaN window.
+fn popover_size(height: f64, width: u32, max_height: u32) -> tauri::LogicalSize<f64> {
+    let max = f64::from(max_height).max(80.0);
+    let height = if height.is_finite() { height } else { max };
+    tauri::LogicalSize::new(f64::from(width), height.clamp(80.0, max))
 }
 
 /// Hide the popover. The frontend calls this on Escape and after a click that
@@ -908,6 +954,25 @@ mod tests {
     use super::*;
     use crate::guard::Confirmations;
     use std::path::Path;
+
+    /// The popover is as tall as its content up to `max_height`, never under
+    /// 80, and always the configured width (`ui.popover.width`).
+    #[test]
+    fn the_popover_takes_the_configured_width_and_the_content_height_up_to_the_cap() {
+        let at = |h: f64, w: u32, max: u32| {
+            let s = popover_size(h, w, max);
+            (s.width, s.height)
+        };
+        assert_eq!(at(262.0, 440, 720), (440.0, 262.0));
+        assert_eq!(at(1000.0, 440, 720), (440.0, 720.0));
+        assert_eq!(at(20.0, 320, 720), (320.0, 80.0));
+        assert_eq!(at(500.0, 320, 300), (320.0, 300.0));
+        // A ceiling under the floor is the floor, not a panic in `clamp`.
+        assert_eq!(at(500.0, 440, 40), (440.0, 80.0));
+        // Nothing measured: the ceiling, never a NaN size.
+        assert_eq!(at(f64::NAN, 440, 720), (440.0, 720.0));
+        assert_eq!(at(f64::INFINITY, 440, 720), (440.0, 720.0));
+    }
 
     const OWN: &str = "[accounts.gl]\nbase_url = \"https://gitlab.com\"\ntoken = { own = true }\n";
     const CMD: &str = "[accounts.gl]\nbase_url = \"https://gitlab.com\"\ntoken = { command = [\"sh\", \"-c\", \"x\"] }\n";

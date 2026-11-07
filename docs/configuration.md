@@ -99,7 +99,7 @@ and call depth are capped. A script that errors or returns an unknown name yield
 
 | Key | Meaning |
 | --- | --- |
-| `popover.width`, `popover.max_height` | Popover size in logical pixels [440, 720]. |
+| `popover.width`, `popover.max_height` | Popover size in logical pixels [440, 720]: always `width` wide, and as tall as its content up to `max_height`, growing and shrinking with it. A reload applies a new value at once. |
 | `popover.hide_on_blur` | Hide the popover when it loses focus [true]. |
 | `theme_css` | Path to a `.css` file (at most 256 KiB) layered over the built-in theme [`""`]. |
 | `launch_at_login` | Register a login item. The checkbox in Settings and the tray menu set the OS login item and mirror its state here [false]. |

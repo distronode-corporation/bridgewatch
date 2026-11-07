@@ -19,7 +19,8 @@ Notifications are for news, so bridgewatch says each thing once:
   push fanning out across watches) are shown as one, "bridgewatch: 5 updates", quoting
   the first three. The CLI's `watch` still prints every one.
 - **Pause notifications** in the tray menu silences them for 1 hour or until you resume,
-  and the popover says so, with a Resume button. A pause lasts until the app quits.
+  and the popover says so, with a Resume button; the tray submenu then reads
+  **Notifications paused** and offers **Resume** too. A pause lasts until the app quits.
   What arrives while paused is not saved up for later.
 - **Secondary watches never notify**, and each kind can be turned off per watch
   (`[watches.notify]`).

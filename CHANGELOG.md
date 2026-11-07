@@ -311,6 +311,18 @@ Breaking first, and
   refused with its error and nothing is sent. A file edited while the app is not running
   is not seen as a move: the token is tied to the host the file names when it is first
   used, as before.
+- **Linux: the popover fits its content and takes `ui.popover.width`.** GTK held a
+  popover that is not resizable at the size it opened with, 440 by 720 (1000 with the
+  token strip, past the 720 cap), so it never grew, shrank or narrowed. It is now as tall
+  as its content up to `ui.popover.max_height`, in both directions, and as wide as
+  `ui.popover.width`, and a reload applies a new width or cap at once. The popover still
+  cannot be dragged to another size.
+- **Linux: the tray says when notifications are paused.** The **Pause notifications**
+  submenu kept that label, and **Resume** stayed greyed out, in the menu the panel reads,
+  so a paused tray looked unpaused. The menu is now rebuilt when the pause starts or ends.
+- **The setup wizard's review says "the token you pasted" only when one was.** Re-running
+  it with the stored token kept said a pasted token was going into the keychain; it now
+  says the stored token is kept.
 
 ## [1.3.0] - 2026-11-06
 

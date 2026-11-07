@@ -46,9 +46,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# The Tauri configs a build reads: the base file, and the overlay release.yml
-# passes with `--config`, which would override the base if it set a version.
-TAURI_CONFIGS = ("src-tauri/tauri.conf.json", "src-tauri/tauri.licenses.conf.json")
+# The Tauri configs a build reads: the base file, the Linux overlay Tauri
+# merges on Linux, and the overlay release.yml passes with `--config`; either
+# overlay would override the base if it set a version.
+TAURI_CONFIGS = (
+    "src-tauri/tauri.conf.json",
+    "src-tauri/tauri.linux.conf.json",
+    "src-tauri/tauri.licenses.conf.json",
+)
 
 
 def cargo_version() -> str:
