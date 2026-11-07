@@ -465,6 +465,13 @@ The wizard's steps:
    when the token is a project access token or lacks the `read_api` scope; on GitHub it
    lists a classic token's scopes and warns when `repo` is missing, see
    [Tokens for GitHub](#tokens-for-github).
+   **One-click setup:** once the sign-in or Test connection succeeds, the step lists the
+   account's ten most recently active projects (or repositories), newest first, with the
+   top three ticked. Untick any, then **Watch N projects**: each gets the best deploy
+   marker from the step 4 ranking, steps 2 to 4 are skipped, and Finish writes all of
+   them at once (the first is primary unless the file has one; the rest are secondary).
+   A project the file already watches on that branch is not added again. **Next** sets
+   up one project step by step instead.
 2. **Project.** Pick from the projects (or repositories) the token can list, or type an
    id, a `group/project` path or a project URL on GitLab, or `owner/repo` or a
    repository URL on GitHub. A GitLab project access token cannot list projects, so it

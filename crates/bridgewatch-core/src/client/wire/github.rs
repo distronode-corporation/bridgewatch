@@ -324,6 +324,10 @@ pub struct Repository {
     /// Link to the repository.
     #[serde(default)]
     pub html_url: Option<String>,
+    /// When something was last pushed to it. `GET /user/repos?sort=pushed`
+    /// orders by this field.
+    #[serde(default)]
+    pub pushed_at: Option<String>,
 }
 
 impl From<Repository> for model::Project {
@@ -334,6 +338,7 @@ impl From<Repository> for model::Project {
             name: r.name,
             default_branch: r.default_branch,
             web_url: r.html_url,
+            last_activity_at: r.pushed_at,
         }
     }
 }

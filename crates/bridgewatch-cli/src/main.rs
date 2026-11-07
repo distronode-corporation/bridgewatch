@@ -734,6 +734,7 @@ fn init(config_args: &ConfigArgs, args: InitArgs) -> Outcome {
         notify: None,
         launch_at_login: None,
         live_secs: args.live_secs,
+        watches: Vec::new(),
     };
 
     let built = if kept {

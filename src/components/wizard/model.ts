@@ -10,7 +10,17 @@
 
 import type { OwnTokenStatus } from "../../lib/own-token";
 import { PROVIDER_DEFAULTS, cliName, defaultBaseUrl, providerName } from "../../lib/providers";
-import type { NotifyAnswers, ProjectRef, Provider, TokenSource, WizardAnswers, WizardStepId } from "./api";
+import { relativeAge } from "../../lib/format";
+import type {
+  NotifyAnswers,
+  ProjectRef,
+  Provider,
+  QuickWatch,
+  RecentProject,
+  TokenSource,
+  WizardAnswers,
+  WizardStepId,
+} from "./api";
 
 export type StepId = WizardStepId | "review";
 
@@ -212,6 +222,13 @@ export interface Draft {
   notify: NotifyAnswers;
   launchAtLogin: boolean;
   liveSecs: number;
+
+  /**
+   * One-click setup: the watches "Watch N projects" chose, or null for the
+   * step-by-step wizard. While set, the project, watch and deploy steps are
+   * skipped and the save writes all of these at once.
+   */
+  quick: QuickWatch[] | null;
 }
 
 export function emptyDraft(provider: Provider = "gitlab"): Draft {
@@ -248,6 +265,7 @@ export function emptyDraft(provider: Provider = "gitlab"): Draft {
     notify: { deployed: true, blocking_failure: true, finished: false },
     launchAtLogin: false,
     liveSecs: defaultLiveSecs(provider),
+    quick: null,
   };
 }
 
@@ -542,7 +560,24 @@ export function answersOf(draft: Draft): WizardAnswers {
     notify: { ...draft.notify },
     launch_at_login: draft.launchAtLogin,
     live_secs: draft.liveSecs,
+    // Only for a one-click setup, so a step-by-step payload is unchanged.
+    ...(draft.quick && draft.quick.length > 0 ? { watches: draft.quick.map((w) => ({ ...w })) } : {}),
   };
+}
+
+/**
+ * A one-click row's optional label, "active 3h ago", from the provider's own
+ * timestamp. Empty when the row has none (or it does not parse): a label
+ * only, and absent data shows nothing.
+ */
+export function activeLabel(row: Pick<RecentProject, "last_activity_at">, now: number): string {
+  const age = relativeAge(row.last_activity_at ?? null, now);
+  return age ? `active ${age} ago` : "";
+}
+
+/** Whether a one-click row can be watched: an empty repository has no branch to follow. */
+export function watchable(row: Pick<RecentProject, "default_branch">): boolean {
+  return !!row.default_branch;
 }
 
 /** Field → message. Empty means the step may be left. */

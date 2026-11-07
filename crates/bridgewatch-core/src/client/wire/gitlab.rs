@@ -285,6 +285,10 @@ pub struct Project {
     /// Link to the project.
     #[serde(default)]
     pub web_url: Option<String>,
+    /// When the project last saw activity. Part of the simple representation
+    /// `GET /projects?simple=true` returns.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
 }
 
 impl From<Project> for model::Project {
@@ -295,6 +299,7 @@ impl From<Project> for model::Project {
             name: p.name,
             default_branch: p.default_branch,
             web_url: p.web_url,
+            last_activity_at: p.last_activity_at,
         }
     }
 }

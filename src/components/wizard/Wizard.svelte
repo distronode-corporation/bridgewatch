@@ -21,6 +21,7 @@
   import DeployStep from "./DeployStep.svelte";
   import PreferencesStep from "./PreferencesStep.svelte";
   import ReviewStep from "./ReviewStep.svelte";
+  import QuickSetup from "./QuickSetup.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import {
     diagnosticsOf,
@@ -34,6 +35,8 @@
     type ProjectListing,
     type ProjectSummary,
     type Provider,
+    type QuickWatch,
+    type RecentListing,
     type StepIssue,
     type WizardAnswers,
     type WizardApi,
@@ -71,9 +74,11 @@
     onSkip?: () => void;
     /** Sign-in commands. Absent: "Sign in with ..." is not offered. */
     oauth?: OAuthApi;
+    /** The clock the one-click list's "active" labels read. */
+    now?: () => number;
   }
 
-  let { api, initial = null, onFinish, onSkip, oauth }: Props = $props();
+  let { api, initial = null, onFinish, onSkip, oauth, now = Date.now }: Props = $props();
 
   // The draft is seeded once; later changes to `initial` do not reset a form in progress.
   const seed = (): Draft => (initial ? draftFromAnswers(initial) : emptyDraft());
@@ -212,8 +217,11 @@
     delete errors.token;
     // It finished for what it STARTED with; if the form moved on while the
     // code was pending, it does not count.
-    if (forgetSignInIfMoved())
+    if (forgetSignInIfMoved()) {
       errors.token = "The instance or client id changed while you were signing in. Sign in again.";
+      return;
+    }
+    void loadRecent();
   }
 
   function clientIdChanged() {
@@ -405,6 +413,7 @@
       identity = result;
       testError = null;
       testKey = key;
+      void loadRecent();
     } catch (error) {
       identity = null;
       testError = messageOf(error);
@@ -413,6 +422,103 @@
       testing = false;
     }
   }
+
+  // --- step 1, after a sign-in: one-click setup ------------------------------
+  let recent = $state<RecentListing | null>(null);
+  /** The connection `recent` was listed for: a list belongs to the account that made it. */
+  let recentKey = $state<string | null>(null);
+  let recentLoading = $state(false);
+  let recentError = $state<string | null>(null);
+  let recentNow = $state(0);
+  /** Project id → ticked, seeded from the core's `ticked`. */
+  let ticks = $state<Record<number, boolean>>({});
+  let quickBusy = $state(false);
+  let recentSeq = 0;
+  /** The connection the last request was for; its loading line and error belong to it alone. */
+  let recentAsked = $state<string | null>(null);
+  const shownRecent = $derived(recentKey === connKey ? recent : null);
+  const shownRecentLoading = $derived(recentLoading && recentAsked === connKey);
+  const shownRecentError = $derived(recentAsked === connKey ? recentError : null);
+
+  /**
+   * The one-click list, once per connection: a sign-in or a passed Test
+   * connection asks for it, and asking again for the same account sends
+   * nothing (one list call per account).
+   */
+  async function loadRecent() {
+    if (!api.recentProjects) return;
+    const key = connKey;
+    if (recentKey === key && recent !== null) return;
+    const seq = ++recentSeq;
+    recentAsked = key;
+    recentLoading = true;
+    recentError = null;
+    try {
+      const result = await live((c) => api.recentProjects!(c));
+      if (seq !== recentSeq || result === null) return;
+      recent = result;
+      recentKey = key;
+      recentNow = now();
+      ticks = Object.fromEntries(
+        result.mode === "projects" ? result.projects.map((p) => [p.id, p.ticked]) : [],
+      );
+      // It lands under the sign-in or Test connection result, often below the
+      // fold of the account step: bring it into view.
+      await tick();
+      body?.querySelector<HTMLElement>('[data-slot="quick-setup"]')?.scrollIntoView?.({ block: "nearest" });
+    } catch (error) {
+      if (seq !== recentSeq) return;
+      recent = null;
+      recentKey = null;
+      recentError = messageOf(error);
+    } finally {
+      if (seq === recentSeq) recentLoading = false;
+    }
+  }
+
+  /**
+   * "Watch N projects": the ticked rows become watches. Each takes its best
+   * deploy marker from the deploy step's own ranking (`suggestDeployMarkers`,
+   * the first suggestion), or none when nothing ranks or the read fails; then
+   * the wizard goes to Preferences, and Finish writes every watch at once.
+   */
+  async function quickSetup() {
+    const listing = shownRecent;
+    if (quickBusy || !listing || listing.mode !== "projects") return;
+    await settleInstance();
+    const stepErrors = validateStep("account", draft);
+    errors = stepErrors;
+    if (Object.keys(stepErrors).length > 0) return void focusInvalid();
+    if (!(await ensureCommandAck())) return;
+    const rows = listing.projects.filter((p) => p.default_branch && ticks[p.id]);
+    if (rows.length === 0) return;
+    quickBusy = true;
+    try {
+      const watches: QuickWatch[] = [];
+      for (const row of rows) {
+        const project = projectRefFor(draft.provider, row);
+        const ref = row.default_branch as string;
+        let markers: string[] = [];
+        try {
+          const found = await live((c) => api.suggestDeployMarkers(c, project, ref));
+          if (found === null) return;
+          const best = found.suggestions[0];
+          if (best) markers = [best.name];
+        } catch {
+          // No marker is a real answer; the watch reports "succeeded" until one is added.
+        }
+        watches.push({ project, path: row.path, ref_name: ref, deploy_markers: markers, listed_by: listing.listed_by });
+      }
+      draft.quick = watches;
+      delete errors.watches;
+      await goTo(STEPS.findIndex((s) => s.id === "preferences"));
+    } finally {
+      quickBusy = false;
+    }
+  }
+
+  /** The one-click steps skipped: project, watch and deploy. */
+  const QUICK_SKIPS = new Set(["project", "watch", "deploy"]);
 
   // --- step 2: project -----------------------------------------------------
   let listing = $state<ProjectListing | null>(null);
@@ -670,7 +776,12 @@
     advancing = true;
     try {
       const id = step.id;
-      if (id === "account") await settleInstance();
+      // Next on the account step is the step-by-step path: a one-click
+      // choice made earlier is dropped.
+      if (id === "account") {
+        draft.quick = null;
+        await settleInstance();
+      }
       if (id === "project" && draft.projectInput.trim() && !inputMatchesProject()) {
         if (!(await resolve())) return void focusInvalid();
       }
@@ -685,7 +796,16 @@
   }
 
   function back() {
-    if (index > 0) void goTo(index - 1);
+    if (index === 0) return;
+    let target = index - 1;
+    while (draft.quick && target > 0 && QUICK_SKIPS.has(STEPS[target].id)) target--;
+    void goTo(target);
+  }
+
+  /** The stepper: a one-click setup stays one only while no skipped step is opened. */
+  function select(stepIndex: number) {
+    if (draft.quick && QUICK_SKIPS.has(STEPS[stepIndex].id)) draft.quick = null;
+    void goTo(stepIndex);
   }
 
   function submit(event: SubmitEvent) {
@@ -694,7 +814,7 @@
     else void next();
   }
 
-  const busy = $derived(advancing || saving || skipping);
+  const busy = $derived(advancing || saving || skipping || quickBusy);
 </script>
 
 <!-- One column, at most 560px, with the window's own padding (no second p-4).
@@ -707,7 +827,7 @@
   data-slot="wizard"
   data-step={step.id}
 >
-  <Stepper steps={STEPS} current={index} onSelect={(i) => void goTo(i)} label="Setup steps" />
+  <Stepper steps={STEPS} current={index} onSelect={select} label="Setup steps" />
 
   <form class="flex min-h-0 flex-1 flex-col gap-4" onsubmit={submit} novalidate>
     <h2 id="wizard-heading" class="text-[15px]/[20px] font-semibold outline-none" tabindex="-1" bind:this={heading}>
@@ -732,6 +852,18 @@
           onSignedIn={signedIn}
           onClientIdChange={clientIdChanged}
           onModePick={modePicked}
+        />
+        <QuickSetup
+          provider={draft.provider}
+          listing={shownRecent}
+          loading={shownRecentLoading}
+          loadError={shownRecentError}
+          {ticks}
+          onToggle={(id, on) => (ticks = { ...ticks, [id]: on })}
+          onSetUp={() => void quickSetup()}
+          busy={quickBusy}
+          error={errors.watches}
+          now={recentNow}
         />
       {:else if step.id === "project"}
         <ProjectStep
@@ -763,6 +895,7 @@
           {saveError}
           {tokenNote}
           primary={draft.primary}
+          quick={!!draft.quick}
           onprimary={(primary) => {
             draft.primary = primary;
             void loadPreview();
