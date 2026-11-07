@@ -61,9 +61,26 @@ body line with a bracket.
   titles, then "and N more"; the popover has the rest.
 - **Pause notifications** in the tray menu, for one hour or until resumed. While notifications
   are paused, the popover says so and offers **Resume**. A pause lasts until the app quits.
+- **Clicking a failure notification opens the failed job's page** (`notify.click`, which
+  was computed but never delivered). macOS reports the click, and so does a Linux desktop
+  whose notification server offers actions; Windows only while the toast is on screen,
+  not from the Action Center. The link goes through the same host check as every other
+  link the app opens.
+- **The first failing line.** A failed job says why: GitLab's failure reason in words
+  ("script failure"), or on GitHub the first failure annotation of the job's check run
+  (`src/parser.rs:142: assertion failed`). It is the second line of a failure
+  notification (`{{failure_line}}` in templates), and it is shown under the failed job in
+  the popover. On GitHub it costs one request per failed run, for its first failed job,
+  and nothing for a passing run or on later polls. A fine-grained token needs Checks: read
+  for it; without it the line is left out and nothing else changes.
+- **Copy failure as Markdown** on a failed job in the popover: the job, where it ran, the
+  first failing line in a code block, and the link.
 
 ### Changed
 
+- **The default notification body** adds the first failing line on a second line when
+  there is one. A custom `notify.body` is unchanged. `bridgewatch watch` prints the two
+  lines as one, joined by `; `.
 - **A failing pipeline is announced once.** The blocking-failure notice is now kept per
   pipeline, and "finished: failed" is not sent after it. The ledger an older version
   wrote is read as before, so an upgrade does not repeat a notice.

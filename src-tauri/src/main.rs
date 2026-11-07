@@ -175,6 +175,14 @@ fn main() {
                 let _ = notifier.request_permission();
             }
 
+            // A click on a notification opens its target (`notify.click`).
+            // ⛔ Registered before the poller starts: the plugin reports
+            // actions only for notifications shown while a handler exists.
+            let clicked = app.handle().clone();
+            let _ = notifier.on_action(move |performed| {
+                poller::on_notification_action(&clicked, performed);
+            });
+
             let handle = app.handle().clone();
             let watch_state = state.clone();
             match config::watch(&watch_state.config_path.clone(), move || {

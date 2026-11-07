@@ -622,6 +622,9 @@ async fn jobs_paginate_by_following_the_link_header() {
             "<https://api.github.com/repositories/1374862400/actions/runs/4001/jobs?page=1>; rel=\"prev\", \
              <https://api.github.com/repositories/1374862400/actions/runs/4001/jobs?page=1>; rel=\"first\"",
         ),
+        // The failed job on page 2 is the run's first failed job, so its
+        // annotations are asked for once every page is in.
+        Reply::ok("[]"),
     ]);
     let (client, _) = github_client(transport.clone());
 
@@ -630,11 +633,15 @@ async fn jobs_paginate_by_following_the_link_header() {
     assert_eq!(jobs.len(), 2, "both pages");
     assert_eq!(jobs[1].name, "publish");
     let paths = transport.paths();
-    assert_eq!(paths.len(), 2);
+    assert_eq!(paths.len(), 3);
     assert_eq!(
         paths[1],
         "/repositories/1374862400/actions/runs/4001/jobs?filter=latest&per_page=100&page=2",
         "the rewritten URL is used exactly as it was given: {paths:?}"
+    );
+    assert_eq!(
+        paths[2],
+        "/repos/acme-corp/monorepo/check-runs/9002/annotations?per_page=50"
     );
 }
 
@@ -1235,6 +1242,8 @@ async fn a_failed_deploy_marker_reds_a_github_watch() {
     let transport = Scripted::new(vec![
         Reply::ok(&runs_body("completed", "failure")),
         Reply::ok(&jobs),
+        // The failed marker's annotations: none, which costs the line only.
+        Reply::ok("[]"),
     ]);
     let config = github_config("");
     let mut poller = github_poller(&config, transport);
@@ -1277,4 +1286,193 @@ async fn a_run_awaiting_a_maintainers_approval_is_parked_rather_than_failed_or_g
     assert!(row.parent_jobs.is_empty(), "the run has no jobs at all");
     assert!(row.failures.is_empty());
     assert!(!row.live, "nobody is working on it until a human acts");
+}
+
+// ---------------------------------------------------------------------------
+// The first failing line: check-run annotations
+// ---------------------------------------------------------------------------
+
+/// One of the hand-written bodies in `tests/fixtures/gh-annotations/` (see its
+/// README: not a recording).
+fn gh_fixture(name: &str) -> String {
+    let path = support::fixtures_dir().join("gh-annotations").join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+const ANNOTATIONS_OF_9102: &str =
+    "/repos/acme-corp/monorepo/check-runs/9102/annotations?per_page=50";
+
+fn annotation_requests(paths: &[String]) -> Vec<&String> {
+    paths
+        .iter()
+        .filter(|p| p.contains("/annotations"))
+        .collect()
+}
+
+/// ⛔ A run with failed jobs costs ONE more request, for its FIRST failed job
+/// (`test`, not `lint` too), and the job then carries the first failing line:
+/// the first `failure` annotation that points into the repository, so neither
+/// GitHub's own "Process completed with exit code" on `.github` nor the
+/// warning before it.
+#[tokio::test]
+async fn a_failed_run_costs_one_annotation_request_and_its_job_says_the_first_failing_line() {
+    let transport = Scripted::new(vec![
+        Reply::ok(&gh_fixture("gh-runs.json")),
+        Reply::ok(&gh_fixture("gh-jobs.json")),
+        Reply::ok(&gh_fixture("gh-annotations.json")),
+    ]);
+    let config = github_config("");
+    let mut poller = github_poller(&config, transport.clone());
+
+    let snapshot = poller.tick().await.snapshot;
+
+    let paths = transport.paths();
+    assert_eq!(
+        annotation_requests(&paths),
+        [ANNOTATIONS_OF_9102],
+        "{paths:?}"
+    );
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    let row = &snapshot.watches[0].rows[0];
+    let failure_of = |name: &str| {
+        row.parent_jobs
+            .iter()
+            .find(|j| j.name == name)
+            .unwrap_or_else(|| panic!("{name} is listed"))
+            .failure
+            .clone()
+    };
+    assert_eq!(
+        failure_of("test").as_deref(),
+        Some("src/parser.rs:142: assertion `left == right` failed"),
+        "the first line of the message, at the file and line it points at"
+    );
+    assert_eq!(failure_of("lint"), None, "not asked: one request per run");
+    assert_eq!(failure_of("build"), None);
+    assert_eq!(failure_of("publish"), None);
+    assert_eq!(
+        bridgewatch_core::notify::first_failure_line(row).as_deref(),
+        Some("src/parser.rs:142: assertion `left == right` failed"),
+        "and it is the row's first failing line, which the notification says"
+    );
+}
+
+/// ⛔ Polling costs nothing extra: the run is still going, so the poller asks
+/// for its jobs again on the next tick, and the failed job's annotations are
+/// answered from memory because that job finished at the same time as before.
+#[tokio::test]
+async fn the_annotations_of_a_job_are_fetched_once_across_polls() {
+    let transport = Scripted::new(vec![
+        Reply::ok(&gh_fixture("gh-runs.json")),
+        Reply::ok(&gh_fixture("gh-jobs.json")),
+        Reply::ok(&gh_fixture("gh-annotations.json")),
+        Reply::ok(&gh_fixture("gh-runs.json")),
+        Reply::ok(&gh_fixture("gh-jobs.json")),
+        Reply::ok(&gh_fixture("gh-runs.json")),
+        Reply::ok(&gh_fixture("gh-jobs.json")),
+    ]);
+    let config = github_config("");
+    let mut poller = github_poller(&config, transport.clone());
+
+    poller.tick().await;
+    poller.tick().await;
+    let third = poller.tick().await.snapshot;
+
+    let paths = transport.paths();
+    assert_eq!(
+        paths.len(),
+        7,
+        "three ticks of runs + jobs, and ONE annotations call: {paths:?}"
+    );
+    assert_eq!(annotation_requests(&paths), [ANNOTATIONS_OF_9102]);
+    let test = third.watches[0].rows[0]
+        .parent_jobs
+        .iter()
+        .find(|j| j.name == "test")
+        .unwrap();
+    assert_eq!(
+        test.failure.as_deref(),
+        Some("src/parser.rs:142: assertion `left == right` failed"),
+        "the remembered answer, not a blank"
+    );
+}
+
+/// A passing run never asks: no failed job, no annotations request.
+#[tokio::test]
+async fn a_passing_run_costs_no_annotation_request() {
+    let jobs = jobs_body(&[job_body(
+        9001,
+        "build",
+        "success",
+        "2026-09-18T09:00:30Z",
+        "2026-09-18T09:01:00Z",
+    )]);
+    let transport = Scripted::new(vec![
+        Reply::ok(&runs_body("completed", "success")),
+        Reply::ok(&jobs),
+    ]);
+    let config = github_config("");
+    let mut poller = github_poller(&config, transport.clone());
+
+    let snapshot = poller.tick().await.snapshot;
+
+    assert!(annotation_requests(&transport.paths()).is_empty());
+    assert_eq!(transport.paths().len(), 2);
+    assert_eq!(snapshot.watches[0].rows[0].parent_jobs[0].failure, None);
+}
+
+/// ⚠️ A fine-grained token with Actions but not Checks gets a 403 for the
+/// annotations. That costs the line, never the verdict, and it is not asked
+/// again on the next poll; a rate limit IS asked again, since it says "later".
+#[tokio::test]
+async fn an_unreadable_annotation_list_costs_the_line_and_never_the_verdict() {
+    let transport = Scripted::new(vec![
+        Reply::ok(&gh_fixture("gh-runs.json")),
+        Reply::ok(&gh_fixture("gh-jobs.json")),
+        Reply::status(403),
+        Reply::ok(&gh_fixture("gh-runs.json")),
+        Reply::ok(&gh_fixture("gh-jobs.json")),
+    ]);
+    let config = github_config("");
+    let mut poller = github_poller(&config, transport.clone());
+
+    let first = poller.tick().await.snapshot;
+    let second = poller.tick().await.snapshot;
+
+    assert_eq!(
+        annotation_requests(&transport.paths()).len(),
+        1,
+        "{:?}",
+        transport.paths()
+    );
+    for snapshot in [&first, &second] {
+        assert!(snapshot.errors.is_empty(), "{:?}", snapshot.errors);
+        let row = &snapshot.watches[0].rows[0];
+        assert_eq!(row.failures, ["test", "lint"]);
+        assert!(row.parent_jobs.iter().all(|j| j.failure.is_none()));
+    }
+
+    let limited = Scripted::new(vec![
+        Reply::ok(&gh_fixture("gh-runs.json")),
+        Reply::ok(&gh_fixture("gh-jobs.json")),
+        Reply::status(429).retry_after(1),
+        Reply::ok(&gh_fixture("gh-runs.json")),
+        Reply::ok(&gh_fixture("gh-jobs.json")),
+        Reply::ok(&gh_fixture("gh-annotations.json")),
+    ]);
+    let mut poller = github_poller(&config, limited.clone());
+    poller.tick().await;
+    let after = poller.tick().await.snapshot;
+    assert_eq!(
+        annotation_requests(&limited.paths()).len(),
+        2,
+        "{:?}",
+        limited.paths()
+    );
+    assert!(
+        after.watches[0].rows[0]
+            .parent_jobs
+            .iter()
+            .any(|j| j.failure.is_some())
+    );
 }

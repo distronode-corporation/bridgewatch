@@ -196,6 +196,11 @@ impl From<Job> for model::Job {
             // second place to get it wrong.
             duration: None,
             web_url: j.html_url,
+            // GitLab's reason code has no GitHub twin. Why a job failed comes
+            // from its check run's annotations, which the client fetches for
+            // a failed run's first failed job only (see `pipeline_jobs`).
+            failure_reason: None,
+            annotation: None,
         }
     }
 }
@@ -234,6 +239,40 @@ impl Step {
     /// The step's outcome, folded onto the shared vocabulary.
     pub fn status(&self) -> Status {
         Status::from_github(&self.status, self.conclusion.as_deref())
+    }
+}
+
+/// One annotation of a check run, from
+/// `GET /repos/{owner}/{repo}/check-runs/{id}/annotations`. A job's id IS its
+/// check run's id.
+///
+/// ⛔ Only the four fields the first failing line is made of. `title` is left
+/// out because it repeats the message, and `raw_details` because it can carry
+/// a whole log excerpt; `blob_href` names a commit, not a person, and is not
+/// needed either, since a click goes to the job page.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Annotation {
+    /// The file, relative to the repository root.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// The first line it points at.
+    #[serde(default)]
+    pub start_line: Option<u64>,
+    /// `notice`, `warning` or `failure`.
+    #[serde(default)]
+    pub annotation_level: Option<String>,
+    /// What it said.
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+impl From<Annotation> for model::Annotation {
+    fn from(a: Annotation) -> Self {
+        Self {
+            path: a.path,
+            start_line: a.start_line,
+            message: a.message.unwrap_or_default(),
+        }
     }
 }
 

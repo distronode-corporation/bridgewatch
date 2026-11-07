@@ -78,7 +78,8 @@ use super::log::{self as joblog, JobActionOutcome, LOG_TAIL_LINES, LogTail};
 use super::wire::github as wire;
 use super::{CiClient, ClientError, ListQuery};
 use crate::config::{Account, ProjectRef, Provider};
-use crate::model::{Bridge, Job, Pipeline, Project, TokenInfo, User};
+use crate::model::{Annotation, Bridge, Job, Pipeline, Project, TokenInfo, User};
+use crate::status::Status;
 use crate::token::Secret;
 
 /// The REST API version this client pins.
@@ -104,6 +105,26 @@ pub const ACCEPT: &str = "application/vnd.github+json";
 /// largest run either research lane measured was 108.
 pub const JOB_PAGES: u32 = 10;
 
+/// How many jobs' annotations one client remembers. A failed run's first
+/// failed job is the only one ever asked about, so this is that many failed
+/// runs; past it the memo starts again, which costs one request per failed run
+/// still on screen.
+pub const ANNOTATION_MEMO: usize = 256;
+
+/// The annotations already asked for, by job id, with the `completed_at` they
+/// were asked for at.
+///
+/// ⛔ This is what makes polling cost nothing extra. A settled run is served
+/// from the poller's own cache and never reaches `pipeline_jobs`; a run that is
+/// still going does, every tick, and its failed job's annotations cannot change
+/// once that job has completed. Keyed on the finish time as well as the id, so
+/// a job GitHub re-runs under the same id is asked about again once it has
+/// finished again. An answer that was an error is remembered as "nothing" too
+/// (a fine-grained token without the Checks permission gets a 403 on every
+/// one), except for the errors that say "later": a rate limit, a 5xx, a
+/// dropped connection.
+type AnnotationMemo = std::collections::HashMap<u64, (Option<String>, Option<Annotation>)>;
+
 /// A client for one GitHub account.
 ///
 /// Cloning is cheap: the transport, the ring and the token are shared.
@@ -120,6 +141,8 @@ pub struct GitHubClient {
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
     /// The account's `actions`: whether a re-run may be SENT.
     actions: bool,
+    /// The annotations already fetched. See [`AnnotationMemo`].
+    annotations: Arc<Mutex<AnnotationMemo>>,
 }
 
 impl std::fmt::Debug for GitHubClient {
@@ -144,6 +167,7 @@ impl GitHubClient {
             groups: Arc::new(Mutex::new(group::Memo::default())),
             clock: Arc::new(Utc::now),
             actions: account.actions,
+            annotations: Arc::default(),
         }
     }
 
@@ -241,6 +265,10 @@ impl GitHubClient {
     /// bumps `run_attempt` on the SAME run id, and the alternative value
     /// (`all`) would list every superseded attempt's jobs as though they were
     /// still current.
+    ///
+    /// A run with a failed job also gets that job's first failure annotation
+    /// (see [`Self::annotate`]): one more request for a failed run, none for a
+    /// passing one, and none again for the same job on a later poll.
     pub async fn pipeline_jobs(
         &self,
         project: &ProjectRef,
@@ -263,11 +291,73 @@ impl GitHubClient {
                  this run's job list is incomplete"
             );
         }
-        Ok(pages
+        let mut jobs: Vec<Job> = pages
             .into_iter()
             .flat_map(|p| p.jobs)
             .map(Into::into)
-            .collect())
+            .collect();
+        self.annotate(project, &mut jobs).await;
+        Ok(jobs)
+    }
+
+    /// Attach the first failure annotation of the run's first failed job.
+    ///
+    /// ⚠️ ONE job per run, by design: the first failing line is what a
+    /// notification and a copied failure lead with, and a run with twelve
+    /// failed shards must not cost twelve requests a poll. "First" is the jobs
+    /// list's order, which is the order GitHub created them in. The job's id
+    /// is its check run's id, so the request is
+    /// `GET /repos/{repo}/check-runs/{id}/annotations`.
+    ///
+    /// Never fails the jobs call: an annotation is a nicety on top of a job
+    /// list that is already right, and a token that may read Actions but not
+    /// Checks still gets every verdict.
+    async fn annotate(&self, project: &ProjectRef, jobs: &mut [Job]) {
+        let Some(job) = jobs.iter_mut().find(|j| j.status == Status::Failed) else {
+            return;
+        };
+        let at = job.finished_at.clone();
+        if let Some((seen_at, cached)) = self.annotation_memo().get(&job.id)
+            && *seen_at == at
+        {
+            job.annotation = cached.clone();
+            return;
+        }
+        let Ok(repo) = repo_segment(project) else {
+            return;
+        };
+        let path = format!(
+            "/repos/{repo}/check-runs/{}/annotations?per_page=50",
+            job.id
+        );
+        let found = match self.get_json::<Vec<wire::Annotation>>(&path).await {
+            Ok((list, _)) => first_failure(list),
+            Err(
+                e @ (ClientError::RateLimited { .. }
+                | ClientError::Server { .. }
+                | ClientError::Transport(_)),
+            ) => {
+                // Asked again next poll: none of these is an answer.
+                tracing::debug!(job = job.id, error = %e, "annotations not fetched; will ask again");
+                return;
+            }
+            Err(e) => {
+                tracing::debug!(job = job.id, error = %e, "annotations not readable; not asked again");
+                None
+            }
+        };
+        let mut memo = self.annotation_memo();
+        if memo.len() >= ANNOTATION_MEMO {
+            memo.clear();
+        }
+        memo.insert(job.id, (at, found.clone()));
+        job.annotation = found;
+    }
+
+    /// The annotation memo, whatever a panicking holder left in it: it is a
+    /// cache, and the worst a half-written entry does is cost a request.
+    fn annotation_memo(&self) -> std::sync::MutexGuard<'_, AnnotationMemo> {
+        self.annotations.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// `GET /user`: who the token authenticates as.
@@ -613,6 +703,28 @@ impl GitHubClient {
             },
         ))
     }
+}
+
+/// The annotation a first failing line is made of: the first `failure` one
+/// that points into the repository, else the first `failure` one at all
+/// (GitHub's own "Process completed with exit code 1." is on `.github`).
+/// Warnings and notices are not why a job failed, and are never chosen.
+fn first_failure(list: Vec<wire::Annotation>) -> Option<Annotation> {
+    let failures: Vec<wire::Annotation> = list
+        .into_iter()
+        .filter(|a| a.annotation_level.as_deref() == Some("failure"))
+        .filter(|a| a.message.as_deref().is_some_and(|m| !m.trim().is_empty()))
+        .collect();
+    let in_repo = failures.iter().position(|a| {
+        a.path
+            .as_deref()
+            .is_some_and(|p| !p.is_empty() && p != ".github")
+    });
+    let chosen = match in_repo {
+        Some(i) => failures.into_iter().nth(i),
+        None => failures.into_iter().next(),
+    };
+    chosen.map(Into::into)
 }
 
 /// The path of the runs listing a query asks for.
