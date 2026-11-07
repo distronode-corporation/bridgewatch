@@ -217,6 +217,12 @@ async fn a_failed_owner_lookup_is_the_watchs_error_and_is_asked_again() {
         account = "lab"
         project = 1
         mine = true
+
+        [[watches]]
+        id = "also-mine"
+        account = "lab"
+        project = 2
+        mine = true
     "#;
     let t = Arc::new(ScriptTransport::new());
     t.reply("/personal_access_tokens/self", 200, GITLAB_SELF_NO_EXPIRY);
@@ -228,6 +234,18 @@ async fn a_failed_owner_lookup_is_the_watchs_error_and_is_asked_again() {
     assert!(first.snapshot.watches[0].error.is_some());
     assert_eq!(count(&t, "/projects/1/pipelines"), 0, "no unfiltered list");
     assert!(first.list_errors.contains_key("mine"));
+    assert!(first.snapshot.watches[1].error.is_some());
+    assert_eq!(
+        count(&t, "/user"),
+        1,
+        "one lookup for both watches: {:?}",
+        paths(&t)
+    );
+    assert!(
+        first.polled.is_empty(),
+        "no list went out: {:?}",
+        first.polled
+    );
     // Not remembered: the next ask asks again, and that answer is kept.
     let client = p.clients()["lab"].clone();
     assert_eq!(client.owner().await.unwrap(), "alice");
@@ -717,5 +735,88 @@ fn a_fixed_token_is_warned_about_again_and_a_new_expiry_is_a_new_warning() {
         said(&[expiring(200 * HOUR)], &[], &mut ledger),
         1,
         "a new token"
+    );
+}
+
+/// A GitHub token first seen refused, with its expiry header already in the
+/// past, is expired rather than invalid: the header is read on a 401 too.
+#[tokio::test]
+async fn a_github_401_carrying_a_past_expiry_is_expired() {
+    let now = wall();
+    let t = Arc::new(ScriptTransport::new());
+    let mut refused = HttpResponse::plain(401, r#"{"message":"Bad credentials"}"#);
+    refused.token_expiration = Some(header_time(now - 2 * HOUR));
+    t.reply_with("/actions/runs", refused);
+    let raw = GITHUB_MINE.replace("mine = true", "");
+    let mut p = poller(&raw, &Memory::default(), &t, &Clock::at(now));
+    let tick = p.tick().await;
+    assert_eq!(
+        health(&tick, "gh").map(|h| h.state),
+        Some(HealthState::Expired)
+    );
+}
+
+/// `/personal_access_tokens/self` refusing a credential it cannot describe
+/// (a CI job token) says nothing about the credential: no health is
+/// reported, even on a tick whose own list did not get an answer.
+#[tokio::test]
+async fn a_refused_expiry_lookup_is_not_a_refused_token() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/personal_access_tokens/self",
+        401,
+        r#"{"message":"401 Unauthorized"}"#,
+    );
+    t.reply("/projects/1/pipelines", 503, "{}");
+    let mut p = poller(GITLAB_ONE, &Memory::default(), &t, &Clock::at(wall()));
+    let tick = p.tick().await;
+    assert!(
+        tick.snapshot.tokens.is_empty(),
+        "{:?}",
+        tick.snapshot.tokens
+    );
+    assert!(token_notes(&tick).is_empty());
+}
+
+/// A credential accepted while its expiry warns is still accepted: a later
+/// refusal is said again; and an expiry with no date is forgotten on
+/// recovery, so the next one is said too. An accepted token past its date
+/// is titled "expires now", never "expires in 0s".
+#[test]
+fn accepted_while_expiring_still_clears_refusals_and_titles_say_now() {
+    use bridgewatch_core::notify::{NotifyLedger, token_notifications};
+    let h = |state, expires_at: Option<i64>, warn_hours| TokenHealth {
+        account: "lab".into(),
+        state,
+        of: ExpiryOf::Token,
+        expires_at,
+        warn_hours,
+        message: "m".into(),
+    };
+    let mut ledger = NotifyLedger::default();
+    let lab = ["lab".to_string()];
+    let invalid = h(HealthState::Invalid, None, None);
+    assert_eq!(
+        token_notifications(std::slice::from_ref(&invalid), &[], &mut ledger, 0).len(),
+        1
+    );
+    let expiring = h(HealthState::Expiring, Some(10), Some(24));
+    let said = token_notifications(std::slice::from_ref(&expiring), &lab, &mut ledger, 10);
+    assert_eq!(said.len(), 1);
+    assert_eq!(said[0].title, "lab: the token expires now");
+    assert_eq!(
+        token_notifications(std::slice::from_ref(&invalid), &[], &mut ledger, 20).len(),
+        1
+    );
+
+    let dateless = h(HealthState::Expired, None, None);
+    assert_eq!(
+        token_notifications(std::slice::from_ref(&dateless), &[], &mut ledger, 0).len(),
+        1
+    );
+    assert_eq!(token_notifications(&[], &lab, &mut ledger, 0).len(), 0);
+    assert_eq!(
+        token_notifications(&[dateless], &[], &mut ledger, 0).len(),
+        1
     );
 }

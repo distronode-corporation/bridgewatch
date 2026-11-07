@@ -15,13 +15,19 @@ import TokenHealthStrip from "./TokenHealthStrip.svelte";
 const base = fixture as unknown as Snapshot;
 
 let host: HTMLDivElement;
-let component: Record<string, unknown> | null = null;
+// Every mount of a test, so one that mounts twice leaves nothing behind.
+const mounted: { component: Record<string, unknown>; host: HTMLDivElement }[] = [];
 
 afterEach(() => {
-  if (component) void unmount(component);
-  component = null;
-  host?.remove();
+  for (const m of mounted.splice(0)) {
+    void unmount(m.component);
+    m.host.remove();
+  }
 });
+
+function track(component: Record<string, unknown>) {
+  mounted.push({ component, host });
+}
 
 function health(state: TokenHealth["state"], extra: Partial<TokenHealth> = {}): TokenHealth {
   return {
@@ -38,7 +44,7 @@ function health(state: TokenHealth["state"], extra: Partial<TokenHealth> = {}): 
 function strip(tokens: TokenHealth[] | undefined, onsettings?: () => void) {
   host = document.createElement("div");
   document.body.append(host);
-  component = mount(TokenHealthStrip, { target: host, props: { tokens, onsettings } });
+  track(mount(TokenHealthStrip, { target: host, props: { tokens, onsettings } }));
   flushSync();
   return host.querySelector<HTMLElement>("[data-slot=token-health]");
 }
@@ -47,6 +53,7 @@ describe("TokenHealthStrip", () => {
   it("is absent when every token is healthy", () => {
     expect(strip(undefined)).toBeNull();
     expect(strip([])).toBeNull();
+    expect(mounted).toHaveLength(2);
   });
 
   it("warns (a status, amber) while a token is only expiring", () => {
@@ -79,10 +86,12 @@ describe("Popover, token health", () => {
   it("draws the strip from the snapshot's tokens", () => {
     host = document.createElement("div");
     document.body.append(host);
-    component = mount(Popover, {
-      target: host,
-      props: { snapshot: { ...base, tokens: [health("expired")] }, now: Date.parse("2026-09-17T15:00:00Z") },
-    });
+    track(
+      mount(Popover, {
+        target: host,
+        props: { snapshot: { ...base, tokens: [health("expired")] }, now: Date.parse("2026-09-17T15:00:00Z") },
+      }),
+    );
     flushSync();
     expect(host.querySelector("[data-slot=token-health] [data-line]")?.textContent?.trim()).toBe(
       'Account "lab": expired.',
@@ -92,7 +101,7 @@ describe("Popover, token health", () => {
   it("draws no strip for a snapshot without tokens", () => {
     host = document.createElement("div");
     document.body.append(host);
-    component = mount(Popover, { target: host, props: { snapshot: base, now: Date.parse("2026-09-17T15:00:00Z") } });
+    track(mount(Popover, { target: host, props: { snapshot: base, now: Date.parse("2026-09-17T15:00:00Z") } }));
     flushSync();
     expect(host.querySelector("[data-slot=token-health]")).toBeNull();
   });

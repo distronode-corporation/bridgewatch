@@ -301,10 +301,22 @@ impl GitLabClient {
     /// Its `expires_at` is also recorded as the credential's expiry
     /// ([`crate::health`]): a token without one does not expire.
     pub async fn token_self(&self) -> Result<TokenInfo, ClientError> {
-        let info: TokenInfo = self
+        // ⚠ A credential that is not a personal, project or group access
+        // token (a CI job token, say) can be answered 401 here and nowhere
+        // else, so this endpoint's
+        // refusal is not the credential's: what was known before is kept,
+        // and the watches' own requests say whether it works (cubic, #66).
+        let before = self.conn.probe().get().refused;
+        let info: TokenInfo = match self
             .get_json::<wire::TokenInfo>("/personal_access_tokens/self")
-            .await?
-            .into();
+            .await
+        {
+            Ok(info) => info.into(),
+            Err(e) => {
+                self.conn.probe().restore_refusal(before);
+                return Err(e);
+            }
+        };
         match info
             .expires_at
             .as_deref()

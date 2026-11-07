@@ -113,6 +113,12 @@ impl CredentialProbe {
         self.with(|o| o.refused = Some(why));
     }
 
+    /// Put the refusal back as it was: for a request whose 401 says nothing
+    /// about the credential (an endpoint the credential kind cannot use).
+    pub fn restore_refusal(&self, refused: Option<Refusal>) {
+        self.with(|o| o.refused = refused);
+    }
+
     /// The provider stated an expiry.
     pub fn expires(&self, expiry: Expiry) {
         self.with(|o| o.expiry = Some(expiry));
@@ -196,7 +202,11 @@ pub fn assess(account: &str, observed: &Observed, now: i64) -> Option<TokenHealt
         Some(Refusal::Revoked) => HealthState::Revoked,
         Some(Refusal::Expired) => HealthState::Expired,
         Some(Refusal::SignInEnded) | Some(Refusal::Invalid) if past => HealthState::Expired,
-        Some(Refusal::SignInEnded) => HealthState::Revoked,
+        // Withdrawn only when the sign-in still had time left: with no end
+        // stated, a refused refresh may just as well have run out, so it is
+        // said as not accepted, which claims neither (cubic, #66).
+        Some(Refusal::SignInEnded) if expiry.is_some() => HealthState::Revoked,
+        Some(Refusal::SignInEnded) => HealthState::Invalid,
         Some(Refusal::Invalid) => HealthState::Invalid,
         None => {
             // ⚠ Accepted at or past the stated expiry is still "expiring", in
@@ -252,18 +262,18 @@ fn sentence(account: &str, state: HealthState, of: ExpiryOf, at: Option<i64>, no
             when(at)
         ),
         (HealthState::Expired, Some(at)) => format!(
-            "Account \"{account}\": the {what} expired {}; nothing is polled until you {fix}.",
+            "Account \"{account}\": the {what} expired {}; its requests are refused until you {fix}.",
             when(at)
         ),
         (HealthState::Expiring | HealthState::Expired, None) => format!(
-            "Account \"{account}\": the {what} has expired; nothing is polled until you {fix}."
+            "Account \"{account}\": the {what} has expired; its requests are refused until you {fix}."
         ),
         (HealthState::Revoked, _) => format!(
-            "Account \"{account}\": the {what} was revoked; nothing is polled until you {fix}."
+            "Account \"{account}\": the {what} was revoked; its requests are refused until you {fix}."
         ),
         (HealthState::Invalid, _) => format!(
-            "Account \"{account}\": the server does not accept the {what} (401); nothing is \
-             polled until you {fix}."
+            "Account \"{account}\": the server does not accept the {what}; its requests \
+             are refused until you {fix}."
         ),
     }
 }
@@ -405,7 +415,11 @@ mod tests {
         );
         assert_eq!(with(Refusal::Revoked, Some(50)), Some(HealthState::Revoked));
         assert_eq!(with(Refusal::Expired, None), Some(HealthState::Expired));
-        assert_eq!(with(Refusal::SignInEnded, None), Some(HealthState::Revoked));
+        assert_eq!(with(Refusal::SignInEnded, None), Some(HealthState::Invalid));
+        assert_eq!(
+            with(Refusal::SignInEnded, Some(500)),
+            Some(HealthState::Revoked)
+        );
         assert_eq!(
             with(Refusal::SignInEnded, Some(99)),
             Some(HealthState::Expired)

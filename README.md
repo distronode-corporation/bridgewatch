@@ -800,9 +800,9 @@ notification, never repeated. An expiry warns twice: 72 hours before, and 24 hou
 
 | Credential | Where the expiry comes from | What it costs |
 | --- | --- | --- |
-| GitLab personal, project or group access token | `expires_at` from `GET /personal_access_tokens/self` (00:00 UTC on that date) | one request per token, once |
+| GitLab personal, project or group access token | `expires_at` from `GET /personal_access_tokens/self` (00:00 UTC on that date) | one request per token each time the app starts or reloads its configuration, asked again only after a rate limit, a server error or a dropped connection, and only on a tick where that account polls |
 | GitHub personal access token with an expiry | the `github-authentication-token-expiration` response header | nothing: it is on every response |
-| A sign-in | the refresh token's expiry, stored with the sign-in | nothing |
+| A sign-in | the refresh token's expiry, stored with the sign-in; for a sign-in that cannot renew itself, the access token's | nothing |
 
 GitLab's 401 says whether a token was revoked or has expired. GitHub's says only "Bad
 credentials", so a GitHub token reads as expired when it is refused past a known expiry,

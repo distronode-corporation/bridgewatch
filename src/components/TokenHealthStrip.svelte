@@ -11,7 +11,7 @@
   let { tokens = [], onsettings }: Props = $props();
 
   // Expiring is a warning (amber, a status); expired, revoked and invalid
-  // mean nothing is polled for that account (red, an alert).
+  // mean that account's requests are refused (red, an alert).
   const broken = $derived(tokens.some((t) => t.state !== "expiring"));
 </script>
 

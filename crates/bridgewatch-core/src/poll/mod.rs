@@ -528,6 +528,24 @@ impl Poller {
         // what the popover's rows, the notification order and the debug pane's
         // ring all follow; it must not become the order the responses arrived
         // in. Two watches on one account share that client's in-flight bound.
+        // Who each account's `mine` watches are held to, asked ONCE per
+        // account this tick, before they run side by side: a lookup that
+        // fails is that one failure for all of them, not one request per
+        // watch (cubic, #66). Remembered by the client once it succeeds.
+        let mut owners: HashMap<String, Result<String, ClientError>> = HashMap::new();
+        for (state, turn) in self.watches.iter().zip(&turns) {
+            if !state.watch.mine
+                || !matches!(turn, Turn::Poll)
+                || owners.contains_key(&state.watch.account)
+            {
+                continue;
+            }
+            if let Some(client) = self.clients.get(&state.watch.account) {
+                owners.insert(state.watch.account.clone(), client.owner().await);
+            }
+        }
+        let owners = &owners;
+
         let clients = &self.clients;
         let script = self.script.as_deref();
         let polled = in_order(
@@ -537,7 +555,12 @@ impl Poller {
                 .filter(|(_, turn)| matches!(turn, Turn::Poll))
                 .filter_map(|(state, _)| {
                     let client = clients.get(&state.watch.account)?;
-                    Some(async move { poll_watch(client.as_ref(), state, script).await })
+                    let owner = state
+                        .watch
+                        .mine
+                        .then(|| owners.get(&state.watch.account).cloned())
+                        .flatten();
+                    Some(async move { poll_watch(client.as_ref(), state, script, owner).await })
                 }),
         )
         .await;
@@ -578,10 +601,14 @@ impl Poller {
                     }
                 }
                 Turn::Poll => {
-                    let Some((mut view, list_error)) = polled.next() else {
+                    let Some((mut view, list_error, sent)) = polled.next() else {
                         continue;
                     };
-                    polled_ids.insert(state.watch.id.clone());
+                    // Only when the list request went out: a `mine` watch
+                    // whose owner could not be read sent nothing.
+                    if sent {
+                        polled_ids.insert(state.watch.id.clone());
+                    }
                     if let Some(e) = list_error {
                         list_errors.insert(state.watch.id.clone(), e);
                     }
@@ -615,10 +642,13 @@ impl Poller {
                 continue;
             }
             let observed = client.credential();
-            match crate::health::assess(name, &observed, now_secs) {
-                Some(health) => tokens.push(health),
-                None if observed.refused.is_none() => healthy.push(name.clone()),
-                None => {}
+            // Accepted is healthy for the ledger even while an expiry warns:
+            // a later refusal must be said again (cubic, #66).
+            if observed.refused.is_none() {
+                healthy.push(name.clone());
+            }
+            if let Some(health) = crate::health::assess(name, &observed, now_secs) {
+                tokens.push(health);
             }
         }
         notifications.extend(token_notifications(
@@ -908,9 +938,19 @@ async fn poll_watch(
     client: &dyn CiClient,
     state: &mut WatchState,
     script: Option<&VerdictScript>,
-) -> (WatchView, Option<ClientError>) {
+    owner: Option<Result<String, ClientError>>,
+) -> (WatchView, Option<ClientError>, bool) {
     let project = state.watch.project.clone();
-    let listed = match mine(client, &state.watch, list_query(&state.watch, &state.rules)).await {
+    let query = list_query(&state.watch, &state.rules);
+    // `owner` is `Some` for a `mine` watch only: who to hold the list to,
+    // or why that could not be said (and then no list is sent).
+    let query = match owner {
+        None => Ok(query),
+        Some(Ok(login)) => Ok(query.for_user(Some(&login))),
+        Some(Err(e)) => Err(e),
+    };
+    let sent = query.is_ok();
+    let listed = match query {
         Ok(query) => client
             .list_pipelines(&project, &query)
             .await
@@ -946,7 +986,7 @@ async fn poll_watch(
                     actions: state.actions,
                 },
             };
-            return (view, Some(e));
+            return (view, Some(e), sent);
         }
     };
     state.policy.on_success();
@@ -1049,6 +1089,7 @@ async fn poll_watch(
             actions: state.actions,
         },
         None,
+        true,
     )
 }
 

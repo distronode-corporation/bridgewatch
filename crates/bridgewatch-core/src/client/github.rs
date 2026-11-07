@@ -553,6 +553,11 @@ impl GitHubClient {
             parts.push(format!("event={}", urlencoding::encode(event)));
         }
         parts.push(format!("head_sha={}", urlencoding::encode(&row.sha)));
+        // Held to the same actor as the list that made the row, or a `mine`
+        // group would gain other people's runs as bridges (cubic, #66).
+        if let Some(user) = &query.user {
+            parts.push(format!("actor={}", urlencoding::encode(user)));
+        }
         parts.push("exclude_pull_requests=true".to_string());
         parts.push("per_page=100".to_string());
         parts.push("page=1".to_string());

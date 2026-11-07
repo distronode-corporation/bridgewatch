@@ -782,11 +782,14 @@ pub fn token_notifications(
 ) -> Vec<Notification> {
     use crate::health::{ExpiryOf, HealthState, WARN_HOURS};
     for account in healthy {
-        for state in [HealthState::Revoked, HealthState::Invalid] {
-            if ledger
-                .tokens
-                .remove(&format!("{account}|{}", state.as_str()))
-            {
+        // `expired|-` too: an expiry nobody stated is no date to key on, so
+        // a later one would be silenced by this one (cubic, #66).
+        for key in [
+            format!("{account}|{}", HealthState::Revoked.as_str()),
+            format!("{account}|{}", HealthState::Invalid.as_str()),
+            format!("{account}|{}|-", HealthState::Expired.as_str()),
+        ] {
+            if ledger.tokens.remove(&key) {
                 ledger.dirty = true;
             }
         }
@@ -830,6 +833,9 @@ pub fn token_notifications(
             ExpiryOf::SignIn => "sign-in",
         };
         let title = match (h.state, h.expires_at) {
+            (HealthState::Expiring, Some(at)) if at <= now => {
+                format!("{}: the {what} expires now", h.account)
+            }
             (HealthState::Expiring, Some(at)) => format!(
                 "{}: the {what} expires in {}",
                 h.account,

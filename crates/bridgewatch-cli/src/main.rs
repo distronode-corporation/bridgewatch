@@ -1059,6 +1059,8 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
             };
             let expiries =
                 auth::own_expiries(&config, account.as_deref(), &store, &transport_for).await;
+            // Read the clock after the lookups, which can take a while each.
+            let now = bridgewatch_core::oauth::now();
             auth::status(
                 &config,
                 account.as_deref(),

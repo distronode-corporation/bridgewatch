@@ -315,7 +315,7 @@ pub fn status(
                          auth login --account {name})",
                         span(at - now)
                     ),
-                    Some(at) if s.can_refresh && at <= now => format!(
+                    Some(at) if at <= now => format!(
                         "{renews}; the sign-in ended at {}: sign in again (bridgewatch auth login \
                          --account {name})",
                         stamp(at)
@@ -359,7 +359,8 @@ pub enum OwnExpiry {
     At(i64),
     /// GitLab: it has no expiry.
     Never,
-    /// GitHub sent no expiry header: a classic token without one.
+    /// GitHub sent no expiry header it could be read from (a classic token
+    /// without one sends none).
     NotStated,
     /// The server refused it, and why.
     Refused(Refusal),
@@ -402,7 +403,16 @@ pub async fn own_expiries(
         }) {
             Err(e) => OwnExpiry::Unread(e.to_string()),
             Ok(client) => {
-                let read = client.read_token_expiry().await;
+                let mut read = client.read_token_expiry().await;
+                // GitLab's `/personal_access_tokens/self` refusing says nothing
+                // about the token itself (a job token is refused there too),
+                // so the core does not count it; ask `/user`, which every
+                // usable token may read, what the refusal is.
+                if matches!(read, Err(ClientError::Auth { .. }))
+                    && client.credential().refused.is_none()
+                {
+                    read = client.current_user().await.map(|_| ());
+                }
                 let seen = client.credential();
                 match (read, seen.refused, seen.expiry) {
                     (_, Some(why), _) => OwnExpiry::Refused(why),
@@ -461,10 +471,7 @@ fn own_line(
                 Some(OwnExpiry::Never) => (true, format!("{bound}; it does not expire")),
                 Some(OwnExpiry::NotStated) => (
                     true,
-                    format!(
-                        "{bound}; GitHub states no expiry for it (a classic token made without \
-                         one)"
-                    ),
+                    format!("{bound}; GitHub stated no usable expiry for it"),
                 ),
                 Some(OwnExpiry::Refused(why)) => {
                     let why = match why {
@@ -1125,6 +1132,12 @@ pub(crate) mod tests {
             bridgewatch_core::client::HttpResponse::plain(200, r#"{"login":"octocat","id":1}"#);
         user.token_expiration = Some("2027-01-01 00:00:00 UTC".into());
         t.reply_with("/user", user);
+        // gone's own /user, asked after its expiry lookup is refused.
+        t.reply(
+            "/user",
+            401,
+            r#"{"error":"invalid_token","error_description":"Token was revoked. You have to re-authorize from the user."}"#,
+        );
         // In account order: gone, then lab.
         t.reply(
             "/personal_access_tokens/self",
@@ -1140,9 +1153,17 @@ pub(crate) mod tests {
         let transport_for = move |_: &Account| Ok(transport.clone() as Arc<dyn Transport>);
         let expiries = own_expiries(&config, None, &store, &transport_for).await;
         assert_eq!(
-            t.requests().len(),
-            3,
-            "one each, and none for the 1.x value"
+            t.requests()
+                .iter()
+                .map(|r| r.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "/user",
+                "/personal_access_tokens/self",
+                "/user",
+                "/personal_access_tokens/self"
+            ],
+            "one each, a /user for the refused one, and none for the 1.x value"
         );
 
         // 2026-11-18 00:00 UTC: lab has 48 h left.

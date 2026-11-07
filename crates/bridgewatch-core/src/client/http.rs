@@ -538,23 +538,23 @@ impl Conn {
                 None => self.probe.never_expires(),
             }
         }
+        // The header first, on a refusal too: a token first seen after its
+        // stated end is then "expired", not "invalid" (cubic, #66).
+        if sign_in.is_none()
+            && let Ok(r) = result
+            && let Some(at) = r
+                .token_expiration
+                .as_deref()
+                .and_then(crate::health::parse_github_expiration)
+            && (at - chrono::Utc::now().timestamp()).abs() > crate::health::HEADER_NOW_SLACK_SECS
+        {
+            self.probe.expires(Expiry {
+                at,
+                of: ExpiryOf::Token,
+            });
+        }
         match result {
-            Ok(r) if (200..300).contains(&r.status) || r.status == 304 => {
-                self.probe.accepted();
-                if sign_in.is_none()
-                    && let Some(at) = r
-                        .token_expiration
-                        .as_deref()
-                        .and_then(crate::health::parse_github_expiration)
-                    && (at - chrono::Utc::now().timestamp()).abs()
-                        > crate::health::HEADER_NOW_SLACK_SECS
-                {
-                    self.probe.expires(Expiry {
-                        at,
-                        of: ExpiryOf::Token,
-                    });
-                }
-            }
+            Ok(r) if (200..300).contains(&r.status) || r.status == 304 => self.probe.accepted(),
             Ok(r) if r.status == 401 => self.probe.refused(match self.provider {
                 crate::config::Provider::Gitlab => crate::health::gitlab_refusal(&r.body),
                 crate::config::Provider::Github => Refusal::Invalid,
