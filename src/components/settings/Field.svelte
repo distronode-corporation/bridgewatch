@@ -150,7 +150,7 @@
   {:else if entry.control === "number"}
     <input type="number" class={NUMBER_INPUT} value={asText} onchange={commitNumber} />
   {:else if entry.control === "select"}
-    <select class={SHORT_SELECT} value={asText} onchange={commitSelect}>
+    <select class={SHORT_SELECT} value={asText} title={asText} onchange={commitSelect}>
       {#each choices as choice (choice)}
         <option value={choice}>{choice === "" ? "(inherit)" : choice}</option>
       {/each}

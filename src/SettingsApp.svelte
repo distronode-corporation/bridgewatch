@@ -291,11 +291,15 @@
 <div class="settings bg-background text-foreground text-ui-body flex h-screen">
   <nav class="sidebar border-border bg-muted/30 flex w-[168px] shrink-0 flex-col gap-2 border-r p-2" aria-label="Settings">
     <div class="flex flex-col gap-0.5" role="tablist" aria-orientation="vertical" aria-label="Settings panes">
+      <!-- ⛔ Only the shown pane is mounted (each mounts its own IPC: sign-in
+           status, the stored token, the editor's draft), so only the selected
+           tab names a panel. Every tab naming one left four aria-controls
+           pointing at nothing (cubic, #65). -->
       {#each PANES as p, index (p.id)}
         <button
           role="tab"
           id={`tab-${p.id}`}
-          aria-controls={`pane-${p.id}`}
+          aria-controls={pane === p.id ? `pane-${p.id}` : undefined}
           aria-selected={pane === p.id}
           tabindex={pane === p.id ? 0 : -1}
           class={[
@@ -392,7 +396,7 @@
         {#if pane === "accounts"}
           <div><AccountsTab {config} onedit={edit} /></div>
         {:else if pane === "watches"}
-          <div><WatchesTab {config} {jobOrder} onedit={edit} onremove={remove} onmove={move} /></div>
+          <div><WatchesTab {config} {jobOrder} onedit={edit} onremove={remove} onmove={move} onadd={add} /></div>
         {:else if pane === "general" || pane === "verdict"}
           {#each PANE_GROUPS[pane] as group (group.tab)}
             <SimpleTab tab={group.tab} title={group.title} {config} onedit={edit} />

@@ -238,12 +238,32 @@ describe("type and width", () => {
   /**
    * Elements asking for a body size other than 13px. The shared primitives are
    * 13/18 themselves, so nothing maps text-sm (14px) or the input's old
-   * text-base (16px) down any more, and neither may appear.
+   * text-base (16px) down any more, and neither may appear, under any
+   * variant: `md:text-sm`, `lg:text-base` and `dark:sm:text-lg` count too
+   * (cubic, #65: only `md:` was matched).
    */
+  const OVERSIZED = /(^|\s)([\w-]+:)*text-(sm|base|lg|xl|[2-9]xl)(\s|$)/;
   const oversized = () =>
     all('[data-slot="wizard"] [class]')
-      .filter((el) => /(^|\s)(md:)?text-(sm|base|lg|xl)(\s|$)/.test(el.getAttribute("class") ?? ""))
+      .filter((el) => OVERSIZED.test(el.getAttribute("class") ?? ""))
       .map((el) => `${el.tagName.toLowerCase()}.${el.getAttribute("class")}`);
+
+  it("counts a body size under any breakpoint or state variant", async () => {
+    await github(fakeOAuth());
+    expect(oversized()).toEqual([]);
+    const probe = document.createElement("span");
+    q('[data-slot="wizard"]')!.append(probe);
+    for (const cls of ["lg:text-base", "sm:text-sm", "md:text-sm", "dark:lg:text-xl", "text-2xl"]) {
+      probe.className = `m-0 ${cls}`;
+      expect(oversized(), cls).toEqual([`span.m-0 ${cls}`]);
+    }
+    // Sizes that are not body text, or are 13px, are not counted.
+    for (const cls of ["text-xs", "text-[13px]/[18px]", "lg:text-xs", "text-ui-body", "text-small-caps"]) {
+      probe.className = cls;
+      expect(oversized(), cls).toEqual([]);
+    }
+    probe.remove();
+  });
   /** Controls with a fixed width that would clip longer text at the narrowest window. */
   const fixedWidths = () =>
     all('[data-slot="wizard"] input, [data-slot="wizard"] select')

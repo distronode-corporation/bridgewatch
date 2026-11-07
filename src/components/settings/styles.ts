@@ -31,7 +31,12 @@ export const CHECK = "accent-primary size-4 cursor-pointer";
  * line of their own under the label.
  */
 export const NUMBER_INPUT = `${CONTROL} h-7 w-24 min-w-0 shrink-0 px-2.5`;
-export const SHORT_SELECT = `${CONTROL} h-7 w-48 min-w-0 max-w-full shrink-0 px-2`;
+/**
+ * As wide as its longest option, at least 12rem, never wider than the row
+ * (cubic, #65: a fixed 12rem clipped long account names). An option longer
+ * than the row is cut by the control; its full text is the select's title.
+ */
+export const SHORT_SELECT = `${CONTROL} h-7 w-auto min-w-48 max-w-full shrink px-2`;
 /** The new-account form's provider: two short words. */
 export const PROVIDER_SELECT = `${CONTROL} h-7 w-32 min-w-0 shrink-0 px-2`;
 /** A long control: on its own line under the label. */

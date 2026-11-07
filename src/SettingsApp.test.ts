@@ -733,3 +733,51 @@ describe("SettingsApp, a refused form edit on the Advanced pane (Seer, #65)", ()
     expect(host.querySelector(".main > .diagnostics")).toBe(null);
   });
 });
+
+describe("SettingsApp, keyboard and screen-reader wiring (cubic, #65)", () => {
+  const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
+
+  /** Every element Tab stops on, in document order (jsdom has no layout, so this is the DOM's order). */
+  const tabOrder = () =>
+    [...host.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href], [tabindex]")].filter(
+      (el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled,
+    );
+
+  it("never names a panel that does not exist, on any pane", async () => {
+    // ⛔ Only the shown pane is mounted. Every tab carried aria-controls, so
+    // four of them pointed at nothing.
+    const h = await render();
+    for (const label of ["Accounts", "Watches", "General", "Verdict", "Advanced"]) {
+      await h.tab(label);
+      const controls = tabs().filter((t) => t.hasAttribute("aria-controls"));
+      expect(controls.map((t) => t.textContent?.trim()), label).toEqual([label]);
+      for (const t of controls) {
+        const panel = document.getElementById(t.getAttribute("aria-controls")!);
+        expect(panel, label).toBeTruthy();
+        expect(panel!.getAttribute("role")).toBe("tabpanel");
+        expect(panel!.getAttribute("aria-labelledby")).toBe(t.id);
+      }
+    }
+  });
+
+  it("gives an empty Watches pane something to Tab to, after the header and before the footer", async () => {
+    // ⛔ With only text in the empty pane, Tab went from the header's Add watch
+    // straight to the footer: the pane, and what it says, were never reached.
+    shell.config = { ...CONFIG, watches: [] };
+    const h = await render();
+    await h.tab("Watches");
+    const order = tabOrder();
+    const panel = host.querySelector('[role="tabpanel"]')!;
+    const inPanel = order.filter((el) => panel.contains(el));
+    expect(inPanel.map((el) => el.textContent?.trim())).toEqual(["Add watch"]);
+    const at = (el: Element) => order.indexOf(el as HTMLElement);
+    const header = host.querySelector<HTMLElement>("header button.add")!;
+    const footer = host.querySelector<HTMLElement>("footer button")!;
+    expect(at(header)).toBeLessThan(at(inPanel[0]));
+    expect(at(inPanel[0])).toBeLessThan(at(footer));
+    expect(panel.textContent).toContain("No watches yet");
+    inPanel[0].click();
+    await settle();
+    expect(h.ask()?.textContent).toContain("New watch");
+  });
+});

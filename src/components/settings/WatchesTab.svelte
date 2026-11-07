@@ -17,9 +17,11 @@
     onedit: (edits: Edit[]) => void | Promise<void>;
     onremove: (id: string) => void;
     onmove: (id: string, delta: number) => void;
+    /** The empty list's own Add watch: the header's is the same action. */
+    onadd: () => void;
   }
 
-  let { config, jobOrder, onedit, onremove, onmove }: Props = $props();
+  let { config, jobOrder, onedit, onremove, onmove, onadd }: Props = $props();
 
   const watches = $derived((getAt(config, "watches") ?? []) as Record<string, unknown>[]);
   const accounts = $derived(
@@ -146,6 +148,12 @@
   </section>
 {/each}
 
+<!-- ⛔ The empty pane holds something to Tab to. With only text in it, Tab
+     went from the header's Add watch past the pane to the footer, and the
+     sentence saying the list is empty was never reached (cubic, #65). -->
 {#if watches.length === 0}
-  <p class="empty text-muted-foreground text-ui-meta m-0 px-1">No watches yet. Add one, or run the setup wizard.</p>
+  <div class="empty flex flex-wrap items-center gap-2 px-1">
+    <p class="text-muted-foreground text-ui-meta m-0">No watches yet. Add one, or run the setup wizard.</p>
+    <Button variant="outline" size="sm" class="add-empty" onclick={onadd}>Add watch</Button>
+  </div>
 {/if}

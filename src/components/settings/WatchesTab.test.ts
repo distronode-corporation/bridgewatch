@@ -41,6 +41,7 @@ function render(watches = WATCHES) {
     },
     onremove: () => {},
     onmove: () => {},
+    onadd: () => {},
   }) as ComponentProps<typeof WatchesTab>;
   component = mount(WatchesTab, { target: host, props });
   flushSync();
@@ -121,6 +122,7 @@ describe("WatchesTab, keys for the other provider", () => {
       onedit: () => Promise.resolve(),
       onremove: () => {},
       onmove: () => {},
+      onadd: () => {},
       }) as ComponentProps<typeof WatchesTab>;
     component = mount(WatchesTab, { target: host, props });
     flushSync();
@@ -206,5 +208,33 @@ describe("WatchesTab, groups (L2)", () => {
   it("says so when there are no watches", () => {
     render([]);
     expect(host.querySelector(".empty")?.textContent).toContain("No watches yet");
+  });
+});
+
+describe("WatchesTab, a long account name (cubic, #65)", () => {
+  it("sizes the account menu to its names, capped at the row, with the full name as its title", () => {
+    const long = "gitlab.engineering-division.example.com-platform-team";
+    host = document.createElement("div");
+    document.body.append(host);
+    const props = reactive({
+      config: { accounts: { [long]: {} }, watches: [{ id: "w", account: long, project: 1, ref: "main" }] },
+      jobOrder: [[]],
+      onedit: () => Promise.resolve(),
+      onremove: () => {},
+      onmove: () => {},
+      onadd: () => {},
+    }) as ComponentProps<typeof WatchesTab>;
+    component = mount(WatchesTab, { target: host, props });
+    flushSync();
+    const select = [...host.querySelectorAll<HTMLLabelElement>("label.field")]
+      .find((l) => l.querySelector(".label")?.textContent === "Account")!
+      .querySelector("select")!;
+    const cls = select.getAttribute("class") ?? "";
+    // Not a fixed width: as wide as the longest name, at least 12rem, at most the row.
+    expect(cls).not.toMatch(/(^|\s)w-48(\s|$)/);
+    expect(cls).toMatch(/(^|\s)w-auto(\s|$)/);
+    expect(cls).toMatch(/(^|\s)min-w-48(\s|$)/);
+    expect(cls).toMatch(/(^|\s)max-w-full(\s|$)/);
+    expect(select.title).toBe(long);
   });
 });
