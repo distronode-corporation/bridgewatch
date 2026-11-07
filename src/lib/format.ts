@@ -349,3 +349,15 @@ export const TONE_DOT: Record<Tone, string> = {
   blue: "bg-tone-blue",
   grey: "bg-tone-grey",
 };
+
+/**
+ * The paused strip's sentence: "Notifications paused until 14:05" (the
+ * viewer's locale and clock), or "until you resume" for an open-ended pause.
+ * An unreadable instant reads as open-ended rather than as "Invalid Date".
+ */
+export function pausedLine(until: string | null, locale?: string): string {
+  const at = until === null ? Number.NaN : Date.parse(until);
+  if (Number.isNaN(at)) return "Notifications paused until you resume";
+  const time = new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit" }).format(at);
+  return `Notifications paused until ${time}`;
+}

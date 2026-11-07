@@ -465,6 +465,7 @@ name = "bridgewatch-app"
 version = "2.0.0"
 dependencies = [
  "bridgewatch-core",
+ "chrono",
  "dirs 7.0.0",
  "notify",
  "regex",

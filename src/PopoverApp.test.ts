@@ -33,7 +33,7 @@ const snapshot: Snapshot = {
   request_log: [],
 };
 
-const calls = { status: 0, opened: 0, edits: [] as unknown[], resizes: [] as number[] };
+const calls = { status: 0, opened: 0, edits: [] as unknown[], resumes: 0, resizes: [] as number[] };
 
 /** What the shell answers for the two "open" requests; reset per test. */
 const shell = {
@@ -43,6 +43,7 @@ const shell = {
   openWizard: (): Promise<void> => Promise.resolve(),
   applyConfigEdits: (_edits: unknown): Promise<{ ok: boolean; diagnostics: { message: string }[] }> =>
     Promise.resolve({ ok: true, diagnostics: [] }),
+  resumeNotifications: (): Promise<void> => Promise.resolve(),
   resize: (_height: number): void => {},
 };
 
@@ -74,6 +75,10 @@ vi.mock("./lib/ipc", () => ({
     shell.resize(height);
     return Promise.resolve();
   },
+  resumeNotifications: () => {
+    calls.resumes++;
+    return shell.resumeNotifications();
+  },
 }));
 
 let host: HTMLDivElement;
@@ -92,9 +97,11 @@ beforeEach(() => {
   calls.status = 0;
   calls.opened = 0;
   calls.edits = [];
+  calls.resumes = 0;
   calls.resizes = [];
   shell.resize = () => {};
   shell.status = status;
+  shell.resumeNotifications = () => Promise.resolve();
   shell.applyConfigEdits = () => Promise.resolve({ ok: true, diagnostics: [] });
   shell.pipelinesUrl = () => Promise.resolve(null);
   shell.openExternal = () => Promise.resolve();
@@ -313,6 +320,64 @@ describe("PopoverApp, the crash-report question", () => {
     await settle();
     expect(notice()).toBe("Could not save the crash-report choice: the shell is gone");
     expect(question()).not.toBeNull();
+  });
+});
+
+describe("PopoverApp, paused notifications", () => {
+  async function settle() {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    flushSync();
+  }
+  const strip = () => host.querySelector("[data-slot=notifications-paused]");
+  const resume = () => host.querySelector<HTMLButtonElement>("[data-slot=notifications-paused] [data-action=resume]")!;
+  const notice = () => host.querySelector("[data-slot=popover-notice]")?.textContent?.trim() ?? "";
+
+  it("shows nothing while notifications are on", async () => {
+    for (const notificationsPaused of [undefined, null]) {
+      shell.status = { ...status, notificationsPaused };
+      await render();
+      await settle();
+      expect(strip(), String(notificationsPaused)).toBeNull();
+      void unmount(component!);
+      component = null;
+      host.remove();
+    }
+  });
+
+  it("says the pause lasts until resumed, and Resume ends it once however fast it is clicked", async () => {
+    shell.status = { ...status, notificationsPaused: { until: null } };
+    shell.resumeNotifications = () => {
+      shell.status = { ...status, notificationsPaused: null };
+      return Promise.resolve();
+    };
+    await render();
+    await settle();
+    expect(strip()?.textContent).toContain("Notifications paused until you resume");
+    resume().click();
+    resume().click();
+    await settle();
+    expect(calls.resumes).toBe(1);
+    expect(strip()).toBeNull();
+  });
+
+  it("says when a timed pause runs out", async () => {
+    shell.status = { ...status, notificationsPaused: { until: "2026-11-07T01:05:00Z" } };
+    await render();
+    await settle();
+    expect(strip()?.getAttribute("data-until")).toBe("2026-11-07T01:05:00Z");
+    expect(strip()?.textContent).toMatch(/Notifications paused until \S/);
+    expect(strip()?.textContent).not.toContain("you resume");
+  });
+
+  it("says why when the shell refuses", async () => {
+    shell.status = { ...status, notificationsPaused: { until: null } };
+    shell.resumeNotifications = () => Promise.reject("the shell is gone");
+    await render();
+    await settle();
+    resume().click();
+    await settle();
+    expect(notice()).toBe("Could not resume notifications: the shell is gone");
+    expect(strip()).not.toBeNull();
   });
 });
 

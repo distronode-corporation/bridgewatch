@@ -34,6 +34,9 @@ tracing-appender = "0.2.5"
 # and ledger paths with, named here because a dependency's dependency cannot be
 # used directly.
 dirs = "7.0.0"
+# The "Pause notifications" deadline (`quiet`), as an instant the popover can
+# show. The same crate, version and features the core already resolves.
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
 
 # `tray-icon` and `image-png` are the two features this shell genuinely needs:
 # the tray, and `Image::from_bytes` on the PNG assets in icons/tray.

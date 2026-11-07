@@ -1755,7 +1755,8 @@ async fn a_group_just_inside_the_window_does_not_read_dead_and_does_once_it_clos
         .collect();
     assert_eq!(kinds, ["blocking_failure"]);
     let failure = &third.notifications[0];
-    assert_eq!(failure.key, "6102|blocking_failure|release.yml");
+    // One failure notice per pipeline, whichever jobs it names.
+    assert_eq!(failure.key, "6102|blocking_failure|");
     assert_eq!(
         failure.url.as_deref(),
         Some("https://github.com/acme-corp/monorepo/actions/workflows/release.yml")

@@ -1113,6 +1113,10 @@ pub struct NotifyConfig {
     /// A bridge parked at a manual gate.
     #[serde(default)]
     pub gate_opened: bool,
+    /// A watch that was failing passes again ("fixed again"). It replaces what
+    /// that pipeline would otherwise say on the same tick.
+    #[serde(default = "yes")]
+    pub recovered: bool,
     /// MiniJinja template for the notification title.
     #[serde(default = "default_title")]
     pub title: String,
@@ -1132,6 +1136,7 @@ impl Default for NotifyConfig {
             finished: true,
             started: false,
             gate_opened: false,
+            recovered: true,
             title: default_title(),
             body: default_body(),
             click: ClickTarget::default(),
@@ -1142,8 +1147,11 @@ impl Default for NotifyConfig {
 fn yes() -> bool {
     true
 }
+/// The default title. `kind` is `recovered` on a "fixed again", which keeps
+/// the state word and says so after it.
 fn default_title() -> String {
-    "{{watch.id}} {{sha7}}: {{state}}".to_string()
+    "{{watch.id}} {{sha7}}: {{state}}{% if kind == 'recovered' %}, fixed again{% endif %}"
+        .to_string()
 }
 /// The default body.
 ///

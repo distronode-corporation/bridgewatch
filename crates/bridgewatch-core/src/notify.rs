@@ -15,7 +15,7 @@ use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{ClickTarget, Watch};
-use crate::verdict::{PipelineView, WatchView};
+use crate::verdict::{IconState, PipelineView, WatchView};
 
 /// The kinds of thing bridgewatch will tell you about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -31,6 +31,13 @@ pub enum NotifyKind {
     Started,
     /// A bridge parked at a manual gate.
     GateOpened,
+    /// A watch whose newest settled pipeline had failed now has a newest
+    /// settled pipeline that passed: "fixed again".
+    Recovered,
+    /// Several notifications of one tick, folded into one by [`batch`]. Never
+    /// produced by [`notifications_for`], and never recorded in the ledger:
+    /// each folded notification was recorded under its own key.
+    Batch,
 }
 
 impl NotifyKind {
@@ -42,6 +49,8 @@ impl NotifyKind {
             NotifyKind::Finished => "finished",
             NotifyKind::Started => "started",
             NotifyKind::GateOpened => "gate_opened",
+            NotifyKind::Recovered => "recovered",
+            NotifyKind::Batch => "batch",
         }
     }
 }
@@ -80,6 +89,12 @@ pub struct NotifyLedger {
     /// Watch ids whose first successful tick has happened.
     #[serde(default)]
     pub baselined: BTreeSet<String>,
+    /// Watch ids whose newest settled pipeline failed, which is what a later
+    /// green one is "fixed again" against. Persisted, so a restart between the
+    /// failure and the fix still says so; a ledger written before this field
+    /// existed reads as "nothing failing", which can cost one "fixed again".
+    #[serde(default)]
+    pub failing: BTreeSet<String>,
     /// The pipeline ids each primary watch last had on screen, which trimming
     /// never touches. Rebuilt by every tick, so never written to disk.
     #[serde(skip)]
@@ -243,6 +258,25 @@ impl NotifyLedger {
             self.dirty = true;
         }
     }
+
+    /// Is this watch's newest settled pipeline a failed one?
+    pub fn is_failing(&self, watch: &str) -> bool {
+        self.failing.contains(watch)
+    }
+
+    /// Record whether this watch's newest settled pipeline failed. Returns
+    /// whether it was failing before.
+    fn set_failing(&mut self, watch: &str, failing: bool) -> bool {
+        let was = self.failing.contains(watch);
+        if failing && !was {
+            self.failing.insert(watch.to_string());
+            self.dirty = true;
+        } else if !failing && was {
+            self.failing.remove(watch);
+            self.dirty = true;
+        }
+        was
+    }
 }
 
 /// The dedupe key for one event: `pipeline|kind|sorted job ids`.
@@ -264,11 +298,18 @@ pub fn dedupe_key(pipeline_id: u64, kind: NotifyKind, jobs: &[String]) -> String
 /// between ticks (config order settling once a second marker passed, or a
 /// marker in another child that started earlier) the same push announced its
 /// deploy again. A pipeline deploys once; which job said so is in the body.
-/// `blocking_failure` and `finished` keep their names, because a new failure,
-/// or a different end state, IS news.
+///
+/// ⛔ `blocking_failure` is keyed on the pipeline alone too. It carried the
+/// first three failing names, so every further job that failed in the same
+/// pipeline (a fan-out of shards going red one after another) said "still
+/// failing" again for a pipeline that had already been reported red. A
+/// pipeline is reported failing once; the popover lists the rest.
+/// `finished` keeps its end state, because a different end state IS news.
 fn event_key(pipeline_id: u64, kind: NotifyKind, jobs: &[String]) -> String {
     match kind {
-        NotifyKind::Deployed => dedupe_key(pipeline_id, kind, &[]),
+        NotifyKind::Deployed | NotifyKind::BlockingFailure | NotifyKind::Recovered => {
+            dedupe_key(pipeline_id, kind, &[])
+        }
         _ => dedupe_key(pipeline_id, kind, jobs),
     }
 }
@@ -278,13 +319,40 @@ fn event_key(pipeline_id: u64, kind: NotifyKind, jobs: &[String]) -> String {
 /// A `deployed` key is `"<pid>|deployed|"`, which is also the prefix of every
 /// key a ledger written before the change holds (`"<pid>|deployed|<marker>"`),
 /// so a prefix match honours both and upgrading does not re-announce every
-/// deploy still on screen. The trailing `|` keeps pipeline 12 from matching
+/// deploy still on screen. `blocking_failure` is matched the same way, for
+/// the same reason. The trailing `|` keeps pipeline 12 from matching
 /// pipeline 123.
 fn already_said(ledger: &NotifyLedger, kind: NotifyKind, key: &str) -> bool {
     match kind {
-        NotifyKind::Deployed => ledger.contains_prefix(key),
+        NotifyKind::Deployed | NotifyKind::BlockingFailure => ledger.contains_prefix(key),
         _ => ledger.contains(key),
     }
+}
+
+/// Has this pipeline already been reported failing?
+fn failure_said(ledger: &NotifyLedger, pipeline_id: u64) -> bool {
+    ledger.contains_prefix(&dedupe_key(pipeline_id, NotifyKind::BlockingFailure, &[]))
+}
+
+/// Does this end state say "it failed"?
+fn is_failing_state(state: IconState) -> bool {
+    matches!(state, IconState::Failed | IconState::DeployedWithFailure)
+}
+
+/// Does this end state say "it passed"?
+fn is_passing_state(state: IconState) -> bool {
+    matches!(state, IconState::Deployed | IconState::SucceededNoDeploy)
+}
+
+/// The newest pipeline (by id) that has settled to a pass or a fail.
+///
+/// Running, parked, cancelled and unknown rows say nothing about whether the
+/// watch is red: a cancelled push neither breaks nor fixes it.
+fn newest_settled(view: &WatchView) -> Option<&PipelineView> {
+    view.rows
+        .iter()
+        .filter(|r| !r.live && (is_failing_state(r.state) || is_passing_state(r.state)))
+        .max_by_key(|r| r.id)
 }
 
 /// Build the notifications one watch's rows imply, recording each in the ledger.
@@ -320,6 +388,19 @@ pub fn notifications_for(
     let baselining = !ledger.is_baselined(&watch.id);
     let mut out = Vec::new();
 
+    // "Fixed again" is a WATCH-level fact: the newest settled pipeline passed
+    // where the one before it had failed. Tracked whether or not it is asked
+    // for, so switching `recovered` on later starts from the truth; announced
+    // only after the baseline, so a launch never says it.
+    let recovered_row = match newest_settled(view) {
+        Some(row) => {
+            let was_failing = ledger.set_failing(&watch.id, is_failing_state(row.state));
+            (was_failing && is_passing_state(row.state) && watch.notify.recovered && !baselining)
+                .then_some(row.id)
+        }
+        None => None,
+    };
+
     for row in &view.rows {
         // `finished` is decided last. It overlaps every other kind by
         // construction — a pipeline that deployed is also a pipeline that
@@ -328,12 +409,48 @@ pub fn notifications_for(
         let mut finished: Option<(NotifyKind, Vec<String>, String)> = None;
         let mut said_something = false;
 
-        for (kind, jobs) in candidate_events(watch, row) {
+        // ⛔ "Fixed again" REPLACES what this row would otherwise say on this
+        // tick: a recovering pipeline is also one that deployed or finished,
+        // and two banners for one push is the noise this exists to cut. The
+        // default title still names the state ("deployed, fixed again").
+        let recovering = recovered_row == Some(row.id);
+        // ⛔ And the replacing only works if the deploy has not ALREADY been
+        // said: `deployed` fires while post-deploy jobs still run, a tick or
+        // more before the row settles and can recover, which was two banners
+        // for one push (Seer, #58). On a failing watch a live row's deploy is
+        // held, unrecorded, until the row settles: green, and "fixed again"
+        // replaces it; red, and it fires then beside the failure. A gate is
+        // not live, so a parked row never holds it.
+        let hold_deploy =
+            !baselining && watch.notify.recovered && row.live && ledger.is_failing(&watch.id);
+        let mut events = candidate_events(watch, row);
+        if hold_deploy {
+            events.retain(|(kind, _)| *kind != NotifyKind::Deployed);
+        }
+        if recovering {
+            events.insert(0, (NotifyKind::Recovered, Vec::new()));
+        }
+
+        for (kind, jobs) in events {
             let key = event_key(row.id, kind, &jobs);
             if already_said(ledger, kind, &key) {
                 continue;
             }
             if baselining {
+                ledger.record(key);
+                continue;
+            }
+            if recovering && kind != NotifyKind::Recovered && said_something {
+                ledger.record(key);
+                continue;
+            }
+            // ⛔ A pipeline already reported failing is not reported again as
+            // "finished: failed" when it settles. That second banner is the
+            // "still failing" repeat: same pipeline, same news, minutes later.
+            if kind == NotifyKind::Finished
+                && is_failing_state(row.state)
+                && failure_said(ledger, row.id)
+            {
                 ledger.record(key);
                 continue;
             }
@@ -352,7 +469,17 @@ pub fn notifications_for(
                     out.push(n);
                     said_something = true;
                 }
-                Err(e) => template_failed(watch, &key, &e),
+                Err(e) => {
+                    // ⛔ The failing flag was already cleared above, so an
+                    // unrendered "fixed again" would be retried on a watch
+                    // that no longer reads as failing, and never said
+                    // (Seer, #58). Put it back: the next tick sees the edge
+                    // again, and says it once the template renders.
+                    if kind == NotifyKind::Recovered {
+                        ledger.set_failing(&watch.id, true);
+                    }
+                    template_failed(watch, &key, &e);
+                }
             }
         }
 
@@ -428,10 +555,7 @@ fn candidate_events(watch: &Watch, row: &PipelineView) -> Vec<(NotifyKind, Vec<S
     // config nothing else would ever mention a pipeline somebody cancelled.
     if watch.notify.finished
         && !row.live
-        && !matches!(
-            row.state,
-            crate::verdict::IconState::Unknown | crate::verdict::IconState::ParkedGate
-        )
+        && !matches!(row.state, IconState::Unknown | IconState::ParkedGate)
     {
         events.push((NotifyKind::Finished, vec![row.state.as_str().to_string()]));
     }
@@ -446,10 +570,7 @@ fn candidate_events(watch: &Watch, row: &PipelineView) -> Vec<(NotifyKind, Vec<S
     // this on every push — for a set of jobs the override table exists to say
     // are expected to sit unrun. `parked_gate` is the state README rule 8 names,
     // and it is the one that means somebody has to press something.
-    if watch.notify.gate_opened
-        && row.state == crate::verdict::IconState::ParkedGate
-        && !row.gates.is_empty()
-    {
+    if watch.notify.gate_opened && row.state == IconState::ParkedGate && !row.gates.is_empty() {
         let jobs: Vec<String> = row.gates.iter().take(3).cloned().collect();
         events.push((NotifyKind::GateOpened, jobs));
     }
@@ -540,4 +661,55 @@ fn first_failure_url(row: &PipelineView) -> Option<String> {
                 .find(|b| &b.name == first)
                 .and_then(|b| b.web_url.clone())
         })
+}
+
+/// More notifications than this in one tick are delivered as one.
+pub const BATCH_OVER: usize = 3;
+
+/// Fold a tick's notifications into one when there are more than
+/// [`BATCH_OVER`] of them.
+///
+/// A config reload, a laptop waking up, or a monorepo push fanning out over
+/// several watches can produce a burst, and five banners in a second are read
+/// as none. The folded one names how many there were and quotes the first
+/// [`BATCH_OVER`] titles; the popover has the rest. Its `url` is kept only
+/// when every folded notification pointed at the same place.
+///
+/// The CLI's `watch` does not call this: a line per event is what a script
+/// reading it wants. Each folded notification is already in the ledger under
+/// its own key, so nothing here is recorded.
+pub fn batch(notifications: Vec<Notification>) -> Vec<Notification> {
+    if notifications.len() <= BATCH_OVER {
+        return notifications;
+    }
+    let count = notifications.len();
+    let mut lines: Vec<String> = notifications
+        .iter()
+        .take(BATCH_OVER)
+        .map(|n| n.title.clone())
+        .collect();
+    lines.push(format!("and {} more", count - BATCH_OVER));
+    let first_url = notifications[0].url.clone();
+    let url = notifications
+        .iter()
+        .all(|n| n.url == first_url)
+        .then_some(first_url)
+        .flatten();
+    let mut watches: Vec<&str> = notifications.iter().map(|n| n.watch.as_str()).collect();
+    watches.sort_unstable();
+    watches.dedup();
+    let watch = if watches.len() == 1 {
+        watches[0].to_string()
+    } else {
+        String::new()
+    };
+    vec![Notification {
+        watch,
+        kind: NotifyKind::Batch,
+        pipeline_id: notifications[0].pipeline_id,
+        title: format!("bridgewatch: {count} updates"),
+        body: lines.join("\n"),
+        url,
+        key: String::new(),
+    }]
 }

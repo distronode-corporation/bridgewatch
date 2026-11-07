@@ -8,6 +8,7 @@
 
 mod auth;
 mod render;
+mod wait;
 
 use std::future::Future;
 use std::io::IsTerminal;
@@ -37,7 +38,7 @@ use clap::{Args, Parser, Subcommand};
 /// tell a red pipeline from a typo in its own command line. The error codes
 /// are the BSD `sysexits.h` ones, which nothing here uses for a verdict.
 mod exit {
-    /// `check`/`watch`: deployed, or green with nothing to deploy. Every other
+    /// `check`/`watch`/`wait`: deployed, or green with nothing to deploy. Every other
     /// command: it did what it was asked.
     pub const OK: i32 = 0;
     /// `check`/`watch`: something failed. `fixture scrub --check`: a fixture
@@ -49,7 +50,9 @@ mod exit {
     /// `check`/`watch`: still in flight, parked at a gate, or cancelled.
     pub const PENDING: i32 = 3;
     /// `check`/`watch`: no verdict. Nothing matched, or a request failed with
-    /// nothing cached to fall back on; the errors are printed.
+    /// nothing cached to fall back on; the errors are printed. `wait`: the
+    /// commit's pipeline was skipped, it has none after the grace, or a
+    /// request was refused for good (401, 403, 404).
     pub const UNKNOWN: i32 = 4;
     /// The command line is wrong: clap's own errors, a `--watch` or
     /// `--account` naming nothing configured, or a `fixture scrub` directory
@@ -62,19 +65,23 @@ mod exit {
     /// The configuration file is missing, is not TOML, or does not describe a
     /// workable setup. `EX_CONFIG`.
     pub const CONFIG: i32 = 78;
+    /// `wait --timeout` ran out before the commit's pipeline had a verdict.
+    /// The number `timeout(1)` uses, so a script can treat both alike.
+    pub const TIMEOUT: i32 = 124;
 
     /// The table printed at the foot of `--help`, and the one the README
     /// quotes. A test holds it to the constants above.
     pub const HELP: &str = "\
 Exit codes:
-  0   check/watch: deployed or succeeded_no_deploy; any other command: success
-  1   check/watch: failed; fixture scrub --check: a fixture would change; retry/play: answered no
-  2   check/watch: deployed_with_failure
-  3   check/watch: running, parked_gate or canceled
-  4   check/watch: unknown (nothing matched, or a request failed; errors on stderr)
+  0   check/watch/wait: deployed or succeeded_no_deploy; any other command: success
+  1   check/watch/wait: failed; fixture scrub --check: a fixture would change; retry/play: answered no
+  2   check/watch/wait: deployed_with_failure
+  3   check/watch: running, parked_gate or canceled; wait: parked_gate or canceled, or interrupted
+  4   check/watch: unknown (nothing matched, or a request failed; errors on stderr); wait: skipped, no pipeline after --no-pipeline-grace, or a refused request (401, 403, 404)
   64  usage error: bad arguments, a --watch, --account or job URL that names nothing configured, a fixture scrub directory with no recordings, or retry/play with no terminal and no --yes
   70  any other error (token, fixture, recording, I/O, or a log or job request that failed)
-  78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true";
+  78  the configuration is missing, unreadable or invalid, or retry/play on an account without actions = true
+  124 wait: --timeout ran out before the commit's pipeline had a verdict";
 }
 
 /// A failure, with the exit code it maps to.
@@ -152,6 +159,9 @@ enum Command {
     },
     /// Poll continuously, printing one line per change.
     Watch(WatchArgs),
+    /// Wait for one commit's pipeline on a watch to finish, then exit with its
+    /// verdict code. For scripts and coding agents. Read-only.
+    Wait(wait::WaitArgs),
     /// Sign in with GitHub or GitLab, sign out, or show who is signed in, for
     /// an account whose token source is token = { oauth = .. }.
     Auth {
@@ -432,6 +442,7 @@ async fn run(cli: Cli) -> Outcome {
         Command::Config { action } => config_command(&config, action),
         Command::Check(args) => check(&config, args).await,
         Command::Watch(args) => watch(&config, args).await,
+        Command::Wait(args) => wait::run(&config, args).await,
         Command::Fixture { action } => fixture(&config, action).await,
         Command::Init(args) => init(&config, *args),
         Command::Auth { action } => auth_command(&config, action).await,
@@ -1154,7 +1165,13 @@ fn apply_selection_state(snapshot: &mut Snapshot, selected: &[String]) {
 /// from every verdict and from every error, so a script can tell "could not
 /// see" from "saw green".
 fn exit_code(snapshot: &Snapshot) -> i32 {
-    match snapshot.icon_state {
+    code_for(snapshot.icon_state)
+}
+
+/// The verdict code for one state: what `check` exits with for the tray's
+/// state, and what `wait` exits with for one pipeline's.
+fn code_for(state: IconState) -> i32 {
+    match state {
         IconState::Deployed | IconState::SucceededNoDeploy => exit::OK,
         IconState::Failed => exit::FAILED,
         IconState::DeployedWithFailure => exit::DEPLOYED_WITH_FAILURE,
@@ -1600,6 +1617,7 @@ mod tests {
             exit::USAGE,
             exit::ERROR,
             exit::CONFIG,
+            exit::TIMEOUT,
         ];
         defined.sort_unstable();
         assert_eq!(documented, defined);
