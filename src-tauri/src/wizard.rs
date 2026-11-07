@@ -34,8 +34,8 @@ use bridgewatch_core::poll::{self, PollerError};
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider, TokenProvider};
 use bridgewatch_core::wizard::{
     self, CliTokenDetection, FailureKind, Identity, MarkerSuggestions, ProjectListing,
-    ResolvedProject, StepIssue, SystemKeyringProbe, WizardAnswers, WizardError, WizardFailure,
-    WizardStep,
+    RecentListing, ResolvedProject, StepIssue, SystemKeyringProbe, WizardAnswers, WizardError,
+    WizardFailure, WizardStep,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -100,6 +100,14 @@ pub struct WizardPreview {
     /// The id of the primary watch already in the file, when the new watch was
     /// added as secondary because of it. The review step says so.
     pub secondary_because: Option<String>,
+    /// One-click setup: the ids of the watches the save adds. Absent for the
+    /// step-by-step wizard, so its answer is exactly what it was.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub added: Vec<String>,
+    /// One-click setup: watches the file already had for a project asked for,
+    /// left as they are.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub already_watched: Vec<String>,
 }
 
 /// `save`'s answer: the shell's `Validation`, plus answers the core refused
@@ -362,6 +370,43 @@ pub async fn wizard_list_projects(
     .map_err(fail)
 }
 
+/// Step 1, once a sign-in or Test connection succeeded: the one-click list,
+/// the account's ten most recently active projects with the top three ticked.
+///
+/// ⚠️ It asks who the token is first, as `wizard_list_projects` does, because
+/// a project token cannot usefully list; that is `/user` and the token's own
+/// description, never a second list request.
+#[tauri::command]
+pub async fn wizard_recent_projects(
+    connection: Connection,
+    app: AppHandle,
+) -> Result<Confirmable<RecentListing>, WizardFailure> {
+    let client = match connect(&app, &connection).await? {
+        Ok(c) => c,
+        Err(confirm) => return Ok(Confirmable::NeedsConfirm { confirm }),
+    };
+    recent_for(client.as_ref(), &connection)
+        .await
+        .map(Confirmable::Ready)
+        .map_err(fail)
+}
+
+/// `wizard_recent_projects` once the client exists: who the token is, then
+/// the list, for the connection's own instance.
+async fn recent_for(
+    client: &dyn CiClient,
+    connection: &Connection,
+) -> Result<RecentListing, WizardError> {
+    let identity = wizard::test_connection(client, connection.provider).await?;
+    wizard::recent_projects(
+        client,
+        connection.provider,
+        &identity.token,
+        &connection.base_url,
+    )
+    .await
+}
+
 /// Step 2: resolve a typed id, path or pasted project URL.
 #[tauri::command]
 pub async fn wizard_resolve_project(
@@ -412,6 +457,8 @@ pub fn preview(answers: &WizardAnswers, existing: &str) -> Result<WizardPreview,
         warnings,
         edited_existing: built.edited_existing,
         secondary_because: built.secondary_because,
+        added: built.added,
+        already_watched: built.already_watched,
     })
 }
 
@@ -1130,6 +1177,177 @@ mod tests {
         assert_eq!(
             account.header,
             bridgewatch_core::config::AuthHeader::PrivateToken
+        );
+    }
+
+    /// Answers GitLab's `/user`, its token description and one page of
+    /// projects that claims a second, and records every path.
+    #[derive(Debug, Default)]
+    struct OnePage {
+        paths: Mutex<Vec<String>>,
+    }
+
+    impl bridgewatch_core::client::Transport for OnePage {
+        fn execute<'life0, 'async_trait>(
+            &'life0 self,
+            request: bridgewatch_core::client::HttpRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            bridgewatch_core::client::HttpResponse,
+                            bridgewatch_core::client::ClientError,
+                        >,
+                    > + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            Self: 'async_trait,
+        {
+            self.paths.lock().unwrap().push(request.path.clone());
+            let (body, next_page) = if request.path.starts_with("/projects?") {
+                let rows: Vec<_> = (1..=12u64)
+                    .map(|id| {
+                        serde_json::json!({
+                            "id": id,
+                            "path_with_namespace": format!("g/p{id}"),
+                            "default_branch": "main",
+                            "last_activity_at": format!("2026-10-{id:02}T00:00:00Z"),
+                        })
+                    })
+                    .collect();
+                (
+                    serde_json::Value::Array(rows).to_string(),
+                    Some("2".to_string()),
+                )
+            } else if request.path.starts_with("/personal_access_tokens/self") {
+                (
+                    r#"{"id":1,"name":"t","scopes":["read_api"],"active":true}"#.to_string(),
+                    None,
+                )
+            } else {
+                (
+                    r#"{"id":1,"username":"sean","name":"Sean","bot":false}"#.to_string(),
+                    None,
+                )
+            };
+            Box::pin(async move {
+                Ok(bridgewatch_core::client::HttpResponse {
+                    status: 200,
+                    body,
+                    next_page,
+                    ratelimit_remaining: None,
+                    ratelimit_reset: None,
+                    retry_after: None,
+                    etag: None,
+                    link: None,
+                    oauth_scopes: None,
+                    token_expiration: None,
+                    location: None,
+                    truncated: false,
+                })
+            })
+        }
+    }
+
+    /// The command's composition: who the token is, then ONE list request,
+    /// whatever the account holds, and the list names the connection's own
+    /// server as the account that made it.
+    #[tokio::test]
+    async fn the_one_click_list_costs_one_list_request_per_account() {
+        let conn = Connection {
+            base_url: "https://GitLab.com/".into(),
+            ..conn_gitlab()
+        };
+        let spy = Arc::new(OnePage::default());
+        let client = bridgewatch_core::client::client_for(
+            &account_for(&conn),
+            &Secret::new("not-a-real-token"),
+            spy.clone(),
+            bridgewatch_core::client::RequestRing::new(4),
+        )
+        .unwrap();
+        let RecentListing::Projects {
+            projects,
+            listed_by,
+        } = recent_for(client.as_ref(), &conn).await.unwrap()
+        else {
+            panic!("no list");
+        };
+        assert_eq!(projects.len(), wizard::RECENT_LIMIT);
+        assert_eq!(projects[0].project.id, 12, "newest first");
+        assert_eq!(
+            projects.iter().filter(|p| p.ticked).count(),
+            wizard::PRE_TICKED
+        );
+        assert_eq!(listed_by.origin, "https://gitlab.com");
+        let paths = spy.paths.lock().unwrap().clone();
+        assert_eq!(
+            paths.iter().filter(|p| p.starts_with("/projects?")).count(),
+            1,
+            "{paths:?}"
+        );
+    }
+
+    fn quick_answers(n: u64) -> WizardAnswers {
+        let listed_by =
+            wizard::ListedBy::for_instance(Provider::Gitlab, "https://gitlab.com").unwrap();
+        WizardAnswers {
+            project: None,
+            watch_id: String::new(),
+            deploy_markers: Vec::new(),
+            watches: (1..=n)
+                .map(|id| wizard::QuickWatch {
+                    project: ProjectRef::Id(id),
+                    path: format!("g/p{id}"),
+                    ref_name: "main".into(),
+                    deploy_markers: vec!["deploy".into()],
+                    listed_by: listed_by.clone(),
+                })
+                .collect(),
+            ..answers()
+        }
+    }
+
+    /// The save's text for N watches is one config the write gate admits with
+    /// no question, holding all N; a second run over it adds none, and the
+    /// step-by-step preview's wire shape gains no key.
+    #[test]
+    fn a_one_click_preview_is_one_admissible_text_and_a_rerun_adds_nothing() {
+        let p = preview(&quick_answers(3), "").unwrap();
+        assert_eq!(p.added, ["p1-main", "p2-main", "p3-main"]);
+        let c = Confirmations::default();
+        assert!(crate::commands::admit(Path::new("x.toml"), "", &p.toml, None, &c, None).is_ok());
+        let wire = serde_json::to_value(&p).unwrap();
+        assert_eq!(
+            wire["added"],
+            serde_json::json!(["p1-main", "p2-main", "p3-main"])
+        );
+
+        let again = preview(&quick_answers(3), &p.toml).unwrap();
+        assert_eq!(again.toml, p.toml);
+        assert!(again.added.is_empty());
+        assert_eq!(again.already_watched, ["p1-main", "p2-main", "p3-main"]);
+
+        let single = serde_json::to_value(preview(&answers(), "").unwrap()).unwrap();
+        assert!(single.get("added").is_none() && single.get("already_watched").is_none());
+    }
+
+    /// ⛔ A list made for another server comes back as an account-step issue,
+    /// which `wizard_save` answers without writing.
+    #[test]
+    fn a_one_click_list_from_another_server_is_an_issue_not_a_write() {
+        let mut a = quick_answers(2);
+        a.base_url = "https://gitlab.example.com".into();
+        let f = preview(&a, "").expect_err("bound to the wrong server");
+        assert_eq!(f.kind, FailureKind::Answers);
+        assert_eq!(f.issues.len(), 2);
+        assert!(
+            f.issues
+                .iter()
+                .all(|i| i.step == WizardStep::Account && i.field == "watches")
         );
     }
 

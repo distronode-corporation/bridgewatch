@@ -214,6 +214,19 @@ pub fn load(path: &Path) -> Result<Loaded, ConfigError> {
 /// regular file and quietly detach the user's repository. The existing file's
 /// permissions are carried over, so a `0600` file stays `0600`.
 pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    write_atomic_with(path, text, |temp, text| std::fs::write(temp, text))
+}
+
+/// [`write_atomic`], with the step that writes the sibling handed in.
+///
+/// Exists so a test can fail that step part way (some bytes written, then an
+/// error, as a full disk does) and prove the target is untouched and no
+/// sibling is left behind. Everything else is [`write_atomic`]'s own path.
+pub fn write_atomic_with(
+    path: &Path,
+    text: &str,
+    write: impl FnOnce(&Path, &str) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let dir = target
         .parent()
@@ -227,7 +240,7 @@ pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
 
     let result = (|| {
-        std::fs::write(&temp, text)?;
+        write(&temp, text)?;
         if let Ok(meta) = std::fs::metadata(&target) {
             std::fs::set_permissions(&temp, meta.permissions())?;
         }

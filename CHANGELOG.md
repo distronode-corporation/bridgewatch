@@ -90,6 +90,16 @@ body line with a bracket.
   token was revoked or has expired; GitHub's does not, so a GitHub 401 reads as expired
   only past a known expiry. `bridgewatch auth status` shows each bound own token's
   expiry (one expiry lookup each) and says when a sign-in ends within 72 hours.
+- **One-click setup in the wizard.** Once a sign-in or **Test connection** succeeds, the
+  Account step lists your ten most recently active projects (GitLab `last_activity_at`) or
+  repositories (GitHub `pushed_at`), newest first, with an optional "active 3h ago" label,
+  and ticks the top three. **Watch N projects** gives each ticked one the best deploy
+  marker the deploy step's ranking finds, then goes to Preferences and Review; Finish
+  writes every watch in one atomic write, or none. The list is one request per account.
+  Each watch is bound to the account that listed it: a list from another server is
+  refused. Running it again adds no watch the file already has for that project and
+  branch. The first watch added is primary unless the file already has one; the others
+  are secondary. Choose **Next** instead to set up one project step by step.
 
 ### Changed
 

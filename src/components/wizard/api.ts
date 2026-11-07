@@ -29,7 +29,7 @@ export type WizardStepId = "account" | "project" | "watch" | "deploy" | "prefere
 /** `StepIssue`. */
 export interface StepIssue {
   step: WizardStepId;
-  /** `account | base_url | token | project | watch_id | ref_name | workflow | sources | preflight_ref | deploy_markers | live_secs` */
+  /** `account | base_url | token | watches | project | watch_id | ref_name | workflow | sources | preflight_ref | deploy_markers | live_secs` */
   field: string;
   message: string;
 }
@@ -78,12 +78,45 @@ export interface ProjectSummary {
   name: string | null;
   default_branch: string | null;
   web_url: string | null;
+  /**
+   * When the provider last saw activity on it (GitLab `last_activity_at`,
+   * GitHub `pushed_at`). Absent from an older shell; null when the answer had
+   * none, and then no "active" label is shown.
+   */
+  last_activity_at?: string | null;
 }
 
 /** `ProjectListing`, tagged by `mode`. */
 export type ProjectListing =
   | { mode: "projects"; projects: ProjectSummary[]; truncated: boolean }
   | { mode: "type_id_or_path"; reason: string; suggestion: number | null };
+
+/** `ListedBy`: the account a one-click list came from, which its watches bind to. */
+export interface ListedBy {
+  provider: Provider;
+  /** `scheme://host[:port]`, normalised by the core. */
+  origin: string;
+}
+
+/** `RecentProject`: a one-click row. `ticked` is whether it starts ticked. */
+export interface RecentProject extends ProjectSummary {
+  ticked: boolean;
+}
+
+/** `RecentListing`, tagged by `mode`: the one-click list, or why there is none. */
+export type RecentListing =
+  | { mode: "projects"; projects: RecentProject[]; listed_by: ListedBy }
+  | { mode: "unlisted"; reason: string };
+
+/** `QuickWatch`: one watch a one-click setup adds. */
+export interface QuickWatch {
+  project: ProjectRef;
+  path: string;
+  ref_name: string;
+  deploy_markers: string[];
+  /** Sent back as the list gave it: the core refuses a watch for another server. */
+  listed_by: ListedBy;
+}
 
 /** `ResolvedProject`. */
 export interface ResolvedProject {
@@ -153,6 +186,12 @@ export interface WizardAnswers {
   notify: NotifyAnswers | null;
   launch_at_login: boolean | null;
   live_secs: number | null;
+  /**
+   * One-click setup: every watch to add, in one write. Sent only for a
+   * one-click setup; the core then reads no `project`, `watch_id` or
+   * `ref_name`.
+   */
+  watches?: QuickWatch[];
 }
 
 /** `BuiltConfig`, with diagnostics as the shell renders them. */
@@ -167,6 +206,10 @@ export interface WizardPreview {
    * added as secondary because of it. Absent from an older shell.
    */
   secondary_because?: string | null;
+  /** One-click setup: the ids of the watches the save adds. */
+  added?: string[];
+  /** One-click setup: watches the file already had for a project asked for, left as they are. */
+  already_watched?: string[];
 }
 
 /** `FailureKind`: what a rejected request failed on. */
@@ -251,6 +294,12 @@ export interface WizardApi {
   ownTokenStatus?(account: string): Promise<OwnTokenStatus>;
   /** Step 1: who is this token? */
   testConnection(connection: Connection): Promise<Confirmable<Identity>>;
+  /**
+   * Step 1, once a sign-in or Test connection succeeded: the account's ten
+   * most recently active projects, the top three ticked. One list request.
+   * Optional: without it the one-click list is not offered.
+   */
+  recentProjects?(connection: Connection): Promise<Confirmable<RecentListing>>;
   /** Step 2: the projects this token can pick from. */
   listProjects(connection: Connection, search?: string): Promise<Confirmable<ProjectListing>>;
   /** Step 2: resolve a typed id, path or pasted project URL. */

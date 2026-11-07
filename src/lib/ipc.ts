@@ -20,6 +20,7 @@ import type {
   Identity,
   MarkerSuggestions,
   ProjectListing,
+  RecentListing,
   ResolvedProject,
   TokenSource,
   WizardAnswers,
@@ -222,6 +223,8 @@ export function wizardApi(fallbackAccount?: string): WizardApi {
     ownTokenStatus: (account) => invoke<OwnTokenStatus>("own_token_status", { account }),
     testConnection: (connection) =>
       invoke<Confirmable<Identity>>("wizard_test_connection", { connection: withAccount(connection) }),
+    recentProjects: (connection) =>
+      invoke<Confirmable<RecentListing>>("wizard_recent_projects", { connection: withAccount(connection) }),
     listProjects: (connection, search) =>
       invoke<Confirmable<ProjectListing>>("wizard_list_projects", {
         connection: withAccount(connection),
