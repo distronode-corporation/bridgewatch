@@ -34,7 +34,9 @@ body line with a bracket.
 - **A "fixed again" notification** (`notify.recovered`, on by default). When a watch that
   was failing passes again, you get one notification that says so, in place of that
   push's deploy and finish notifications. While a watch is failing, its next deploy is
-  announced when the pipeline settles, not while post-deploy jobs still run.
+  announced when the pipeline settles, not while post-deploy jobs still run. While a newer
+  pipeline is still running, a new push or a failed one being retried, an older green
+  pipeline does not count as the fix; a failure that settles meanwhile still counts.
 - **More than three notifications at once arrive as one.** It lists the first three
   titles, then "and N more"; the popover has the rest.
 - **Pause notifications** in the tray menu, for one hour or until resumed. While notifications
