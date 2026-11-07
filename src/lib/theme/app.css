@@ -273,6 +273,43 @@ html[data-platform="linux"] {
   --color-tone-grey-bg: var(--grey-bg);
 }
 
+/* ------------------------------------------------------------------------ */
+/* Spacing and type: the layout system                                      */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * Spacing stays on Tailwind's default 4px scale, assigned by ROLE:
+ *
+ *   4px  (1)  inside one unit: label to hint, dot to text
+ *   8px  (2)  between items, and between the lines of a row
+ *   12px (3)  popover row padding, and between fields
+ *   16px (4)  window and card padding; the space above each watch
+ *   24px (6)  between sections
+ *
+ * The rule: the gap between groups is at least twice the gap inside a group.
+ *
+ * Four type sizes and no others (10, 14 and 16px are retired):
+ *   text-ui-title  15/20  pane and step titles (semibold)
+ *   text-ui-body   13/18  body text; semibold for section and row titles
+ *   text-ui-meta   12/16  secondary text, hints and the popover's buttons
+ *   text-ui-badge  11/14  badges and stage labels only
+ * Monospace only for sha, ref and job names.
+ *
+ * ⚠ Named `ui-*` so tailwind-merge can never read them as a colour: inside
+ * `cn()` next to another font size, use an arbitrary `text-[13px]` instead
+ * (tailwind-merge only knows a font size by its value).
+ */
+@theme {
+  --text-ui-title: 15px;
+  --text-ui-title--line-height: 20px;
+  --text-ui-body: 13px;
+  --text-ui-body--line-height: 18px;
+  --text-ui-meta: 12px;
+  --text-ui-meta--line-height: 16px;
+  --text-ui-badge: 11px;
+  --text-ui-badge--line-height: 14px;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

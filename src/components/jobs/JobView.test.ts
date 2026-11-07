@@ -35,6 +35,17 @@ const stages = () => [...host.querySelectorAll<HTMLElement>("[data-stage]")].map
 const jobNames = () => [...host.querySelectorAll<HTMLElement>("[data-job-id] a, [data-job-id] > span.font-mono")].map(
   (a) => a.textContent?.trim(),
 );
+/**
+ * A bridge link is an icon with no visible words: its whole accessible name is
+ * the `aria-label`, so that must be there, and the icon must be hidden from
+ * assistive tech rather than read as an unnamed image.
+ */
+function expectIconOnly(link: HTMLElement) {
+  expect(link.textContent?.trim()).toBe("");
+  expect(link.getAttribute("aria-label")).toBeTruthy();
+  expect(link.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+}
+
 const bridgeOpen = (name: string) =>
   host.querySelector<HTMLElement>(`[data-bridge="${name}"] [data-slot="collapsible-trigger"]`)?.getAttribute(
     "aria-expanded",
@@ -296,7 +307,7 @@ describe("BridgeJobs, a dead bridge in words", () => {
     expect(text).toContain("Child pipeline not inspected.");
     expect(text).not.toContain("never started");
     expect(text).not.toContain("Expected workflow did not run.");
-    expect(jobLink().textContent).toBe("job");
+    expectIconOnly(jobLink());
     expect(jobLink().getAttribute("title")).toBe("the trigger job");
     expect(jobLink().getAttribute("aria-label")).toBe("Open trigger job trigger:website in GitLab");
     expect(host.querySelector('[data-slot="bridge-never-started"]')).toBeNull();
@@ -324,7 +335,7 @@ describe("BridgeJobs, a dead bridge in words", () => {
     expect(text).toContain("Expected workflow did not run.");
     expect(text).not.toContain("no child");
     expect(text).not.toContain("Child pipeline");
-    expect(jobLink().textContent).toBe("workflow");
+    expectIconOnly(jobLink());
     expect(jobLink().getAttribute("href")).toBe(url);
     expect(jobLink().getAttribute("aria-label")).toBe("Open workflow release.yml");
     expect(jobLink().getAttribute("aria-label")).not.toContain("GitLab");
@@ -362,7 +373,9 @@ describe("BridgeJobs, a GitHub workflow run in a commit group", () => {
     expect(links).toHaveLength(1);
     const only = links[0];
     expect(only.dataset.slot).toBe("bridge-run-link");
-    expect(only.textContent).toBe("workflow run");
+    // An icon, not the words "workflow run" repeated on every row: the name
+    // a screen reader reads is the aria-label below.
+    expectIconOnly(only);
     expect(only.getAttribute("title")).toBe("the workflow run");
     expect(only.getAttribute("aria-label")).toBe("Open workflow run CI");
     expect(only.getAttribute("href")).toBe(RUN);
@@ -406,7 +419,7 @@ describe("BridgeJobs, a GitHub workflow run in a commit group", () => {
     );
     expect(host.querySelector('[data-slot="bridge-run-link"]')).toBeNull();
     const job = host.querySelector<HTMLAnchorElement>('[data-slot="bridge-job-link"]')!;
-    expect(job.textContent).toBe("workflow");
+    expectIconOnly(job);
     expect(job.getAttribute("aria-label")).toBe("Open workflow release.yml");
     expect(host.querySelector('[data-slot="bridge-never-started"]')?.textContent?.trim()).toBe("never started");
   });
@@ -443,7 +456,7 @@ describe("BridgeJobs, a GitHub workflow run in a commit group", () => {
     });
     flushSync();
     expect(host.querySelector('[role="list"]')?.getAttribute("aria-label")).toBe("workflow runs");
-    expect(host.querySelector('[data-slot="bridge-run-link"]')?.textContent).toBe("workflow run");
+    expect(host.querySelector('[data-slot="bridge-run-link"]')?.getAttribute("aria-label")).toBe("Open workflow run CI");
     expect(host.querySelector('[data-slot="bridge-job-link"]')).toBeNull();
   });
 });

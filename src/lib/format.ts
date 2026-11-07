@@ -109,6 +109,20 @@ export function deployWord(deploy: string): string {
   }
 }
 
+/**
+ * Whether a row's deploy pill says anything its state word does not.
+ *
+ * Display only, never a verdict: both values are the core's. "deployed" next to
+ * a "deployed" pill, and "green, no deploy" next to "no deploy", said the same
+ * thing twice. `absent` is never worth a pill: no deploy was seen, and the
+ * state word already carries the outcome.
+ */
+export function deployAddsInfo(state: IconState | null | undefined, deploy: string): boolean {
+  if (deploy === "absent") return false;
+  if (deploy === "live" && (state === "deployed" || state === "deployed_with_failure")) return false;
+  return true;
+}
+
 /** A job class as a tone, for the sub-row dots. */
 export function jobTone(jobClass: string): Tone {
   switch (jobClass) {

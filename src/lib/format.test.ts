@@ -5,6 +5,7 @@ import {
   bridgeWord,
   configErrorLines,
   countdown,
+  deployAddsInfo,
   errorLines,
   isFirstRun,
   deployTone,
@@ -124,6 +125,26 @@ describe("bridge and deploy words", () => {
     expect(jobTone("gate")).toBe("amber");
     expect(jobTone("passed")).toBe("green");
     expect(jobTone("not_built")).toBe("grey");
+  });
+});
+
+describe("deployAddsInfo: the pill only when the state word does not say it", () => {
+  it.each([
+    // The README shot: "deployed deployed" and "green, no deploy no deploy".
+    ["deployed", "live", false],
+    ["deployed_with_failure", "live", false],
+    ["succeeded_no_deploy", "absent", false],
+    ["failed", "absent", false],
+    ["running", "absent", false],
+    // A state word that does not say what happened to the deploy.
+    ["running", "in_progress", true],
+    ["failed", "failed", true],
+    ["failed", "dead", true],
+    ["canceled", "canceled", true],
+    ["parked_gate", "live", true],
+    [null, "live", true],
+  ] as [IconState | null, string, boolean][])("%s with deploy %s: %s", (state, deploy, shown) => {
+    expect(deployAddsInfo(state, deploy)).toBe(shown);
   });
 });
 

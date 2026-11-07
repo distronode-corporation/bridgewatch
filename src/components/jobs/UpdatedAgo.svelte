@@ -10,10 +10,12 @@
   interface Props {
     at: string | number | null | undefined;
     now?: number;
+    /** "4s ago" without the leading "updated". */
+    short?: boolean;
     class?: string;
   }
 
-  let { at, now: externalNow, class: className = "" }: Props = $props();
+  let { at, now: externalNow, short = false, class: className = "" }: Props = $props();
 
   let ownNow = $state(Date.now());
   const now = $derived(externalNow ?? ownNow);
@@ -31,8 +33,8 @@
 </script>
 
 <span
-  class={["text-muted-foreground text-xs tabular-nums", className]}
+  class={["text-muted-foreground text-ui-meta tabular-nums", className]}
   data-slot="updated-ago"
   title={title}
-  aria-live="off">{updatedAgo(at, now)}</span
+  aria-live="off">{updatedAgo(at, now, short)}</span
 >

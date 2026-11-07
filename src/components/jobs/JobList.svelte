@@ -103,17 +103,30 @@
     panels[id] = { ...panelOf(id), confirm: null };
   }
 
+  // 12px words, not 10px capitals.
   const TOOL_BUTTON =
-    "text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm px-0.5 text-[10px] font-medium uppercase outline-none focus-visible:ring-2 aria-expanded:text-foreground";
+    "text-muted-foreground hover:text-foreground hover:bg-background focus-visible:ring-ring/50 aria-expanded:text-foreground shrink-0 rounded-sm px-1 outline-none focus-visible:ring-2";
+
+  /**
+   * The tools of a failed job are always shown. Any other job's (retry on a
+   * canceled one, play on a manual one) appear on hover or keyboard focus.
+   *
+   * ⛔ Hidden with opacity, never `invisible` or `display: none`: those take
+   * the buttons out of the tab order, and the focus that should reveal them
+   * could then never reach them. An open panel keeps its row's tools shown
+   * (from state, not `:has()`, which WebKitGTK 2.36 lacks; see app.css).
+   */
+  const toolsShown = (job: JobView) =>
+    job.status === "failed" || panelOf(job.id).log || panelOf(job.id).confirm !== null;
 </script>
 
-<div class={["flex flex-col gap-1.5", className]} data-slot="job-list">
+<div class={["text-ui-meta flex flex-col gap-2", className]} data-slot="job-list">
   {#if groups.length === 0}
-    <p class="text-muted-foreground px-1 text-xs" data-slot="job-list-empty">{empty}</p>
+    <p class="text-muted-foreground px-1" data-slot="job-list-empty">{empty}</p>
   {:else}
     {#each groups as group (group.stage)}
       <section class="flex flex-col" aria-label={`stage ${group.stage}`} data-stage={group.stage}>
-        <h4 class="text-muted-foreground px-1 pb-0.5 text-[11px] font-medium tracking-wide uppercase">
+        <h4 class="text-muted-foreground text-ui-badge px-1 pb-0.5 font-medium tracking-wide uppercase">
           {group.stage}
         </h4>
         <ul class="flex flex-col">
@@ -121,8 +134,9 @@
             {@const tone = toneOf(job)}
             {@const live = isLive(job)}
             {@const seconds = elapsedSeconds(job, now)}
+            <!-- Columns: name (truncates) · tools · live · duration (right). -->
             <li
-              class="hover:bg-muted flex h-6 items-center gap-2 rounded-md px-1 text-xs"
+              class="group/job hover:bg-muted flex h-6 items-center gap-2 rounded-md px-1"
               data-job-id={job.id}
               data-class={job.class}
             >
@@ -143,48 +157,59 @@
                 <span class="text-foreground min-w-0 truncate font-mono" title={job.name}>{job.name}</span>
               {/if}
               {#if job.allow_failure && job.class === "warning_failure"}
-                <span class="text-muted-foreground shrink-0 text-[10px]">allowed</span>
+                <span class="text-muted-foreground text-ui-badge shrink-0">allowed</span>
               {/if}
               <span class="flex-1"></span>
-              {#if tools && canShowLog(job)}
-                <button
-                  type="button"
-                  class={TOOL_BUTTON}
-                  aria-expanded={panelOf(job.id).log}
-                  aria-controls={panelId(job.id)}
-                  aria-label={`${panelOf(job.id).log ? "Hide" : "Show"} the end of the log of ${job.name}`}
-                  data-slot="job-log-toggle"
-                  onclick={() => toggleLog(job.id)}>log</button
+              {#if tools && (canShowLog(job) || canRetry(job, tools) || canPlay(job, tools))}
+                <span
+                  class={[
+                    "flex shrink-0 items-center gap-0.5",
+                    !toolsShown(job) && "opacity-0 group-hover/job:opacity-100 focus-within:opacity-100",
+                  ]}
+                  data-slot="job-tools"
+                  data-always={toolsShown(job) ? "" : undefined}
                 >
-              {/if}
-              {#if tools && canRetry(job, tools)}
-                <button
-                  type="button"
-                  class={TOOL_BUTTON}
-                  aria-expanded={panelOf(job.id).confirm === "retry"}
-                  aria-controls={panelId(job.id)}
-                  aria-label={`Retry ${job.name}`}
-                  data-slot="job-retry"
-                  onclick={() => ask(job.id, "retry")}>retry</button
-                >
-              {/if}
-              {#if tools && canPlay(job, tools)}
-                <button
-                  type="button"
-                  class={TOOL_BUTTON}
-                  aria-expanded={panelOf(job.id).confirm === "play"}
-                  aria-controls={panelId(job.id)}
-                  aria-label={`Start ${job.name}`}
-                  data-slot="job-play"
-                  onclick={() => ask(job.id, "play")}>play</button
-                >
+                  {#if canShowLog(job)}
+                    <button
+                      type="button"
+                      class={TOOL_BUTTON}
+                      aria-expanded={panelOf(job.id).log}
+                      aria-controls={panelId(job.id)}
+                      aria-label={`${panelOf(job.id).log ? "Hide" : "Show"} the end of the log of ${job.name}`}
+                      data-slot="job-log-toggle"
+                      onclick={() => toggleLog(job.id)}>log</button
+                    >
+                  {/if}
+                  {#if canRetry(job, tools)}
+                    <button
+                      type="button"
+                      class={TOOL_BUTTON}
+                      aria-expanded={panelOf(job.id).confirm === "retry"}
+                      aria-controls={panelId(job.id)}
+                      aria-label={`Retry ${job.name}`}
+                      data-slot="job-retry"
+                      onclick={() => ask(job.id, "retry")}>retry</button
+                    >
+                  {/if}
+                  {#if canPlay(job, tools)}
+                    <button
+                      type="button"
+                      class={TOOL_BUTTON}
+                      aria-expanded={panelOf(job.id).confirm === "play"}
+                      aria-controls={panelId(job.id)}
+                      aria-label={`Start ${job.name}`}
+                      data-slot="job-play"
+                      onclick={() => ask(job.id, "play")}>play</button
+                    >
+                  {/if}
+                </span>
               {/if}
               {#if live}
-                <span class="text-tone-blue shrink-0 text-[10px] font-medium uppercase" data-slot="live-marker">live</span>
+                <span class="text-tone-blue text-ui-badge shrink-0 font-medium uppercase" data-slot="live-marker">live</span>
               {/if}
               {#if seconds !== null}
                 <span
-                  class="text-muted-foreground shrink-0 tabular-nums"
+                  class="text-muted-foreground min-w-10 shrink-0 text-right tabular-nums"
                   data-slot="job-duration"
                   title={live ? "running for" : "ran for"}>{formatDuration(seconds)}</span
                 >

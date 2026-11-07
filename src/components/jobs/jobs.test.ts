@@ -104,6 +104,16 @@ describe("durations", () => {
     expect(updatedAgo(T0 - 125_000, T0)).toBe("updated 2m ago");
     expect(updatedAgo(null, T0)).toBe("not updated yet");
   });
+
+  it("drops the leading 'updated' in the short form, for the popover header", () => {
+    expect(updatedAgo(new Date(T0 - 9_000).toISOString(), T0, true)).toBe("9s ago");
+    expect(updatedAgo(T0 - 125_000, T0, true)).toBe("2m ago");
+    expect(updatedAgo(T0 - 3 * 3_600_000, T0, true)).toBe("3h ago");
+    expect(updatedAgo(T0 - 2 * 86_400_000, T0, true)).toBe("2d ago");
+    // Never a bare "ago" with nothing before it.
+    expect(updatedAgo(null, T0, true)).toBe("not updated yet");
+    expect(updatedAgo("not a date", T0, true)).toBe("not updated yet");
+  });
 });
 
 describe("expansion store", () => {

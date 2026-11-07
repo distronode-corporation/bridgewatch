@@ -181,8 +181,11 @@ describe("PopoverApp, a request the shell could not carry out", () => {
     for (let i = 0; i < 6; i++) await Promise.resolve();
     flushSync();
   }
+  // By accessible name: Pipelines is an icon button whose name is its aria-label.
   const button = (label: string) =>
-    [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === label)!;
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => (b.getAttribute("aria-label") ?? b.textContent?.trim()) === label,
+    )!;
   const notice = () => host.querySelector("[data-slot=popover-notice]")?.textContent?.trim() ?? "";
 
   it("says why Pipelines opened nothing", async () => {

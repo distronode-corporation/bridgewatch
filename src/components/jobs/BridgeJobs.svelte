@@ -2,8 +2,9 @@
   /**
    * One bridge (trigger job) as a collapsible row: the verdict on the header,
    * the child pipeline's jobs by stage inside, and on the header two links out:
-   * the trigger job itself and the child pipeline it created. They are
-   * different pages and either can be the one that explains a verdict.
+   * the trigger job itself and the child pipeline it created, as icons that
+   * each carry an `aria-label`. They are different pages and either can be
+   * the one that explains a verdict.
    *
    * A GitHub `expect` bridge (status `never_started`) has no child and no
    * trigger job: its one link is the workflow's own page, and its words say
@@ -13,8 +14,8 @@
    *
    * Any other bridge on a GitHub watch is a workflow run in a commit group. It
    * has no separate trigger job: the core sets both `web_url` and `child_url`
-   * to the run's page, so it gets ONE link, "workflow run", and words that do
-   * not name GitLab. The provider comes from the watch (`WatchView.provider`),
+   * to the run's page, so it gets ONE link (an icon named "Open workflow run
+   * <name>"), and words that do not name GitLab. The provider comes from the watch (`WatchView.provider`),
    * because nothing on the bridge itself says which kind it is.
    *
    * Open/closed lives in the `expansion` store, keyed by pipeline id + bridge
@@ -22,6 +23,8 @@
    * not collapse it.
    */
   import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
+  import ExternalLinkIcon from "@lucide/svelte/icons/external-link";
+  import WorkflowIcon from "@lucide/svelte/icons/workflow";
 
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
   import { TONE_DOT, TONE_TEXT, bridgeTone, bridgeWord } from "../../lib/format";
@@ -74,6 +77,9 @@
   );
   const bodyId = $derived(`bridge-${pipelineId}-${bridge.name.replace(/[^A-Za-z0-9_-]/g, "_")}`);
 
+  const LINK =
+    "text-muted-foreground hover:text-foreground hover:bg-background focus-visible:ring-ring/50 flex size-6 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2";
+
   function openUrl(event: MouseEvent, url: string | null) {
     event.preventDefault();
     event.stopPropagation();
@@ -87,7 +93,10 @@
   class="flex flex-col"
   data-bridge={bridge.name}
 >
-  <div class="hover:bg-muted flex h-7 items-center gap-1.5 rounded-lg pr-1 text-xs">
+  <!-- Columns: the name truncates (`flex-1`), the status sits right, the
+       count is a fixed `w-6` column, and the links are icons in a fixed
+       column, so every bridge in a pipeline lines up with the next. -->
+  <div class="hover:bg-muted text-ui-meta flex h-7 items-center gap-1 rounded-lg pr-1">
     <Collapsible.Trigger
       class="focus-visible:ring-ring/50 flex min-w-0 flex-1 items-center gap-1.5 rounded-lg py-1 pl-1 text-left outline-none focus-visible:ring-2"
       aria-controls={bodyId}
@@ -101,68 +110,77 @@
         class={["size-2 shrink-0 rounded-full", TONE_DOT[tone], bridge.verdict === "running" && "bw-live"]}
         aria-hidden="true"
       ></span>
-      <span class="text-foreground min-w-0 truncate font-mono">{bridge.name}</span>
-      <span class={["shrink-0", TONE_TEXT[tone]]}>{bridgeWord(bridge.verdict)}</span>
-      {#if bridge.dived && bridge.jobs.length > 0}
-        <span class="text-muted-foreground shrink-0 tabular-nums" title="jobs listed / jobs in the child">
-          {mode === "all" ? bridge.jobs.length : `${shownCount}/${bridge.jobs.length}`}
-        </span>
-      {/if}
+      <span class="text-foreground min-w-0 flex-1 truncate font-mono" title={bridge.name}>{bridge.name}</span>
+      <span class={["status ml-auto shrink-0", TONE_TEXT[tone]]}>{bridgeWord(bridge.verdict)}</span>
+      <span class="count text-muted-foreground w-6 shrink-0 text-right tabular-nums" title="jobs listed / jobs in the child"
+        >{#if bridge.dived && bridge.jobs.length > 0}{mode === "all"
+            ? bridge.jobs.length
+            : `${shownCount}/${bridge.jobs.length}`}{/if}</span
+      >
     </Collapsible.Trigger>
     <!-- ⛔ Both links are SIBLINGS of the trigger, never inside it: the bridge
          name sits in a button, and an anchor nested in a button is neither
          valid nor reachable by keyboard. A bridge with no `web_url` gets no
-         link rather than a dead one; its name is already plain text above. -->
-    {#if workflowRun}
-      {#if bridge.web_url ?? bridge.child_url}
-        <a
-          href={bridge.web_url ?? bridge.child_url}
-          class="text-muted-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm text-[11px] outline-none hover:underline focus-visible:ring-2"
-          title="the workflow run"
-          aria-label={`Open workflow run ${bridge.name}`}
-          data-slot="bridge-run-link"
-          onclick={(event) => openUrl(event, bridge.web_url ?? bridge.child_url)}>workflow run</a
-        >
+         link rather than a dead one; its name is already plain text above.
+         ⛔ Icon-only, so the `aria-label` is the link's whole name. -->
+    <span class="links flex min-w-12 shrink-0 items-center justify-end gap-0.5">
+      {#if bridge.verdict === "dead" && !bridge.child_url && !workflowRun}
+        {#if neverStarted}
+          <span class="text-tone-red shrink-0 pr-1" title="expected workflow did not run" data-slot="bridge-never-started"
+            >never started</span
+          >
+        {:else}
+          <span class="text-tone-red shrink-0 pr-1" title="the trigger job created no child pipeline">no child</span>
+        {/if}
       {/if}
-    {:else if bridge.web_url}
-      <a
-        href={bridge.web_url}
-        class="text-muted-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm text-[11px] outline-none hover:underline focus-visible:ring-2"
-        title={neverStarted ? "the expected workflow" : "the trigger job"}
-        aria-label={neverStarted ? `Open workflow ${bridge.name}` : `Open trigger job ${bridge.name} in GitLab`}
-        data-slot="bridge-job-link"
-        onclick={(event) => openUrl(event, bridge.web_url)}>{neverStarted ? "workflow" : "job"}</a
-      >
-    {/if}
-    {#if workflowRun}
-      <!-- The run link above is the whole story: its child is itself. -->
-    {:else if bridge.child_url}
-      <a
-        href={bridge.child_url}
-        class="text-muted-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm text-[11px] outline-none hover:underline focus-visible:ring-2"
-        title="the child pipeline"
-        aria-label={`Open the child pipeline of ${bridge.name} in GitLab`}
-        data-slot="bridge-child-link"
-        onclick={(event) => openUrl(event, bridge.child_url)}>child</a
-      >
-    {:else if bridge.verdict === "dead" && neverStarted}
-      <span class="text-tone-red shrink-0 text-[11px]" title="expected workflow did not run" data-slot="bridge-never-started"
-        >never started</span
-      >
-    {:else if bridge.verdict === "dead"}
-      <span class="text-tone-red shrink-0 text-[11px]" title="the trigger job created no child pipeline">no child</span>
-    {/if}
+      {#if workflowRun}
+        {#if bridge.web_url ?? bridge.child_url}
+          <a
+            href={bridge.web_url ?? bridge.child_url}
+            class={LINK}
+            title="the workflow run"
+            aria-label={`Open workflow run ${bridge.name}`}
+            data-slot="bridge-run-link"
+            onclick={(event) => openUrl(event, bridge.web_url ?? bridge.child_url)}
+            ><ExternalLinkIcon class="size-3.5" aria-hidden="true" /></a
+          >
+        {/if}
+      {:else}
+        {#if bridge.child_url}
+          <a
+            href={bridge.child_url}
+            class={LINK}
+            title="the child pipeline"
+            aria-label={`Open the child pipeline of ${bridge.name} in GitLab`}
+            data-slot="bridge-child-link"
+            onclick={(event) => openUrl(event, bridge.child_url)}
+            ><WorkflowIcon class="size-3.5" aria-hidden="true" /></a
+          >
+        {/if}
+        {#if bridge.web_url}
+          <a
+            href={bridge.web_url}
+            class={LINK}
+            title={neverStarted ? "the expected workflow" : "the trigger job"}
+            aria-label={neverStarted ? `Open workflow ${bridge.name}` : `Open trigger job ${bridge.name} in GitLab`}
+            data-slot="bridge-job-link"
+            onclick={(event) => openUrl(event, bridge.web_url)}
+            ><ExternalLinkIcon class="size-3.5" aria-hidden="true" /></a
+          >
+        {/if}
+      {/if}
+    </span>
   </div>
-  <Collapsible.Content id={bodyId} class="pt-0.5 pb-1 pl-5">
+  <Collapsible.Content id={bodyId} class="text-ui-meta pt-1 pb-1 pl-5">
     {#if neverStarted}
-      <p class="text-muted-foreground px-1 text-xs">Expected workflow did not run.</p>
+      <p class="text-muted-foreground px-1">Expected workflow did not run.</p>
     {:else if workflowRun && !bridge.dived}
-      <p class="text-muted-foreground px-1 text-xs">Workflow run not inspected.</p>
+      <p class="text-muted-foreground px-1">Workflow run not inspected.</p>
     {:else if !bridge.dived}
       <!-- `dived: false` means nobody looked, NOT that the child had no jobs. -->
-      <p class="text-muted-foreground px-1 text-xs">Child pipeline not inspected.</p>
+      <p class="text-muted-foreground px-1">Child pipeline not inspected.</p>
     {:else if bridge.child_id === null}
-      <p class="text-muted-foreground px-1 text-xs">No child pipeline.</p>
+      <p class="text-muted-foreground px-1">No child pipeline.</p>
     {:else}
       <JobList jobs={bridge.jobs} {mode} {onOpen} {now} tools={childTools} />
     {/if}

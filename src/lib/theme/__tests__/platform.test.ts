@@ -146,3 +146,21 @@ describe("app.css", () => {
     expect(css).not.toMatch(pattern);
   });
 });
+
+describe("app.css, the type scale", () => {
+  const css = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it.each([
+    ["title", "15px", "20px"],
+    ["body", "13px", "18px"],
+    ["meta", "12px", "16px"],
+    ["badge", "11px", "14px"],
+  ])("defines text-ui-%s as %s/%s", (name, size, lineHeight) => {
+    expect(css).toContain(`--text-ui-${name}: ${size};`);
+    expect(css).toContain(`--text-ui-${name}--line-height: ${lineHeight};`);
+  });
+
+  it("defines exactly four sizes", () => {
+    expect(css.match(/--text-ui-[a-z]+:/g)).toHaveLength(4);
+  });
+});
