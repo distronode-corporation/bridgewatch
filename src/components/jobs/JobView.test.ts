@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { reactive } from "../../lib/__tests__/props.svelte";
 import type { BridgeView, JobsMode, PipelineView } from "../../lib/types";
-import { PARENT_JOBS, RUNNING_JOB, T0, bridge, pipeline } from "./__fixtures__/pipeline";
+import { PARENT_JOBS, RUNNING_JOB, T0, bridge, job, pipeline } from "./__fixtures__/pipeline";
 import BridgeJobs from "./BridgeJobs.svelte";
 import JobList from "./JobList.svelte";
 import PipelineJobs from "./PipelineJobs.svelte";
@@ -308,6 +308,32 @@ describe("BridgeJobs, a long name beside a long status", () => {
     expect(row.querySelector('[data-slot="collapsible-trigger"]')?.getAttribute("aria-label")).toBe(
       `${NAME}: passed, with warnings. Show jobs`,
     );
+  });
+});
+
+describe("BridgeJobs, the job count column", () => {
+  it("grows for a failures-mode count like 5/11 instead of spilling into the status", () => {
+    const jobs = Array.from({ length: 11 }, (_, i) =>
+      job({ id: 100 + i, name: `j${i}`, status: i < 5 ? "failed" : "success", class: i < 5 ? "blocking_failure" : "passed" }),
+    );
+    component = mount(BridgeJobs, {
+      target: host,
+      props: {
+        bridge: bridge({ name: "trigger:android", verdict: "failed", jobs }),
+        pipelineId: 5000,
+        expansion: createExpansionStore(),
+        mode: "failures",
+        onOpen: () => {},
+        now: T0,
+      },
+    });
+    flushSync();
+    const count = host.querySelector<HTMLElement>('[data-bridge="trigger:android"] .count')!;
+    expect(count.textContent?.trim()).toBe("5/11");
+    // A minimum, never a fixed width: four characters do not fit in w-6.
+    expect(count.classList).toContain("min-w-6");
+    expect(count.classList).not.toContain("w-6");
+    expect(count.classList).toContain("shrink-0");
   });
 });
 
