@@ -404,15 +404,39 @@ jobs:
         if: runner.os == 'macOS'
         run: codesign --force --options runtime --identifier com.distronode.bridgewatch.cli --sign - cli-out/bridgewatch
 
+      # The CLI a 1.x user has, for the bound-token probe below: what it does with an
+      # entry 2.0 wrote is part of the claim. Checked against a pinned digest.
+      - name: Fetch the released 1.3.0 CLI
+        id: released
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          bin="$(bash .github/scripts/fetch-released-cli.sh "$TARGET" "$RUNNER_TEMP/released")"
+          echo "cli=$bin" >> "$GITHUB_OUTPUT"
+
       # keyring-crate: also the in-process Security.framework path that `auth login`,
-      # `auth status` and `auth logout` use. CI only, so a surprise there fails a PR
-      # rather than a tag.
+      # `auth status` and `auth logout` use, and the own-token binding
+      # (.github/scripts/bound-token-probe.sh). CI only, so a surprise there fails a
+      # PR rather than a tag.
       - name: The hardened-runtime CLI reads the keychain
         if: runner.os == 'macOS'
         uses: $/.github/actions/cli-keychain-probe
         with:
           binary: cli-out/bridgewatch
           keyring-crate: "true"
+          released-cli: ${{ steps.released.outputs.cli }}
+
+      # The same binding probe against the Secret Service: a throwaway gnome-keyring
+      # on a private D-Bus session, with a temporary HOME and XDG_RUNTIME_DIR (the
+      # script sets them up).
+      - name: Own tokens stay with their server (Secret Service)
+        if: runner.os == 'Linux'
+        env:
+          RELEASED_CLI: ${{ steps.released.outputs.cli }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends dbus gnome-keyring libsecret-tools
+          bash .github/scripts/bound-token-probe.sh cli-out/bridgewatch "$RELEASED_CLI"
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
