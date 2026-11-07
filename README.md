@@ -923,9 +923,16 @@ bridgewatch 1.x stored the bare token. 2.0 binds such a value the first time it 
 to the server the account names at that moment: it reads the value, writes it back bound,
 and only then sends it. If the write fails, nothing is sent. The app and the CLI both do
 this; on macOS, the CLI rewriting an item the app created may ask once for keychain
-access. The setup wizard never binds one, because the address it would bind to is the
-one typed into the form: re-run on a 1.x value the app has not used yet, it asks for the
-token again.
+access. The setup wizard never binds one to the address typed into the form: re-run on a
+1.x value the app has not used yet, it asks for the token again.
+
+- **A move before that first use keeps the token with the old server.** Moving the
+  account to another host in Settings, in the wizard, with `bridgewatch init --account`,
+  or by editing the file while the app runs first binds the 1.x value to the server the
+  account is leaving, so the new server never receives it. If the keychain is locked or
+  cannot be read, the move is refused with that error. The app cannot see an edit made
+  while it is not running as a move: the value is then bound to the server the file names
+  when it is first used.
 
 - **After a repoint, save the token again.** Once an entry is bound, changing the
   account's `base_url` stops it being sent (exit 70, above). Paste the token for the new

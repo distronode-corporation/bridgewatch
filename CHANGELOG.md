@@ -301,6 +301,15 @@ Breaking first, and the README's "Upgrading from 1.x".
   application than its client id, is never used to poll. `auth status` now prints
   `signed in for <server>, not <server>; run bridgewatch auth login --account <name>` for
   it and exits 70, and Settings says the sign-in is not used and offers to sign in again.
+- **A token stored by bridgewatch 1.x stays with its old host when the account moves.**
+  A 1.x token is tied to a server only when it is first used, so moving the account to
+  another host before that tied it to the new host and sent it there, though the
+  confirmation said it stayed behind. Now Settings, the setup wizard, `bridgewatch init
+  --account` and a reload of a file edited in another editor tie it to the old host
+  before the move. If the credential store is locked or cannot be read, the move is
+  refused with its error and nothing is sent. A file edited while the app is not running
+  is not seen as a move: the token is tied to the host the file names when it is first
+  used, as before.
 
 ## [1.3.0] - 2026-11-06
 

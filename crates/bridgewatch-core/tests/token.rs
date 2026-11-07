@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use bridgewatch_core::config::TokenSource;
+use bridgewatch_core::config::{Config, TokenSource};
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider, TokenError, TokenProvider};
 
 /// `token::resolve` for an account whose only setting is `source`.
@@ -32,6 +32,8 @@ struct Fake {
     calls: Mutex<Vec<String>>,
     /// Every `keyring_set` fails, as a locked or read-only store would.
     refuse_writes: bool,
+    /// Every `keyring_get` fails, as a locked keychain does.
+    refuse_reads: bool,
 }
 
 impl Fake {
@@ -64,6 +66,12 @@ impl TokenProvider for Fake {
             .lock()
             .unwrap()
             .push(format!("keyring_get {service}|{user}"));
+        if self.refuse_reads {
+            return Err(TokenError::Store {
+                service: service.into(),
+                message: "the keychain is locked".into(),
+            });
+        }
         self.keyring
             .lock()
             .unwrap()
@@ -914,4 +922,152 @@ fn an_account_with_no_own_token_says_none() {
         token::resolve("gl", &own_on("https://gitlab.com"), &fake),
         Err(TokenError::NoEntry { .. })
     ));
+}
+
+/// Two configurations, before and after an edit that may move `gl`.
+fn configs(before: &str, after: &str) -> (Config, Config) {
+    let parse = |raw: &str| {
+        bridgewatch_core::config::parse_str(raw, std::path::Path::new("x.toml"))
+            .expect("fixture parses")
+            .config
+    };
+    (parse(before), parse(after))
+}
+
+const ON_OLD: &str =
+    "[accounts.gl]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n";
+const ON_NEW: &str = "[accounts.gl]\nbase_url = \"https://evil.example\"\ntoken = { own = true }\n";
+
+/// Build the moved account's client, as the poller does after the edit, and
+/// make one request with it if it is built: what reaches the new host.
+async fn poll_after_move(fake: std::sync::Arc<Fake>) -> (bool, Vec<String>) {
+    let (_, after) = configs(ON_OLD, ON_NEW);
+    let transport = std::sync::Arc::new(bridgewatch_core::client::ScriptTransport::new());
+    let built = bridgewatch_core::poll::client_for_account_on(
+        "gl",
+        &after.accounts["gl"],
+        None,
+        fake,
+        transport.clone(),
+        bridgewatch_core::client::RequestRing::new(4),
+    );
+    let refused = matches!(
+        &built,
+        Err(bridgewatch_core::poll::PollerError::Token(
+            _,
+            TokenError::BoundElsewhere { .. }
+        ))
+    );
+    if let Ok(client) = built {
+        let _ = client.current_user().await;
+    }
+    let urls = transport.requests().into_iter().map(|r| r.url).collect();
+    (refused, urls)
+}
+
+/// ⛔ The Seer finding on the 2.0 release: a 1.x value is bound on first use
+/// to whatever `base_url` says THEN, so a host edit made before that first use
+/// carried it to the new host. Before the edit lands, it is now bound to the
+/// host it is leaving, and the poll after the edit sends nothing.
+#[tokio::test]
+async fn a_host_edit_binds_a_1x_value_to_the_old_host_and_the_poll_sends_nothing() {
+    let fake = std::sync::Arc::new(Fake::default().with_keyring(
+        "bridgewatch:gl",
+        "token",
+        "glpat-legacy",
+    ));
+    let (before, after) = configs(ON_OLD, ON_NEW);
+    let bound = token::bind_before_moves(&before, &after, fake.as_ref()).expect("binds");
+
+    let (refused, urls) = poll_after_move(fake.clone()).await;
+    assert!(urls.is_empty(), "a request reached the new host: {urls:?}");
+    assert!(refused, "the moved account is refused as bound elsewhere");
+    assert_eq!(bound, ["gl"]);
+    let raw = stored(&fake).unwrap();
+    assert!(
+        raw.starts_with(token::BOUND_V1)
+            && raw.contains(r#""origin":"https://gitlab.example.com""#),
+        "the entry is bound to the OLD host"
+    );
+
+    // Bound now, so a second pass (the reload after the write) rewrites nothing.
+    let writes = |f: &Fake| {
+        f.calls()
+            .iter()
+            .filter(|c| c.starts_with("keyring_set"))
+            .count()
+    };
+    let before_writes = writes(&fake);
+    assert!(
+        token::bind_before_moves(&before, &after, fake.as_ref())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(writes(&fake), before_writes);
+}
+
+/// ⛔ A locked keychain (a read or a write that fails) leaves the value
+/// unbound, so the move is refused with the store's error, and the entry is
+/// left as it was. The caller writes nothing; nothing is sent.
+#[test]
+fn a_host_edit_whose_bind_fails_is_refused_and_binds_nothing() {
+    for (refuse_reads, refuse_writes) in [(true, false), (false, true)] {
+        let fake = Fake {
+            refuse_reads,
+            refuse_writes,
+            ..Fake::default().with_keyring("bridgewatch:gl", "token", "glpat-legacy")
+        };
+        let (before, after) = configs(ON_OLD, ON_NEW);
+        let refused = token::bind_before_moves(&before, &after, &fake).unwrap_err();
+        assert_eq!(refused.name, "gl");
+        assert_eq!(refused.from, "https://gitlab.example.com");
+        assert!(
+            matches!(refused.error, TokenError::Store { .. }),
+            "{refused:?}"
+        );
+        let text = refused.to_string();
+        assert!(text.contains("was not moved"), "{text}");
+        assert!(!text.contains("glpat-legacy"), "{text}");
+        assert_eq!(stored(&fake).as_deref(), Some("glpat-legacy"));
+    }
+}
+
+/// Only a real move of an account that read its own entry reads the store:
+/// a respelling, an ordinary edit, a new account, or an account that used
+/// another source on the old host costs no credential read at all.
+#[test]
+fn only_a_move_of_an_own_account_reads_the_store() {
+    let fake = Fake::default().with_keyring("bridgewatch:gl", "token", "glpat-legacy");
+    for (before, after) in [
+        (
+            ON_OLD,
+            "[accounts.gl]\nbase_url = \"https://GitLab.Example.com:443/\"\ntoken = { own = true }\n",
+        ),
+        (ON_OLD, ON_OLD),
+        (
+            "[accounts.other]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n",
+            ON_NEW,
+        ),
+        (
+            "[accounts.gl]\nbase_url = \"https://gitlab.example.com\"\ntoken = { env = \"T\" }\n",
+            ON_NEW,
+        ),
+    ] {
+        let (before, after) = configs(before, after);
+        assert!(
+            token::bind_before_moves(&before, &after, &fake)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+
+    // And a move with nothing to bind (no entry, or one already bound) is not
+    // an error.
+    let (before, after) = configs(ON_OLD, ON_NEW);
+    assert!(
+        token::bind_before_moves(&before, &after, &Fake::default())
+            .unwrap()
+            .is_empty()
+    );
 }
