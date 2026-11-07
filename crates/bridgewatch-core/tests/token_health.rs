@@ -968,3 +968,62 @@ async fn a_revoked_sign_in_without_an_end_says_sign_in_again() {
     assert!(h.message.contains("sign in again"), "{}", h.message);
     assert!(!h.message.contains("save a new token"), "{}", h.message);
 }
+
+/// A transport that answers `/personal_access_tokens/self` late, so another
+/// request of the same client can answer in between.
+#[derive(Debug)]
+struct SlowSelf(Arc<ScriptTransport>);
+
+#[async_trait::async_trait]
+impl bridgewatch_core::client::Transport for SlowSelf {
+    async fn execute(
+        &self,
+        request: bridgewatch_core::client::HttpRequest,
+    ) -> Result<HttpResponse, bridgewatch_core::client::ClientError> {
+        if request.url.contains("/personal_access_tokens/self") {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        self.0.execute(request).await
+    }
+}
+
+/// Seer and cubic, #67: within one account the expiry lookup and the owner
+/// lookup run one after the other. Side by side, a `/user` 401 answering
+/// while the slower expiry lookup was out was erased when that lookup put
+/// its earlier refusal back on its own (ignored) 401.
+#[tokio::test]
+async fn a_user_refusal_survives_the_expiry_lookups_ignored_401() {
+    let raw = r#"
+        [accounts.lab]
+        token = { env = "TOK" }
+
+        [[watches]]
+        id = "mine"
+        account = "lab"
+        project = 1
+        mine = true
+    "#;
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/personal_access_tokens/self",
+        401,
+        r#"{"message":"401 Unauthorized"}"#,
+    );
+    t.reply(
+        "/user",
+        401,
+        r#"{"error":"invalid_token","error_description":"Token was revoked. You have to re-authorize from the user."}"#,
+    );
+    let slow: Arc<dyn bridgewatch_core::client::Transport> = Arc::new(SlowSelf(t.clone()));
+    let mut p = Poller::from_config_per_account_on(&config(raw), &Memory::default(), slow)
+        .expect("the poller builds")
+        .with_clock(Clock::at(wall()).reader());
+    let tick = p.tick().await;
+    assert_eq!(
+        health(&tick, "lab").map(|h| h.state),
+        Some(HealthState::Revoked),
+        "{:?}",
+        paths(&t)
+    );
+    assert_eq!(token_notes(&tick).len(), 1);
+}

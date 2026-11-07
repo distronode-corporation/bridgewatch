@@ -801,7 +801,7 @@ expiry that is first seen inside 24 hours gets only the 24-hour warning.
 
 | Credential | Where the expiry comes from | What it costs |
 | --- | --- | --- |
-| GitLab personal, project or group access token | `expires_at` from `GET /personal_access_tokens/self` (00:00 UTC on that date) | one request per token each time a poller starts (the app starting or reloading its configuration, or a CLI command such as `check`, `watch` or `wait`), asked again only after a rate limit, a server error or a dropped connection, and only on a tick where that account polls |
+| GitLab personal, project or group access token | `expires_at` from `GET /personal_access_tokens/self` (00:00 UTC on that date) | one request per token each time a poller starts (the app starting or reloading its configuration, or a CLI command such as `check`, `watch` or `wait`), asked again only after a rate limit, a server error or a network failure (DNS, TLS, a timeout or a reset connection), and only on a tick where that account polls; plus one expiry lookup per bound own token on every `bridgewatch auth status` run |
 | GitHub personal access token with an expiry | the `github-authentication-token-expiration` response header | nothing: it is on every response |
 | A sign-in | the refresh token's expiry, stored with the sign-in; for a sign-in that cannot renew itself, the access token's | nothing |
 

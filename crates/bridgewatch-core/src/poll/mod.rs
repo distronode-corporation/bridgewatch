@@ -502,6 +502,7 @@ impl Poller {
         // ⛔ Side by side across accounts (cubic, #67), through `in_order`, so
         // the request log records them in account order whatever answers
         // first, and the results are applied in that order after the join.
+        // Within one account they are sequential: see below.
         let polling: BTreeSet<&str> = self
             .watches
             .iter()
@@ -516,45 +517,44 @@ impl Poller {
             .filter(|(state, turn)| state.watch.mine && matches!(turn, Turn::Poll))
             .map(|(state, _)| state.watch.account.as_str())
             .collect();
-        enum Lookup {
-            Expiry(String, Result<(), ClientError>),
-            Owner(String, Result<String, ClientError>),
-        }
-        type LookupFuture<'a> =
-            std::pin::Pin<Box<dyn std::future::Future<Output = Lookup> + Send + 'a>>;
-        let mut lookups: Vec<LookupFuture<'_>> = Vec::new();
-        for (name, client) in &self.clients {
-            if self.expiry_due.contains(name) && polling.contains(name.as_str()) {
-                let name = name.clone();
-                lookups.push(Box::pin(async move {
-                    let answer = client.read_token_expiry().await;
-                    Lookup::Expiry(name, answer)
-                }));
-            }
-            if wants_owner.contains(name.as_str()) {
-                let name = name.clone();
-                lookups.push(Box::pin(async move {
-                    let answer = client.owner().await;
-                    Lookup::Owner(name, answer)
-                }));
-            }
-        }
+        let expiry_due = &self.expiry_due;
+        let lookups = self.clients.iter().filter_map(|(name, client)| {
+            let expiry = expiry_due.contains(name) && polling.contains(name.as_str());
+            let owner = wants_owner.contains(name.as_str());
+            (expiry || owner).then_some(async move {
+                // ⛔ One after the other within an account: the expiry
+                // lookup's ignored 401 puts the refusal back as it was before
+                // it, and a `/user` 401 landing in between would be erased by
+                // that (Seer and cubic, #67). Accounts still run side by side.
+                let expiry = match expiry {
+                    true => Some(client.read_token_expiry().await),
+                    false => None,
+                };
+                let owner = match owner {
+                    true => Some(client.owner().await),
+                    false => None,
+                };
+                (name.clone(), expiry, owner)
+            })
+        });
+        let answers = in_order(lookups).await;
         let mut owners: HashMap<String, Result<String, ClientError>> = HashMap::new();
-        for lookup in in_order(lookups).await {
-            match lookup {
-                Lookup::Expiry(name, Err(e)) if e.should_back_off() => {
+        for (name, expiry, owner) in answers {
+            match expiry {
+                Some(Err(e)) if e.should_back_off() => {
                     tracing::debug!(account = %name, error = %e, "the token's expiry was not read; asked again later");
                 }
-                Lookup::Expiry(name, Err(e)) => {
+                Some(Err(e)) => {
                     tracing::debug!(account = %name, error = %e, "the token's expiry cannot be read; not asked again");
                     self.expiry_due.remove(&name);
                 }
-                Lookup::Expiry(name, Ok(())) => {
+                Some(Ok(())) => {
                     self.expiry_due.remove(&name);
                 }
-                Lookup::Owner(name, answer) => {
-                    owners.insert(name, answer);
-                }
+                None => {}
+            }
+            if let Some(answer) = owner {
+                owners.insert(name, answer);
             }
         }
         let owners = &owners;
