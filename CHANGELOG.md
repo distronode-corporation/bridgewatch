@@ -127,7 +127,10 @@ body line with a bracket.
   missing or bound to another server used to stop polling for every account, with the
   tray icon on unknown and "cannot start polling" in the strip. Now that account's watches
   carry the error and the others keep polling, as an account that is not signed in
-  always did.
+  always did. The refused account is tried again on its own, in place, at 5 seconds and
+  then at doubling intervals up to 5 minutes, and at once after a token is saved for it or
+  on **Refresh now**: a locked keychain or a token command that timed out heals without a
+  reload, and the other accounts keep their state throughout.
 - **`bridgewatch auth status` lists own-token accounts too**: bound to which server, saved
   for another server, a 1.x value that binds on first use, or nothing stored. It exits 70
   unless every account it lists is usable.

@@ -571,6 +571,7 @@ pub async fn set_own_token(
     // never from the webview: whoever names the base_url names where the
     // token goes, and a script in the webview must not be the one to say.
     let base_url = account_on_disk(&state.config_path, &account)?.base_url;
+    let account_name = account.clone();
     tauri::async_runtime::spawn_blocking(move || {
         token::set_own_token(
             &account,
@@ -582,7 +583,14 @@ pub async fn set_own_token(
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
-    state.request_reload();
+    // A refused account is retried in place, so no other watch loses its
+    // state; an account that was working gets its new token through a
+    // reload, as before (its client holds the old one).
+    if state.is_refused(&account_name) {
+        state.retry_refused.notify_one();
+    } else {
+        state.request_reload();
+    }
     Ok(())
 }
 

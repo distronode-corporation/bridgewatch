@@ -289,8 +289,9 @@ Four things worth knowing before wiring a settings pane:
   the bound form, then return it, and nothing if the write fails. The tab is what
   makes 1.3 refuse a 2.0 entry locally (a control character) rather than send
   the document as a header. `Poller::from_config_per_account` (the app's) fails
-  only the account whose token failed; `Poller::from_config` (the CLI's) fails
-  the whole build.
+  only the account whose token failed, and `Poller::retry_refused` tries those
+  accounts again in place, every watch's state kept; `Poller::from_config` (the
+  CLI's) fails the whole build.
 
 - ⛔ **An empty keyring user does not work through the `keyring` crate.** Measured
   against 4.2.0 on macOS, `Entry::new(service, "")` returns

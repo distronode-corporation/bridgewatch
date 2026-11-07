@@ -110,6 +110,27 @@ pub struct Poller {
     /// The accounts [`Poller::from_config_per_account`] built a refusing
     /// client for, because their credential failed. Empty otherwise.
     refused: Vec<String>,
+    /// What [`Poller::retry_refused`] needs to build one account's client
+    /// again. `None` for a poller built from ready clients.
+    retry: Option<Retry>,
+}
+
+/// How a client's transport is made, per account: the network's
+/// ([`ReqwestTransport`](crate::client::ReqwestTransport) on the account's
+/// timeout), or one a test supplies.
+type MakeTransport = Arc<
+    dyn Fn(&crate::config::Account) -> Result<Arc<dyn crate::client::Transport>, ClientError>
+        + Send
+        + Sync,
+>;
+
+/// Everything needed to build a refused account's client again, in place.
+struct Retry {
+    /// The polled accounts, as the configuration said when the poller was
+    /// built. A retry never reads the file: a changed file is a reload.
+    accounts: BTreeMap<String, crate::config::Account>,
+    store: Arc<dyn crate::token::TokenProvider>,
+    transport: MakeTransport,
 }
 
 impl Poller {
@@ -179,6 +200,7 @@ impl Poller {
             sender,
             last_any_live: false,
             refused: Vec::new(),
+            retry: None,
         })
     }
 
@@ -196,7 +218,7 @@ impl Poller {
     where
         P: crate::token::TokenProvider + Clone + 'static,
     {
-        Self::build(config, provider, false)
+        Self::build(config, provider, false, network_transport())
     }
 
     /// [`Poller::from_config`], where an account whose token cannot be
@@ -213,10 +235,33 @@ impl Poller {
     where
         P: crate::token::TokenProvider + Clone + 'static,
     {
-        Self::build(config, provider, true)
+        Self::build(config, provider, true, network_transport())
     }
 
-    fn build<P>(config: &Config, provider: &P, per_account: bool) -> Result<Self, PollerError>
+    /// [`Poller::from_config_per_account`] over one transport the caller
+    /// supplies for every account: a script, in a test.
+    pub fn from_config_per_account_on<P>(
+        config: &Config,
+        provider: &P,
+        transport: Arc<dyn crate::client::Transport>,
+    ) -> Result<Self, PollerError>
+    where
+        P: crate::token::TokenProvider + Clone + 'static,
+    {
+        Self::build(
+            config,
+            provider,
+            true,
+            Arc::new(move |_: &crate::config::Account| Ok(transport.clone())),
+        )
+    }
+
+    fn build<P>(
+        config: &Config,
+        provider: &P,
+        per_account: bool,
+        transport: MakeTransport,
+    ) -> Result<Self, PollerError>
     where
         P: crate::token::TokenProvider + Clone + 'static,
     {
@@ -232,40 +277,100 @@ impl Poller {
         // account that does not exist already gets.
         let used: HashSet<&str> = config.watches.iter().map(|w| w.account.as_str()).collect();
         let mut refused = Vec::new();
+        let mut polled = BTreeMap::new();
         for (name, account) in config
             .accounts
             .iter()
             .filter(|(name, _)| used.contains(name.as_str()))
         {
-            let client = match client_for_account(name, account, None, store.clone(), ring.clone())
-            {
+            let made = account_client(name, account, &store, &ring, &transport);
+            let client = match made {
                 Ok(client) => client,
-                Err(PollerError::Token(_, e)) if per_account => {
-                    tracing::warn!(account = %name, error = %e, "the account's token is not usable");
+                Err(failure) if per_account => {
+                    let client = refusal(name, account, failure, &ring)?;
                     refused.push(name.clone());
-                    refused_client(name, account, e.to_string(), ring.clone())?
-                }
-                Err(PollerError::SignIn(_, e)) if per_account => {
-                    tracing::warn!(account = %name, error = %e, "the account cannot sign in");
-                    refused.push(name.clone());
-                    refused_client(name, account, e.to_string(), ring.clone())?
+                    client
                 }
                 Err(e) => return Err(e),
             };
             clients.insert(name.clone(), client);
+            polled.insert(name.clone(), account.clone());
         }
         let mut poller = Self::with_clients(config, clients, ring).map_err(PollerError::Config)?;
         poller.refused = refused;
+        poller.retry = per_account.then_some(Retry {
+            accounts: polled,
+            store,
+            transport,
+        });
         Ok(poller)
     }
 
-    /// The accounts whose credential failed when this poller was built, and
-    /// whose every request is refused. ⚠ A refusal is fixed at build time:
-    /// some causes pass on their own (a locked keychain, a Secret Service not
-    /// up yet, a command that timed out), so the owner rebuilds the poller,
-    /// backing off, while this is not empty.
+    /// The accounts whose credential failed, and whose every request is
+    /// refused: since the poller was built, or since the last
+    /// [`Poller::retry_refused`] that still could not resolve them.
     pub fn refused_accounts(&self) -> &[String] {
         &self.refused
+    }
+
+    /// Resolve the credential of each refused account again, and swap in the
+    /// real client of every one that now resolves.
+    ///
+    /// ⛔ In place. Every watch keeps its state (backoff, `retry_after`, the
+    /// pipeline cache and the last view), the healthy accounts' and the
+    /// recovered account's alike; only a client changes. Some causes of a
+    /// refusal pass on their own (a locked keychain, a Secret Service not up
+    /// yet at login, a command that timed out, a token saved since), and
+    /// rebuilding the whole poller for them wiped every other account's
+    /// backoff and cache each time. An account still refused keeps a refusing
+    /// client, with the latest reason, and sends nothing.
+    ///
+    /// Returns the accounts that recovered. ⚠️ Blocking, like building: it
+    /// reads the credential store or runs a token command.
+    pub fn retry_refused(&mut self) -> Vec<String> {
+        let Some(retry) = &self.retry else {
+            return Vec::new();
+        };
+        let mut recovered = Vec::new();
+        let mut still = Vec::new();
+        for name in std::mem::take(&mut self.refused) {
+            let Some(account) = retry.accounts.get(&name) else {
+                continue;
+            };
+            let made = account_client(&name, account, &retry.store, &self.ring, &retry.transport);
+            let client = match made {
+                Ok(client) => {
+                    tracing::info!(account = %name, "the account's credential resolves again");
+                    recovered.push(name.clone());
+                    client
+                }
+                Err(failure) => match refusal(&name, account, failure, &self.ring) {
+                    Ok(client) => {
+                        still.push(name.clone());
+                        client
+                    }
+                    // Not a credential failure (a transport that cannot be
+                    // built): keep the refusing client already in place.
+                    _ => {
+                        still.push(name);
+                        continue;
+                    }
+                },
+            };
+            self.clients.insert(name, client);
+        }
+        self.refused = still;
+        // ⚠ The one thing a recovery changes besides the client: the
+        // recovered account's watches backed off on refusals the poller made
+        // itself, which no server asked for, so that backoff is forgotten and
+        // they poll on the next tick. Their cache and last view are kept, and
+        // every other watch is untouched.
+        for state in &mut self.watches {
+            if recovered.contains(&state.watch.account) {
+                state.policy.forget_refusals();
+            }
+        }
+        recovered
     }
 
     /// The client each account polls through, by account name.
@@ -1118,6 +1223,54 @@ pub fn client_for_account_on(
     .map_err(PollerError::Client)
 }
 
+/// The network's transport for an account, on its own timeout.
+fn network_transport() -> MakeTransport {
+    Arc::new(|account: &crate::config::Account| {
+        let transport: Arc<dyn crate::client::Transport> =
+            Arc::new(crate::client::ReqwestTransport::new(
+                std::time::Duration::from_secs(account.timeout_secs),
+            )?);
+        Ok(transport)
+    })
+}
+
+/// One account's client, resolving its credential through `store`: the
+/// one path a build and [`Poller::retry_refused`] share.
+fn account_client(
+    name: &str,
+    account: &crate::config::Account,
+    store: &Arc<dyn crate::token::TokenProvider>,
+    ring: &RequestRing,
+    transport: &MakeTransport,
+) -> Result<Arc<dyn CiClient>, PollerError> {
+    let transport = transport(account).map_err(PollerError::Client)?;
+    client_for_account_on(name, account, None, store.clone(), transport, ring.clone())
+}
+
+/// What a per-account poller does with a failed client build: a credential
+/// failure becomes a refusing client; anything else is returned as the error
+/// it was. The error text is the token error's display, which never holds a
+/// token.
+fn refusal(
+    name: &str,
+    account: &crate::config::Account,
+    failure: PollerError,
+    ring: &RequestRing,
+) -> Result<Arc<dyn CiClient>, PollerError> {
+    let message = match failure {
+        PollerError::Token(_, e) => {
+            tracing::warn!(account = %name, error = %e, "the account's token is not usable");
+            e.to_string()
+        }
+        PollerError::SignIn(_, e) => {
+            tracing::warn!(account = %name, error = %e, "the account cannot sign in");
+            e.to_string()
+        }
+        other => return Err(other),
+    };
+    refused_client(name, account, message, ring.clone())
+}
+
 /// A client for an account whose credential failed: every request is
 /// refused with [`ClientError::Token`], and none leaves the machine.
 fn refused_client(
@@ -1249,4 +1402,246 @@ pub fn select_rows(rows: &[Pipeline], watch: &Watch, rules: &WatchRules) -> Vec<
         out.push(newest.clone());
     }
     out
+}
+
+#[cfg(test)]
+mod retry_tests {
+    //! [`Poller::retry_refused`]: a refused account is retried in place, and
+    //! nothing else about the poller changes. Nothing here touches a real
+    //! credential store or the network: an in-memory store and a script.
+
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    use super::Poller;
+    use crate::client::{HttpResponse, ScriptTransport};
+    use crate::token::{Secret, TokenError, TokenProvider};
+
+    /// A credential store in memory, shared by clones, so a test can save a
+    /// token into the one the poller holds.
+    #[derive(Clone, Default)]
+    struct Memory(Arc<Mutex<BTreeMap<String, String>>>);
+
+    impl TokenProvider for Memory {
+        fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(service)
+                .cloned()
+                .ok_or_else(|| TokenError::NoEntry {
+                    service: service.into(),
+                    user: user.into(),
+                })
+        }
+        fn keyring_set(&self, service: &str, _: &str, secret: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().insert(service.into(), secret.into());
+            Ok(())
+        }
+        fn keyring_delete(&self, service: &str, _: &str) -> Result<(), TokenError> {
+            self.0.lock().unwrap().remove(service);
+            Ok(())
+        }
+        fn env(&self, name: &str) -> Option<String> {
+            (name == "TOK").then(|| "glpat-healthy".to_string())
+        }
+        fn run(&self, _: &[String]) -> Result<String, TokenError> {
+            Err(TokenError::Empty)
+        }
+    }
+
+    /// `moved` reads its own entry on gitlab.example.com; `ok` an env token.
+    const BOTH: &str = r#"
+        [accounts.moved]
+        base_url = "https://gitlab.example.com"
+        token = { own = true }
+
+        [accounts.ok]
+        token = { env = "TOK" }
+
+        [[watches]]
+        id = "broken"
+        account = "moved"
+        project = 2
+
+        [[watches]]
+        id = "fine"
+        account = "ok"
+        project = 1
+        role = "secondary"
+        "#;
+
+    fn config(raw: &str) -> crate::Config {
+        toml::from_str(raw).expect("the table deserialises")
+    }
+
+    /// A store whose `moved` token was saved for gitlab.com: refused for good.
+    fn bound_elsewhere() -> Memory {
+        let store = Memory::default();
+        crate::token::set_own_token(
+            "moved",
+            "https://gitlab.com",
+            &Secret::new("glpat-A"),
+            &store,
+        )
+        .unwrap();
+        store
+    }
+
+    /// Everything a watch keeps between ticks, as one comparable string.
+    fn kept(poller: &Poller, id: &str) -> String {
+        let state = poller
+            .watches
+            .iter()
+            .find(|w| w.watch.id == id)
+            .expect("the watch exists");
+        format!(
+            "{:?} | {:?} | {:?}",
+            state.policy, state.cache, state.last_view
+        )
+    }
+
+    fn requests_for(t: &ScriptTransport, project: u64) -> usize {
+        let marker = format!("/projects/{project}/");
+        t.requests()
+            .iter()
+            .filter(|r| r.url.contains(&marker))
+            .count()
+    }
+
+    /// (a) A retry pass leaves every watch exactly as it was: the healthy
+    /// account's backoff, `retry_after` and cached view survive, while the
+    /// other account stays refused.
+    #[tokio::test]
+    async fn a_retry_pass_keeps_every_watchs_state() {
+        let t = Arc::new(ScriptTransport::new());
+        t.reply("/projects/1/pipelines", 200, "[]");
+        t.reply_with(
+            "/projects/1/pipelines",
+            HttpResponse {
+                retry_after: Some(60),
+                ..HttpResponse::plain(429, "{}")
+            },
+        );
+        let mut poller =
+            Poller::from_config_per_account_on(&config(BOTH), &bound_elsewhere(), t.clone())
+                .unwrap();
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        poller.tick().await; // fine: a view
+        poller.tick().await; // fine: a 429, kept beside that view
+
+        let fine = poller
+            .watches
+            .iter()
+            .find(|w| w.watch.id == "fine")
+            .unwrap();
+        assert_eq!(fine.policy.consecutive_errors(), 1);
+        assert!(format!("{:?}", fine.policy).contains("retry_after: Some(60s)"));
+        assert!(fine.last_view.is_some());
+        let before = (kept(&poller, "fine"), kept(&poller, "broken"));
+
+        for _ in 0..3 {
+            assert!(poller.retry_refused().is_empty());
+        }
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        assert_eq!(
+            (kept(&poller, "fine"), kept(&poller, "broken")),
+            before,
+            "a retry pass changes no watch's state"
+        );
+    }
+
+    /// (b) A refused account becomes usable once its token is saved, without
+    /// a reload, and its watches then poll; the other account's state is kept.
+    #[tokio::test]
+    async fn a_refused_account_recovers_in_place_once_its_token_is_saved() {
+        let store = Memory::default(); // nothing stored for `moved` yet
+        let t = Arc::new(ScriptTransport::new());
+        t.reply("/projects/1/pipelines", 200, "[]");
+        let mut poller =
+            Poller::from_config_per_account_on(&config(BOTH), &store, t.clone()).unwrap();
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        let tick = poller.tick().await;
+        let broken = tick
+            .snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == "broken")
+            .unwrap();
+        assert!(
+            broken
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("account moved:"),
+            "{:?}",
+            broken.error
+        );
+        let fine_before = kept(&poller, "fine");
+
+        crate::token::set_own_token(
+            "moved",
+            "https://gitlab.example.com",
+            &Secret::new("glpat-B"),
+            &store,
+        )
+        .unwrap();
+        let broken_view = poller
+            .watches
+            .iter()
+            .find(|w| w.watch.id == "broken")
+            .map(|w| format!("{:?} | {:?}", w.cache, w.last_view))
+            .unwrap();
+        assert_eq!(poller.retry_refused(), ["moved"]);
+        assert!(poller.refused_accounts().is_empty());
+        assert_eq!(kept(&poller, "fine"), fine_before);
+        // The recovered watch keeps its cache and last view; only the backoff
+        // its own refusals caused is forgotten.
+        let broken = poller
+            .watches
+            .iter()
+            .find(|w| w.watch.id == "broken")
+            .unwrap();
+        assert_eq!(
+            format!("{:?} | {:?}", broken.cache, broken.last_view),
+            broken_view
+        );
+        assert_eq!(broken.policy.consecutive_errors(), 0);
+
+        t.reply("/projects/2/pipelines", 200, "[]");
+        t.reply("/projects/1/pipelines", 200, "[]");
+        let tick = poller.tick().await;
+        assert_eq!(requests_for(&t, 2), 1, "the recovered account polled");
+        let broken = tick
+            .snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == "broken")
+            .unwrap();
+        assert_eq!(broken.error, None);
+    }
+
+    /// (c) An account that stays refused sends nothing, however many passes
+    /// and ticks go by.
+    #[tokio::test]
+    async fn a_permanently_refused_account_makes_no_request() {
+        let raw = BOTH.split("[accounts.ok]").next().unwrap().to_string()
+            + "\n[[watches]]\nid = \"broken\"\naccount = \"moved\"\nproject = 2\n";
+        let t = Arc::new(ScriptTransport::new());
+        let mut poller =
+            Poller::from_config_per_account_on(&config(&raw), &bound_elsewhere(), t.clone())
+                .unwrap();
+        for _ in 0..4 {
+            assert!(poller.retry_refused().is_empty());
+            let tick = poller.tick().await;
+            let error = tick.snapshot.watches[0].error.clone().unwrap_or_default();
+            assert!(
+                error.contains("was saved for https://gitlab.com"),
+                "{error}"
+            );
+            assert!(!error.contains("glpat-A"), "{error}");
+        }
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        assert!(t.requests().is_empty(), "{:?}", t.requests());
+    }
 }

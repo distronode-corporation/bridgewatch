@@ -38,20 +38,6 @@ pub fn build_retry_delay(attempt: u32) -> Duration {
     Duration::from_secs(FIRST.saturating_mul(1u64 << attempt.min(16)).min(CAP))
 }
 
-/// When to rebuild a poller that refused some accounts, or `None` when it
-/// refused none.
-///
-/// ⛔ A refused account's client is fixed when the poller is built, and some
-/// causes pass on their own: a keychain that was locked, a Secret Service not
-/// up yet at login, a command that timed out. Before D4 such an error failed
-/// the whole build, which retried on [`build_retry_delay`]; the refused
-/// account now gets the same schedule, so it heals without a reload. A cause
-/// that does not pass (a token bound to another server) costs one credential
-/// read per backed-off interval, at most every five minutes.
-pub fn refused_rebuild_delay(any_refused: bool, attempt: u32) -> Option<Duration> {
-    any_refused.then(|| build_retry_delay(attempt))
-}
-
 /// Run until the process exits, restarting the poll loop if it panics.
 ///
 /// ⛔ A panic anywhere in the loop used to end the task for good: the tray kept
@@ -115,7 +101,6 @@ where
 /// have to be rebuilt anyway when the config changes.
 async fn run_loop(app: AppHandle, state: Arc<AppState>) {
     let mut failed_builds: u32 = 0;
-    let mut refused_rebuilds: u32 = 0;
     loop {
         let Some(config) = state.config() else {
             // No usable configuration. Show it in the tray and wait to be told
@@ -123,6 +108,7 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             set_icon(&app, IconState::Unknown);
             publish(&app, &state, Snapshot::empty());
             state.set_clients(Default::default());
+            state.set_refused(Vec::new());
             state.reload.notified().await;
             continue;
         };
@@ -141,11 +127,13 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             Ok(p) => {
                 failed_builds = 0;
                 state.set_clients(p.clients().clone());
+                state.set_refused(p.refused_accounts().to_vec());
                 p.with_ledger(NotifyLedger::default_path())
                     .with_eta_history(EtaHistory::default_path())
             }
             Err(e) => {
                 state.set_clients(Default::default());
+                state.set_refused(Vec::new());
                 let delay = build_retry_delay(failed_builds);
                 failed_builds = failed_builds.saturating_add(1);
                 tracing::error!(error = %e, retry_in = ?delay, "poller could not be built");
@@ -165,16 +153,15 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             }
         };
 
-        // Rebuilt on its own schedule while any account was refused.
-        let rebuild =
-            refused_rebuild_delay(!poller.refused_accounts().is_empty(), refused_rebuilds);
-        refused_rebuilds = if rebuild.is_some() {
-            refused_rebuilds.saturating_add(1)
-        } else {
-            0
-        };
-        let rebuild_at =
-            tokio::time::Instant::now() + rebuild.unwrap_or(Duration::from_secs(365 * 86_400));
+        // ⛔ A refused account is retried IN PLACE (`Poller::retry_refused`),
+        // never by rebuilding the poller: a rebuild re-created every watch's
+        // state, so each attempt wiped the healthy accounts' backoff, cache
+        // and last view. Some causes pass on their own (a keychain that was
+        // locked, a Secret Service not up yet at login, a command that timed
+        // out), so the attempts follow `build_retry_delay` while any account
+        // is refused, and a token save or a Refresh retries at once.
+        let mut retries: u32 = 0;
+        let mut next_retry = tokio::time::Instant::now() + build_retry_delay(retries);
 
         loop {
             let tick = poller.tick().await;
@@ -188,14 +175,48 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             // A timed pause that ran out says so in the menu by the next tick.
             crate::tray::sync_pause(&app);
 
-            tokio::select! {
-                _ = tokio::time::sleep(tick.next_interval) => {}
-                _ = state.poll_now.notified() => {}
-                _ = state.reload.notified() => break,
-                _ = tokio::time::sleep_until(rebuild_at), if rebuild.is_some() => break,
+            let tick_at = tokio::time::Instant::now() + tick.next_interval;
+            let reload = loop {
+                let refused = !poller.refused_accounts().is_empty();
+                tokio::select! {
+                    _ = tokio::time::sleep_until(tick_at) => break false,
+                    _ = state.poll_now.notified() => break false,
+                    _ = state.reload.notified() => break true,
+                    _ = state.retry_refused.notified() => {
+                        // A recovery ticks at once; nothing recovered waits on.
+                        if retry_refused(&mut poller, &state) {
+                            break false;
+                        }
+                    }
+                    _ = tokio::time::sleep_until(next_retry), if refused => {
+                        retries = retries.saturating_add(1);
+                        next_retry = tokio::time::Instant::now() + build_retry_delay(retries);
+                        if retry_refused(&mut poller, &state) {
+                            break false;
+                        }
+                    }
+                }
+            };
+            if reload {
+                break;
             }
         }
     }
+}
+
+/// One in-place retry of the poller's refused accounts, and the shell's view
+/// of the result. Returns whether any account recovered.
+///
+/// ⚠ Blocking for as long as the credential reads take, like building the
+/// poller on this task is.
+fn retry_refused(poller: &mut Poller, state: &AppState) -> bool {
+    if poller.refused_accounts().is_empty() {
+        return false;
+    }
+    let recovered = poller.retry_refused();
+    state.set_clients(poller.clients().clone());
+    state.set_refused(poller.refused_accounts().to_vec());
+    !recovered.is_empty()
 }
 
 /// The configuration's own complaints, as error-strip lines. Empty when the
@@ -587,12 +608,6 @@ mod tests {
 
     #[test]
     fn a_failed_build_backs_off_and_caps() {
-        assert_eq!(refused_rebuild_delay(false, 3), None);
-        assert_eq!(refused_rebuild_delay(true, 0), Some(Duration::from_secs(5)));
-        assert_eq!(
-            refused_rebuild_delay(true, 99),
-            Some(Duration::from_secs(300))
-        );
         let secs: Vec<u64> = (0..8).map(|a| build_retry_delay(a).as_secs()).collect();
         assert_eq!(secs, [5, 10, 20, 40, 80, 160, 300, 300]);
         assert_eq!(build_retry_delay(u32::MAX).as_secs(), 300);
