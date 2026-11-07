@@ -37,7 +37,7 @@ prose:
 
 - [ ] A fixture under `crates/bridgewatch-core/tests/fixtures/` covers the new or
       changed case, with its `expected.json`
-- [ ] The README's rule table still describes what the code does
+- [ ] The rule table in `docs/verdicts.md` still describes what the code does
 
 ## Anything a reviewer should know
 

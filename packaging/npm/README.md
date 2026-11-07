@@ -39,8 +39,9 @@ to the binary, so `kill -INT` on the launcher stops `bridgewatch watch` too.
 
 ## Documentation
 
-Configuration, commands and exit codes are in the
-[bridgewatch README](https://github.com/distronode-corporation/bridgewatch#readme).
+Configuration, commands and exit codes are in the bridgewatch documentation:
+[Configuration](https://github.com/distronode-corporation/bridgewatch/blob/main/docs/configuration.md), [CLI and exit codes](https://github.com/distronode-corporation/bridgewatch/blob/main/docs/cli.md), and the
+[README](https://github.com/distronode-corporation/bridgewatch#readme) for the rest.
 
 Licensed under Apache-2.0. The package includes `LICENSE`, `NOTICE` and the licence texts
 of the third-party code built into the CLI (`THIRD-PARTY-LICENSES-cli.txt`).

@@ -24,7 +24,8 @@ names the first failing line and opens the failed job when clicked; a failing pi
 announced once, a burst arrives as one, and a fix says "fixed again". `mine = true` shows
 only your own pipelines, and token health warns before a token or sign-in expires. The
 popover, Settings and the setup wizard have new layouts. Upgrading from 1.x: read
-Breaking first, and the README's "Upgrading from 1.x".
+Breaking first, and
+[Upgrading from 1.x](https://github.com/distronode-corporation/bridgewatch/blob/main/docs/tokens.md#upgrading-from-1x).
 
 ### Breaking
 

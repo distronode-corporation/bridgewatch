@@ -6,8 +6,9 @@ about.
 
 - **A question, setup help or an idea** ("how do I…", a token that is not being found,
   a verdict rule you would like): [Discussions](https://github.com/distronode-corporation/bridgewatch/discussions).
-  The [README](https://github.com/distronode-corporation/bridgewatch#readme) answers
-  most configuration questions, so it is worth a look first.
+  The [README](https://github.com/distronode-corporation/bridgewatch#readme) and its
+  [documentation pages](https://github.com/distronode-corporation/bridgewatch/tree/main/docs)
+  answer most configuration questions, so they are worth a look first.
 - **A reproducible bug:** [Issues](https://github.com/distronode-corporation/bridgewatch/issues),
   through the bug report form. For a wrong verdict, a fixture recording of the pipeline
   (GitLab only, see the form) is worth more than any description.
