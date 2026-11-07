@@ -25,8 +25,8 @@ licenses/, about.toml      The cargo-about template and config for the Rust half
 ## Setup
 
 You need Rust 1.90 or newer (via [rustup](https://rustup.rs); `rust-toolchain.toml` pins
-the stable channel), Node.js 24, and the platform packages listed under "Build from
-source" in [README.md](README.md): the Xcode Command Line Tools on macOS, the WebKitGTK
+the stable channel), Node.js 24, and the platform packages listed in
+[docs/building.md](docs/building.md): the Xcode Command Line Tools on macOS, the WebKitGTK
 4.1 and libayatana-appindicator3 development packages (and the rest of that list) on
 Ubuntu.
 
@@ -97,7 +97,7 @@ names no path.
    `examples/github.toml` if it is GitHub-only. Some core tests edit those files and
    check that their comments survive verbatim, so change an existing comment there only
    together with those tests.
-5. Document it in the README's configuration reference.
+5. Document it in the configuration reference, [docs/configuration.md](docs/configuration.md#reference).
 
 ## Fixtures
 
@@ -164,9 +164,11 @@ By contributing you agree that your contribution is licensed under the Apache Li
 
 ## Docs
 
-Every claim in the README must be checkable in the code. If you change behaviour the
-README describes (a default, a rule, a CLI flag, an exit code), change the README in the
-same pull request. The exit-code table is copied from `bridgewatch --help`, which is
+Every claim in the README and in `docs/` must be checkable in the code. If you change
+behaviour they describe (a default, a rule, a CLI flag, an exit code), change the page
+that describes it in the same pull request. The README is the project's homepage; the
+reference lives in `docs/`, one page per topic. The exit-code table in
+[docs/cli.md](docs/cli.md#exit-codes) is copied from `bridgewatch --help`, which is
 generated from the constants in `crates/bridgewatch-cli/src/main.rs`.
 
 ## Questions and bugs
