@@ -54,6 +54,7 @@ function fakeOAuth(): { [K in keyof Required<OAuthApi>]: Mock } {
 function fakeApi(): { [K in keyof Required<WizardApi>]: Mock } {
   return {
     detectCliToken: vi.fn(async () => GH_FOUND),
+    ownTokenStatus: vi.fn(async () => ({ kind: "legacy" })),
     testConnection: vi.fn(async () => IDENTITY),
     listProjects: vi.fn(async () => ({ mode: "projects", truncated: false, projects: [] })),
     resolveProject: vi.fn(async () => ({ id: 1, path: "acme/web", project: "acme/web", default_branch: "main", web_url: null })),

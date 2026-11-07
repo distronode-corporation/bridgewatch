@@ -8,6 +8,7 @@
  * `StepIssue`s are shown on the page they name.
  */
 
+import type { OwnTokenStatus } from "../../lib/own-token";
 import { PROVIDER_DEFAULTS, cliName, defaultBaseUrl, providerName } from "../../lib/providers";
 import type { NotifyAnswers, ProjectRef, Provider, TokenSource, WizardAnswers, WizardStepId } from "./api";
 
@@ -364,8 +365,39 @@ export function draftFromAnswers(answers: Partial<WizardAnswers>): Draft {
  * the original instance keeps it again. A display rule only: the core decides.
  */
 export function followOwnToken(draft: Draft): void {
-  if (draft.ownStoredFor === null) return;
+  if (draft.ownStoredFor === null) {
+    draft.ownStored = false;
+    return;
+  }
   draft.ownStored = sameInstance(draft.ownStoredFor, baseUrlOf(draft));
+}
+
+/**
+ * Take what the shell says the stored entry holds (`own_token_status`) as the
+ * truth about it, over the file's base_url.
+ *
+ * ⛔ The draft first assumes the stored token belongs to the base_url in the
+ * file. A file edited by hand to another host since the token was saved breaks
+ * that: "leave empty to keep the stored token" then saved an account whose token
+ * the core refuses. A bound entry belongs to its STORED origin; nothing stored
+ * keeps nothing; a 1.x value binds to the file's base_url on first use, so the
+ * file's answer stands for it.
+ */
+export function adoptOwnTokenStatus(draft: Draft, status: OwnTokenStatus): void {
+  switch (status.kind) {
+    case "none":
+      draft.ownStoredFor = null;
+      break;
+    case "legacy":
+      return;
+    case "bound":
+      draft.ownStoredFor = status.origin;
+      break;
+    case "mismatch":
+      draft.ownStoredFor = status.stored;
+      break;
+  }
+  followOwnToken(draft);
 }
 
 /** Whether two instance URLs name one origin, for the form's wording. */

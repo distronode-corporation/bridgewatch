@@ -219,6 +219,7 @@ export function wizardApi(fallbackAccount?: string): WizardApi {
   return {
     detectCliToken: (baseUrl, provider) =>
       invoke<CliTokenDetection>("wizard_detect_cli_token", { baseUrl, provider }),
+    ownTokenStatus: (account) => invoke<OwnTokenStatus>("own_token_status", { account }),
     testConnection: (connection) =>
       invoke<Confirmable<Identity>>("wizard_test_connection", { connection: withAccount(connection) }),
     listProjects: (connection, search) =>
