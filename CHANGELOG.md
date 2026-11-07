@@ -136,6 +136,10 @@ body line with a bracket.
   instance offers it, else to a pasted token.
 - **`init` quotes the account name in the `auth login` step it prints**, so a name with
   a space can be pasted as it is.
+- **The popover shrinks again when its content does.** It grew to fit new rows but never
+  came back down, so after a watch was collapsed or its pipelines went, the window kept
+  the old height with empty space below the last row. It is now sized to what the list
+  holds, up to `ui.popover.max_height`, in both directions.
 - **Settings: every tab label stays on one line.** At the narrowest window, **Edit as
   text** wrapped onto three lines.
 - **A sign-in is sent only to the server that issued it.** `bridgewatch fixture record`
