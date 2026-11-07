@@ -6,7 +6,8 @@
   popover, right-click for the menu.
 - **Many Linux tray hosts deliver no left-click** (GNOME's extension included), so the
   first menu item, **Show status**, opens the popover. The menu also has **Open pipelines
-  page** (the repository's Actions page on GitHub), **Refresh now**, **Pause notifications** (for 1 hour, or until resumed),
+  page** (the repository's Actions page on GitHub), **Refresh now**, **Pause notifications** (for 1 hour, or until resumed; while paused the
+  submenu reads **Notifications paused** and offers **Resume**),
   **Reload config**, **Open config file**, **Open log folder**, **Settings…**, **Setup
   wizard…**, **Launch at login** and **Quit bridgewatch**.
 - **Config problems** appear in a strip at the top of the popover, with a button that
