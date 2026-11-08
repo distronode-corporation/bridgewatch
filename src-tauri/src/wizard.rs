@@ -243,10 +243,13 @@ pub fn client_for(
     // wizard never makes that first use: only the poller does, against the
     // file. A bound entry is safe to resolve here, because `resolve` refuses
     // it for any other server.
+    // ⛔ A read that may ask (`own_token_status_asking`): the wizard runs on a
+    // person's click, and a quiet read would answer "needs approval" for a
+    // 1.x value the store asks about, which would walk past this guard.
     if pasted.is_none()
         && matches!(conn.token, TokenSource::Own(true))
         && let Ok(token::OwnTokenStatus::Legacy) =
-            token::own_token_status(name, &account, store.as_ref())
+            token::own_token_status_asking(name, &account, store.as_ref())
     {
         return Err(answer_issue(
             "token",
@@ -809,7 +812,9 @@ mod tests {
         assert_eq!(missing.issues[0].field, "token");
     }
 
-    /// A store holding one 1.x (bare) own value, under `bridgewatch:gl`.
+    /// A store holding one 1.x (bare) own value, under `bridgewatch:gl`,
+    /// that the store asks about: a quiet read only says "needs approval",
+    /// as the macOS Keychain does for an item another build wrote.
     #[derive(Default)]
     struct OneLegacy(Mutex<Vec<String>>);
     impl TokenProvider for OneLegacy {
@@ -821,6 +826,15 @@ mod tests {
                 service: service.into(),
                 user: user.into(),
             })
+        }
+        fn keyring_get_quiet(&self, service: &str, user: &str) -> Result<String, TokenError> {
+            if service == "bridgewatch:gl" && user == "token" {
+                return Err(TokenError::NeedsApproval {
+                    service: service.into(),
+                    refused: false,
+                });
+            }
+            self.keyring_get(service, user)
         }
         fn keyring_set(&self, service: &str, _: &str, _: &str) -> Result<(), TokenError> {
             self.0.lock().unwrap().push(service.into());

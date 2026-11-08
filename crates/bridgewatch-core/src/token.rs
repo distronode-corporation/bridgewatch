@@ -1247,8 +1247,39 @@ pub fn own_token_status(
     account: &crate::config::Account,
     provider: &dyn TokenProvider,
 ) -> Result<OwnTokenStatus, TokenError> {
+    own_status(account_name, account, provider, false)
+}
+
+/// [`own_token_status`] for a caller acting on a person's explicit request
+/// that needs the answer to decide something, not to show it: the read MAY
+/// ask, so a 1.x value is never mistaken for one it could not read.
+///
+/// ⛔ The setup wizard's guard against binding a 1.x value to the address
+/// typed into the form uses this. A quiet read answers
+/// [`OwnTokenStatus::NeedsApproval`] for an entry the store would ask about,
+/// which is not [`OwnTokenStatus::Legacy`], so the guard let it through and
+/// the resolve after it (which may ask) bound the value to the form's host.
+pub fn own_token_status_asking(
+    account_name: &str,
+    account: &crate::config::Account,
+    provider: &dyn TokenProvider,
+) -> Result<OwnTokenStatus, TokenError> {
+    own_status(account_name, account, provider, true)
+}
+
+fn own_status(
+    account_name: &str,
+    account: &crate::config::Account,
+    provider: &dyn TokenProvider,
+    may_ask: bool,
+) -> Result<OwnTokenStatus, TokenError> {
     let service = SystemTokenProvider::own_service(account_name);
-    let raw = match provider.keyring_get_quiet(&service, SystemTokenProvider::OWN_USER) {
+    let read = if may_ask {
+        provider.keyring_get(&service, SystemTokenProvider::OWN_USER)
+    } else {
+        provider.keyring_get_quiet(&service, SystemTokenProvider::OWN_USER)
+    };
+    let raw = match read {
         Ok(raw) => raw,
         Err(TokenError::NoEntry { .. }) => return Ok(OwnTokenStatus::None),
         Err(TokenError::NeedsApproval { .. }) => return Ok(OwnTokenStatus::NeedsApproval),

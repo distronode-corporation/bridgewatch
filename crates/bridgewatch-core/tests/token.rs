@@ -1240,3 +1240,35 @@ fn each_source_names_the_entry_it_reads() {
         Some("bridgewatch:oauth:gl")
     );
 }
+
+/// ⛔ The wizard's guard against binding a 1.x value to the form's address
+/// reads with `own_token_status_asking`: where a quiet read can only say
+/// "needs approval", the asking one sees the 1.x value it is guarding.
+#[test]
+fn the_asking_status_sees_a_1x_value_a_quiet_one_cannot() {
+    let fake = Fake {
+        asks: true,
+        ..Fake::default()
+    }
+    .with_keyring("bridgewatch:gl", "token", "glpat-legacy");
+    let account = own_on("https://gitlab.example.com");
+    assert_eq!(
+        token::own_token_status("gl", &account, &fake).unwrap(),
+        token::OwnTokenStatus::NeedsApproval
+    );
+    assert_eq!(
+        token::own_token_status_asking("gl", &account, &fake).unwrap(),
+        token::OwnTokenStatus::Legacy
+    );
+    assert_eq!(
+        fake.calls(),
+        [
+            "keyring_get_quiet bridgewatch:gl|token",
+            "keyring_get bridgewatch:gl|token"
+        ]
+    );
+    assert!(
+        !fake.calls().iter().any(|c| c.starts_with("keyring_set")),
+        "neither binds"
+    );
+}
