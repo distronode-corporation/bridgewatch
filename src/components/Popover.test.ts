@@ -339,6 +339,68 @@ describe("Popover, degraded cases", () => {
     });
   });
 
+  it("shows a refused account's reason once, under its watches, not again in the strip", () => {
+    // ⛔ The core lists every watch's error in `errors` too (for `check`), so
+    // a host move refused for one account was said in the strip AND under each
+    // of its watches.
+    const reason = "account moved: the stored token of account \"moved\" was saved for https://gitlab.com";
+    const refused: Snapshot = {
+      ...snapshot,
+      watches: [
+        { id: "main-push", role: "primary", icon_state: null, rows: [], error: reason },
+        { id: "hourly", role: "secondary", icon_state: null, rows: [], error: reason },
+      ],
+      errors: [`main-push: ${reason}`, `hourly: ${reason}`, "the poll loop crashed and was restarted: boom"],
+    };
+    render(refused, (host) => {
+      const sections = [...host.querySelectorAll("[data-watch] .error")];
+      expect(sections.map((e) => e.textContent)).toEqual([reason, reason]);
+      const strip = [...host.querySelectorAll(".strip [data-line]")].map((l) => l.textContent);
+      // An error no watch shows stays in the strip.
+      expect(strip).toEqual(["the poll loop crashed and was restarted: boom"]);
+      expect(host.textContent!.split(reason).length - 1).toBe(2);
+    });
+  });
+
+  it("names the accounts whose prompt was cancelled, and Retry asks again", () => {
+    const status: Status = {
+      configPath: "/x/bridgewatch.toml",
+      seeded: false,
+      configOk: true,
+      diagnostics: [],
+      sinceLastPollSecs: 1,
+      nextPollSecs: 4,
+      launchAtLogin: false,
+      platform: "macos",
+      vibrancy: false,
+      needsApproval: ["gl"],
+    };
+    const host = document.createElement("div");
+    document.body.append(host);
+    let retried = 0;
+    const component = mount(Popover, {
+      target: host,
+      props: { snapshot, status, now: 0, onrefresh: () => retried++ },
+    });
+    try {
+      const strip = host.querySelector('[data-slot="needs-approval"]');
+      expect(strip?.textContent).toContain(
+        "Account gl: the credential store's prompt was cancelled, so bridgewatch does not ask again on its own.",
+      );
+      strip?.querySelector<HTMLButtonElement>('[data-action="approval-retry"]')?.click();
+      expect(retried).toBe(1);
+    } finally {
+      void unmount(component);
+      host.remove();
+    }
+  });
+
+  it("shows no approval strip when nothing waits for approval", () => {
+    render(snapshot, (host) => {
+      expect(host.querySelector('[data-slot="needs-approval"]')).toBe(null);
+    });
+  });
+
   it("keeps the secondary label on a secondary watch", () => {
     const quiet: Snapshot = {
       ...snapshot,

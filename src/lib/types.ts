@@ -276,6 +276,13 @@ export interface Status {
    * else the RFC 3339 instant the pause runs out.
    */
   notificationsPaused?: NotificationsPaused | null;
+  /**
+   * The accounts whose credential prompt was cancelled or denied, which the
+   * shell does not ask about again until a person says so (`AskOnce`). The
+   * popover's "needs approval" strip, whose Retry is a Refresh. Optional:
+   * absent reads as none.
+   */
+  needsApproval?: string[];
 }
 
 /** `quiet::PauseView` in the shell. */

@@ -323,6 +323,28 @@ Breaking first, and
 - **The setup wizard's review says "the token you pasted" only when one was.** Re-running
   it with the stored token kept said a pasted token was going into the keychain; it now
   says the stored token is kept.
+- **macOS: the app stops raising Keychain dialogs of its own.** Settings read every own
+  token to show whether one was stored, as soon as the app started and again after every
+  save, and each read could put up a "bridgewatch wants to use your confidential
+  information" dialog: eleven in two and a half minutes on one Mac. Reads made only to
+  show a status (the stored-token line, the sign-in line, `bridgewatch auth status`) now
+  never ask, and say "needs approval" instead; only accounts a watch polls are read, and a
+  save that changes nothing about an account does not read it again. On Linux the same
+  reads no longer unlock a locked keyring.
+- **A cancelled Keychain prompt is not asked again on a timer.** After Cancel (or Deny)
+  the account was retried 5, 10 and 20 seconds later, and every retry was a new dialog.
+  It now waits, with a "the credential store's prompt was cancelled" strip and a
+  **Retry** button in the popover; Retry, **Refresh now** or saving a token asks once
+  more. A dismissed Linux unlock prompt is treated the same way. Other causes (a locked
+  keychain, a Secret Service not up yet, a command that timed out) keep the timed retry.
+- **macOS: clicking a failure notification opens the job.** No click on a notification
+  reached the app on macOS: the notification library sends a notification without an
+  action without waiting for an answer, so the click was dropped. A notification with a
+  link now carries an **Open** button, and a click on it or on the banner opens the link.
+  The app logs one line each time it opens a notification's link.
+- **The popover says a refused account's reason once.** It was shown in the strip at the
+  top and again under each of the account's watches; the strip now leaves out what a
+  watch already shows.
 
 ## [1.3.0] - 2026-11-06
 

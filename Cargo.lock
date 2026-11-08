@@ -519,6 +519,8 @@ dependencies = [
  "reqwest",
  "rhai",
  "schemars 1.2.3",
+ "secret-service",
+ "security-framework",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

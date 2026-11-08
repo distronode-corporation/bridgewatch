@@ -1916,4 +1916,93 @@ mod retry_tests {
         assert_eq!(poller.refused_accounts(), ["moved"]);
         assert!(t.requests().is_empty(), "{:?}", t.requests());
     }
+
+    /// A store whose every read raises a prompt that is cancelled, as the
+    /// macOS Keychain answers after a Cancel, counting the prompts.
+    #[derive(Clone, Default)]
+    struct Cancelling(Arc<Mutex<u32>>);
+
+    impl Cancelling {
+        fn prompts(&self) -> u32 {
+            *self.0.lock().unwrap()
+        }
+    }
+
+    impl TokenProvider for Cancelling {
+        fn keyring_get(&self, service: &str, _: &str) -> Result<String, TokenError> {
+            *self.0.lock().unwrap() += 1;
+            Err(TokenError::NeedsApproval {
+                service: service.into(),
+                refused: true,
+            })
+        }
+        fn keyring_get_quiet(&self, service: &str, _: &str) -> Result<String, TokenError> {
+            Err(TokenError::NeedsApproval {
+                service: service.into(),
+                refused: false,
+            })
+        }
+        fn keyring_set(&self, _: &str, _: &str, _: &str) -> Result<(), TokenError> {
+            Ok(())
+        }
+        fn keyring_delete(&self, _: &str, _: &str) -> Result<(), TokenError> {
+            Ok(())
+        }
+        fn env(&self, name: &str) -> Option<String> {
+            (name == "TOK").then(|| "glpat-healthy".to_string())
+        }
+        fn run(&self, _: &[String]) -> Result<String, TokenError> {
+            Err(TokenError::Empty)
+        }
+    }
+
+    /// (d) ⛔ After a cancelled prompt the account is refused with the reason
+    /// "needs approval", and NOTHING asks again (a retry pass, as the timer
+    /// runs it, or a rebuild, as a reload does) until a person says so; then
+    /// exactly one prompt. The other account polls throughout.
+    #[tokio::test]
+    async fn a_cancelled_prompt_is_not_asked_again_until_a_person_says_so() {
+        let keychain = Cancelling::default();
+        let store = crate::token::AskOnce::new(keychain.clone());
+        let t = Arc::new(ScriptTransport::new());
+        t.reply("/projects/1/pipelines", 200, "[]");
+        let mut poller =
+            Poller::from_config_per_account_on(&config(BOTH), &store, t.clone()).unwrap();
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        assert_eq!(
+            keychain.prompts(),
+            1,
+            "the first poll after launch asks once"
+        );
+        assert_eq!(store.refused(), ["bridgewatch:moved"]);
+
+        let tick = poller.tick().await;
+        let broken = tick
+            .snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == "broken")
+            .unwrap();
+        let error = broken.error.clone().unwrap_or_default();
+        assert!(error.contains("was cancelled or denied"), "{error}");
+        assert!(error.contains("Retry"), "{error}");
+
+        for _ in 0..5 {
+            assert!(poller.retry_refused().is_empty());
+        }
+        let _rebuilt =
+            Poller::from_config_per_account_on(&config(BOTH), &store, t.clone()).unwrap();
+        assert_eq!(
+            keychain.prompts(),
+            1,
+            "a retry pass or a rebuild asked again"
+        );
+
+        store.ask_again();
+        assert!(poller.retry_refused().is_empty());
+        assert_eq!(keychain.prompts(), 2, "Retry asks exactly once more");
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        assert_eq!(requests_for(&t, 2), 0, "the refused account sent nothing");
+        assert!(requests_for(&t, 1) > 0, "the other account kept polling");
+    }
 }

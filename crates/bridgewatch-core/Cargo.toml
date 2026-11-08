@@ -49,6 +49,16 @@ toml = "1.1.6"
 toml_edit = "0.25.15"
 urlencoding = "2.1.3"
 
+# Reads that may not ask (`token::quiet`). Both are already in Cargo.lock as
+# `keyring`'s own stores, at these versions and features, so naming them adds
+# no crate: macOS's switch for the Keychain's access dialog, and the Secret
+# Service search that does not unlock.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7.0"
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+secret-service = { version = "5.1.0", features = ["crypto-rust"] }
+
 [dev-dependencies]
 # Test-only: a scoped subscriber, so the tests can assert what each log LEVEL
 # carries (and that a request line never carries the token) without installing

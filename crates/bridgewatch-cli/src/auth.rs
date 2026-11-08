@@ -380,8 +380,15 @@ impl<'a> ReadOnce<'a> {
     }
 }
 
-impl TokenProvider for ReadOnce<'_> {
-    fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+impl ReadOnce<'_> {
+    /// What this run already read at `service`/`user`, or `read()`'s answer,
+    /// remembered when it is a value or "nothing there".
+    fn remembered(
+        &self,
+        service: &str,
+        user: &str,
+        read: impl FnOnce() -> Result<String, TokenError>,
+    ) -> Result<String, TokenError> {
         let key = (service.to_string(), user.to_string());
         if let Some(remembered) = self.seen().get(&key).cloned() {
             return remembered.ok_or_else(|| TokenError::NoEntry {
@@ -389,7 +396,7 @@ impl TokenProvider for ReadOnce<'_> {
                 user: user.to_string(),
             });
         }
-        let read = self.inner.keyring_get(service, user);
+        let read = read();
         match &read {
             Ok(value) => {
                 self.seen().insert(key, Some(value.clone()));
@@ -400,6 +407,20 @@ impl TokenProvider for ReadOnce<'_> {
             Err(_) => {}
         }
         read
+    }
+}
+
+impl TokenProvider for ReadOnce<'_> {
+    fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        self.remembered(service, user, || self.inner.keyring_get(service, user))
+    }
+
+    /// ⛔ Never the trait's default, which is [`Self::keyring_get`] and would
+    /// make a quiet read ask.
+    fn keyring_get_quiet(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        self.remembered(service, user, || {
+            self.inner.keyring_get_quiet(service, user)
+        })
     }
 
     fn keyring_set(&self, service: &str, user: &str, secret: &str) -> Result<(), TokenError> {
@@ -618,6 +639,13 @@ fn own_line(
         Ok(OwnTokenStatus::None) => (
             false,
             "no own token stored; save one in Settings (Accounts, Token source)".to_string(),
+        ),
+        // ⛔ A status never raises a prompt, so what is stored is not known.
+        Ok(OwnTokenStatus::NeedsApproval) => (
+            false,
+            "own token stored, and reading it needs your approval in a credential store \
+             prompt, which a status does not raise; `bridgewatch check` asks"
+                .to_string(),
         ),
         Err(e) => (false, e.to_string()),
     }

@@ -17,6 +17,8 @@ use bridgewatch_core::verdict::Snapshot;
 use serde::Serialize;
 use tokio::sync::Notify;
 
+use bridgewatch_core::token::{AskOnce, SystemTokenProvider};
+
 use crate::config::Validation;
 
 /// The mutable half.
@@ -74,6 +76,10 @@ pub struct AppState {
     pub retry_refused: Arc<Notify>,
     /// The outstanding confirmation for a sensitive write, if any.
     pub confirmations: crate::guard::Confirmations,
+    /// The credential store the poller reads through: the system's, asking
+    /// about each entry at most once until a person says to ask again
+    /// (Retry, Refresh, a token saved). See [`AskOnce`].
+    pub approvals: AskOnce<SystemTokenProvider>,
 }
 
 /// The shell-level status the popover's debug pane and the settings banner
@@ -109,6 +115,10 @@ pub struct Status {
     pub crash_reports: CrashReports,
     /// The notification pause in force, or `None`. See `quiet`.
     pub notifications_paused: Option<crate::quiet::PauseView>,
+    /// The accounts whose credential prompt was cancelled or denied, and that
+    /// are not asked about again until a person says so: the popover's
+    /// "needs approval" strip, with its Retry.
+    pub needs_approval: Vec<String>,
 }
 
 /// Where crash reporting stands.
@@ -164,6 +174,7 @@ impl AppState {
             reload: Arc::new(Notify::new()),
             retry_refused: Arc::new(Notify::new()),
             confirmations: Default::default(),
+            approvals: AskOnce::new(SystemTokenProvider),
         }
     }
 
@@ -216,11 +227,41 @@ impl AppState {
             self.poll_now.notify_one();
         }
         // A person asked: a refused account is retried too, at once, rather
-        // than at its next backed-off attempt.
+        // than at its next backed-off attempt, and a credential prompt that
+        // was cancelled may be shown once more.
         if reason == PollNow::Manual {
-            self.retry_refused.notify_one();
+            self.ask_again();
         }
         allowed
+    }
+
+    /// A person asked to try the credential store again (Retry, Refresh, a
+    /// token saved or a sign-in): forget every refused prompt and retry the
+    /// refused accounts now. The ONE way a refused prompt is shown again.
+    pub fn ask_again(&self) {
+        self.approvals.ask_again();
+        self.retry_refused.notify_one();
+    }
+
+    /// The accounts of `config` whose credential prompt was refused and is
+    /// not asked again yet.
+    pub fn needs_approval(&self, config: Option<&Config>) -> Vec<String> {
+        let refused = self.approvals.refused();
+        if refused.is_empty() {
+            return Vec::new();
+        }
+        config
+            .map(|c| {
+                c.accounts
+                    .iter()
+                    .filter(|(name, account)| {
+                        bridgewatch_core::token::read_service(name, account)
+                            .is_some_and(|s| refused.contains(&s))
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Ask the poller to drop itself and rebuild from the current config.
@@ -234,6 +275,7 @@ impl AppState {
         let mut inner = self.lock();
         let answer = inner.config.as_ref().map(|c| c.ui.send_crash_reports);
         let notifications_paused = inner.quiet.view(chrono::Utc::now());
+        let needs_approval = self.needs_approval(inner.config.as_ref());
         Status {
             config_path: self.config_path.display().to_string(),
             seeded: inner.seeded,
@@ -250,6 +292,7 @@ impl AppState {
             vibrancy: crate::windows::vibrancy(),
             crash_reports: CrashReports::of(crash.0, answer, crash.1),
             notifications_paused,
+            needs_approval,
         }
     }
 

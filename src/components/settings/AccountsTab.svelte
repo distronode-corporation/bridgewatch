@@ -35,6 +35,18 @@
 
   const accountAt = (name: string) => getAt(config, concretePath("accounts.*", name));
 
+  /**
+   * The accounts some watch polls. ⛔ Only theirs is a stored credential read
+   * to show a status (TokenField's `watched`).
+   */
+  const watched = $derived(
+    new Set(
+      (Array.isArray(getAt(config, "watches")) ? (getAt(config, "watches") as unknown[]) : [])
+        .map((w) => (w as { account?: unknown } | null)?.account)
+        .filter((a): a is string => typeof a === "string"),
+    ),
+  );
+
   /** Per account, the line saying which customised values a provider change kept. */
   let switchNotes = $state<Record<string, string>>({});
 
@@ -131,6 +143,7 @@
         value={getAt(config, concretePath("accounts.*.token", name))}
         provider={providerOf(accountAt(name))}
         baseUrl={String(getAt(config, concretePath("accounts.*.base_url", name)) ?? "")}
+        watched={watched.has(name)}
         {oauth}
         {onedit}
       />
