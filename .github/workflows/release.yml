@@ -130,8 +130,10 @@ jobs:
 
       # Pulls the matching version's section out of CHANGELOG.md so the GitHub Release
       # and the CHANGELOG cannot drift. Index-based rather than a `\[` regex so it is
-      # portable across awk flavours. Falls back to GitHub's generated notes when the
-      # tag has no CHANGELOG entry.
+      # portable across awk flavours. It stops at the next version heading or at the
+      # link-reference block at the end (`[x.y.z]: url`); a line inside a section that
+      # merely starts with a Markdown link does not end it. Falls back to GitHub's
+      # generated notes when the tag has no CHANGELOG entry.
       - name: Extract release notes from CHANGELOG
         id: notes
         run: |
@@ -139,7 +141,7 @@ jobs:
           awk -v tag="## [${version}]" '
             index($0, tag)==1 {cap=1; next}
             index($0, "## [")==1 && cap==1 {cap=0}
-            substr($0,1,1)=="[" && cap==1 {exit}
+            substr($0,1,1)=="[" && index($0, "]: ")>1 && cap==1 {exit}
             cap {print}
           ' CHANGELOG.md > release-notes.md
           if [ -s release-notes.md ]; then
