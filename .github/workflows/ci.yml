@@ -528,8 +528,18 @@ jobs:
       - name: Pack and check the npm package
         run: bash .github/scripts/npm-pack.sh "$VERSION" "$RUNNER_TEMP/npm"
 
+      # npm refuses even a dry run over a version it already has, so once a release is
+      # published every PR until the next version bump would fail here. Then the pack and
+      # check steps above are the rehearsal; a release PR bumps the version and runs the
+      # full dry run.
       - name: npm publish --dry-run
-        run: npm publish --dry-run "$RUNNER_TEMP/npm/bridgewatch-$VERSION.tgz"
+        run: |
+          set -euo pipefail
+          if [ "$(npm view "bridgewatch@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+            echo "::notice::bridgewatch@$VERSION is already published, so the registry refuses a dry run over it; the pack and check steps above ran."
+          else
+            npm publish --dry-run "$RUNNER_TEMP/npm/bridgewatch-$VERSION.tgz"
+          fi
 
   # The npm launcher's tests (platform mapping, the musl and old-glibc refusals, the
   # diagnostic report, exit codes, signals, the packed file list), on every Node major
