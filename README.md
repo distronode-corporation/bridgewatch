@@ -24,7 +24,7 @@ Apache-2.0.
 
 *The 2.0 popover in the light theme, rendered from the app's frontend with sample data.*
 
-**Status:** 2.0.0, released 2026-11-07. Download it from the
+**Status:** 2.1.0, released 2026-11-09. Download it from the
 [Releases page](https://github.com/distronode-corporation/bridgewatch/releases/latest): a
 signed and notarised universal `.dmg` for macOS, a `.deb`, an `.rpm` and an
 `.AppImage` for Linux on x86_64 and arm64, and the CLI as tarballs, also on npm as
@@ -76,9 +76,9 @@ Or download `bridgewatch_<version>_universal.dmg` from the
 **Linux** (x86_64 and arm64, glibc 2.35 or newer), from the same Releases page:
 
 ```
-sudo apt install ./bridgewatch_2.0.0_amd64.deb          # Debian, Ubuntu
-sudo dnf install ./bridgewatch-2.0.0-1.x86_64.rpm       # Fedora (zypper on openSUSE)
-chmod +x bridgewatch_2.0.0_amd64.AppImage && ./bridgewatch_2.0.0_amd64.AppImage
+sudo apt install ./bridgewatch_2.1.0_amd64.deb          # Debian, Ubuntu
+sudo dnf install ./bridgewatch-2.1.0-1.x86_64.rpm       # Fedora (zypper on openSUSE)
+chmod +x bridgewatch_2.1.0_amd64.AppImage && ./bridgewatch_2.1.0_amd64.AppImage
 ```
 
 On GNOME the tray icon needs the AppIndicator/KStatusNotifierItem extension.
@@ -93,7 +93,7 @@ npx bridgewatch check        # or run it once without installing
 Every release asset carries a GitHub build provenance attestation:
 
 ```
-gh attestation verify bridgewatch_2.0.0_amd64.deb --repo distronode-corporation/bridgewatch
+gh attestation verify bridgewatch_2.1.0_amd64.deb --repo distronode-corporation/bridgewatch
 ```
 
 The arm64 file names, the CLI tarballs, the signature checks, the licence files and what
