@@ -65,6 +65,11 @@ describe("popoverKey", () => {
     expect(popoverKey(key("r"), rows, null)).toEqual({ kind: "refresh" });
   });
 
+  it("refreshes once per press: a held r's repeats send nothing, held arrows still move", () => {
+    expect(popoverKey({ ...key("r"), repeat: true }, rows, null)).toBeNull();
+    expect(focusOf(popoverKey({ ...key("ArrowDown"), repeat: true }, rows, sha(1)))).toBe(sha(2));
+  });
+
   it("leaves modified keys, other keys and typing in a field alone", () => {
     expect(popoverKey(key("ArrowDown", { ctrlKey: true }), rows, null)).toBeNull();
     expect(popoverKey(key("r", { metaKey: true }), rows, null)).toBeNull();

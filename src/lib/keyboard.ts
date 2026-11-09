@@ -7,7 +7,8 @@
  *
  *   ↓ or j      the next row        ↑ or k    the previous row
  *   Home        the first row       End       the last row
- *   r           refresh now         Escape    hide (handled by the caller)
+ *   r           refresh now (once per press, never on a key repeat)
+ *   Escape      hide (handled by the caller)
  *
  * The first ↓ or j with nothing in the list focused lands on the first row,
  * and the first ↑ or k on the last.
@@ -34,7 +35,7 @@ export function rowTarget(row: HTMLElement): HTMLElement {
  * `r` into one stays typing.
  */
 export function popoverKey(
-  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "altKey" | "metaKey">,
+  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "altKey" | "metaKey"> & { repeat?: boolean },
   rows: HTMLElement[],
   active: Element | null,
 ): PopoverKeyAction {
@@ -42,7 +43,10 @@ export function popoverKey(
   if (active instanceof HTMLElement && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName))) {
     return null;
   }
-  if (event.key === "r") return { kind: "refresh" };
+  // ⛔ Not on a repeat: holding `r` sent a manual refresh per auto-repeated
+  // keydown, and a manual refresh passes the rate gate and asks a refused
+  // credential store again (Seer, #91). The arrows do repeat, as arrows should.
+  if (event.key === "r") return event.repeat ? null : { kind: "refresh" };
 
   const step: Record<string, number> = { ArrowDown: 1, j: 1, ArrowUp: -1, k: -1 };
   if (!(event.key in step) && event.key !== "Home" && event.key !== "End") return null;
