@@ -138,6 +138,7 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
                 state.set_refused(p.refused_accounts().to_vec());
                 p.with_ledger(NotifyLedger::default_path())
                     .with_eta_history(EtaHistory::default_path())
+                    .with_commit_titles(config.ui.commit_titles)
             }
             Err(e) => {
                 state.set_clients(Default::default());

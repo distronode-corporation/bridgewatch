@@ -104,7 +104,7 @@
   LAYOUT (L1, the two-line row). F2 and later packets: add to a line, do not
   reshape it.
     line 1 `.head`: dot · ref (13px mono, truncates) · state · deploy pill · age
-    line 2 `.sub` : sha · source · "deploy job <name>" · eta   (12px muted, pl-4)
+    line 2 `.sub` : sha · source · "deploy job <name>" · eta · title   (12px muted, pl-4)
     then the jobs (`PipelineJobs`) and the sibling / after-deploy notes.
   The lines of a row are 8px apart (`gap-2`); rows in a watch are split by an
   inset hairline.
@@ -162,6 +162,14 @@
     {#if !collapsed && eta}
       <span aria-hidden="true">·</span>
       <span class="eta tabular-nums" title="from this watch's recent deploys">{eta}</span>
+    {/if}
+    {#if row.title}
+      <!-- The commit's first line ([ui].commit_titles), last on the line: a
+           zero flex basis lets it take the room that is left and truncate there,
+           where a title placed first wrapped onto a line of its own and pushed
+           the rest below it. The whole line is its tooltip. -->
+      <span aria-hidden="true">·</span>
+      <span class="title text-foreground/80 min-w-16 flex-[1_1_0%] truncate" title={row.title}>{row.title}</span>
     {/if}
   </div>
 

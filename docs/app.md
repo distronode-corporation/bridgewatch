@@ -59,7 +59,9 @@ Each pipeline row in the popover expands into its jobs: the parent's own jobs, t
 row per bridge with that child pipeline's (or workflow run's) jobs, each list grouped by
 stage in pipeline order, with a status dot per job, a marker on running jobs and a duration that ticks
 locally between polls. Live pipelines start expanded and settled ones collapsed; a bridge
-that failed or lost its child starts expanded either way. What you open or close stays
+that failed or lost its child starts expanded either way. Each row's second line starts with the
+commit: its short sha, then what started it and, with `[ui].commit_titles` on (the
+default), its title. What you open or close stays
 that way across refreshes. Every job links to its page on GitLab or GitHub. A GitHub
 workflow in `expect` that never started shows as a bridge marked **never started**, linked
 to the workflow's page.

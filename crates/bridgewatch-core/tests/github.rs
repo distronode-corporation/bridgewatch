@@ -1565,3 +1565,41 @@ async fn the_job_asked_about_is_the_first_blocking_failure_under_the_rules() {
         "the line of the failure the notification names"
     );
 }
+
+/// Commit titles (2.1): GitHub's run carries `display_title`, so a title costs
+/// no request; it reaches the row only when the poller asks for titles, and it
+/// is the first line.
+#[tokio::test]
+async fn a_runs_display_title_is_the_rows_title_only_when_titles_are_on() {
+    let run = run_body("completed", "success").replacen(
+        r#""event":"push","#,
+        r#""event":"push","display_title":"Ship the popover keys\n\nLonger body","#,
+        1,
+    );
+    let runs = format!(r#"{{"total_count":1,"workflow_runs":[{run}]}}"#);
+    let jobs = jobs_body(&[job_body(
+        9002,
+        "publish",
+        "success",
+        "2026-09-18T09:01:00Z",
+        "2026-09-18T09:02:30Z",
+    )]);
+    let config = github_config("");
+
+    for titles in [true, false] {
+        let transport = Scripted::new(vec![Reply::ok(&runs), Reply::ok(&jobs)]);
+        let mut poller = github_poller(&config, transport.clone()).with_commit_titles(titles);
+        let snapshot = poller.tick().await.snapshot;
+        let row = &snapshot.watches[0].rows[0];
+        assert_eq!(
+            row.title.as_deref(),
+            titles.then_some("Ship the popover keys"),
+            "titles {titles}"
+        );
+        assert_eq!(
+            transport.paths().len(),
+            2,
+            "no request for a title on GitHub"
+        );
+    }
+}
