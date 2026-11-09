@@ -18,8 +18,9 @@ cleanup() {
 trap cleanup EXIT
 
 # The stand-in: two sources, /a and /b. Each answers its requests with the next
-# status in $work/statuses-<a|b> (the last one repeats), the body "payload" on a
-# 200, and counts its requests in $work/count-<a|b>. It records whether every
+# status in $work/statuses-<a|b> (the last one repeats), on a 200 the body
+# "payload" from /a and "payload-b" from /b, and counts its requests in
+# $work/count-<a|b>. It records whether every
 # request asked for application/octet-stream.
 cat >"$work/server.py" <<'PY'
 import http.server, pathlib, sys
@@ -34,7 +35,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.headers.get("Accept") != "application/octet-stream":
             (work / "bad-accept").write_text(self.headers.get("Accept", ""))
         status = int(statuses[min(n, len(statuses) - 1)])
-        body = b"payload" if status == 200 else b'{"message":"scripted"}'
+        body = (b"payload" if src == "a" else b"payload-" + src.encode()) if status == 200 else b'{"message":"scripted"}'
         self.send_response(status)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -59,7 +60,8 @@ run() { # run <statuses of a> <statuses of b> <max secs> <sources...>: sets rc, 
   rm -f "$work/count-a" "$work/count-b" "$work/out"
   local start=$SECONDS
   rc=0
-  err="$(DOWNLOAD_PROTO='=http' DOWNLOAD_MAX_SECS="$max" bash "$script" "$work/out" "$@" 2>&1)" || rc=$?
+  err="$(DOWNLOAD_PROTO='=http' DOWNLOAD_MAX_SECS="$max" DOWNLOAD_SHA256="${WANT:-}" \
+    bash "$script" "$work/out" "$@" 2>&1)" || rc=$?
   secs=$((SECONDS - start))
   a="$(cat "$work/count-a" 2>/dev/null || echo 0)"
   b="$(cat "$work/count-b" 2>/dev/null || echo 0)"
@@ -111,6 +113,17 @@ check "  ...with a warning naming it" says "::warning::no answer from http://127
 run "200" "200" 120 "$base/a" "$base/b"
 check "the first source that answers is the only one asked" test "$rc" -eq 0 -a "$a" -eq 1 -a "$b" -eq 0
 check "every request asked for application/octet-stream" test ! -e "$work/bad-accept"
+
+# A digest to hold each source to: a stale API asset id answers 200 with
+# another version's file, and the next source must still be asked.
+sha_b="$(printf 'payload-b' | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)"
+WANT="$sha_b" run "200" "200" 120 "$base/a" "$base/b"
+check "a source that delivers other bytes hands over to the next, whose file is kept" \
+  test "$rc" -eq 0 -a "$a" -eq 1 -a "$b" -eq 1 -a "$(cat "$work/out" 2>/dev/null)" = payload-b
+check "  ...with a warning naming both digests" says "expected $sha_b; trying the next source"
+WANT="$sha_b" run "200" "200" 120 "$base/a"
+check "the last source's wrong bytes fail, and no file is left" test "$rc" -ne 0 -a ! -e "$work/out"
+check "  ...naming the digest it wanted" says "::error::$base/a delivered a file with sha256"
 
 [ "$failures" -eq 0 ] || { echo "$failures failed"; exit 1; }
 echo "all passed"

@@ -26,6 +26,14 @@
 # asset URL needs to send the file rather than its metadata, and which the
 # release page's URL ignores.
 #
+# DOWNLOAD_SHA256, when set, is the digest the file must have, checked per
+# source: a source that delivers other bytes is a failure of that source and the
+# next is tried. ⛔ This is what makes a pinned API asset id safe to go stale.
+# Asset ids are global, so an id left behind by a version bump still answers 200
+# with the OLD version's file; without the check here that file ended the
+# download and failed the caller's own digest check, and the release page's URL,
+# which would have served the right file, was never asked (Seer, #82).
+#
 # DOWNLOAD_PROTO (default `=https`) is curl's `--proto`; only the tests set it,
 # to reach a loopback stand-in over plain http.
 set -euo pipefail
@@ -35,6 +43,15 @@ shift
 [ $# -gt 0 ] || { echo "::error::no URL to download $out from" >&2; exit 64; }
 max_secs="${DOWNLOAD_MAX_SECS:-120}"
 proto="${DOWNLOAD_PROTO:-=https}"
+want_sha256="${DOWNLOAD_SHA256:-}"
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
 share=$((max_secs / $#))
 [ "$share" -ge 1 ] || share=1
 
@@ -47,9 +64,15 @@ for url in "$@"; do
     -H 'Accept: application/octet-stream' \
     --retry 30 --retry-connrefused --retry-max-time "$share" --connect-timeout 20 \
     -w '%{http_code}' -o "$out" "$url")" || rc=$?
-  [ "$rc" -ne 0 ] || exit 0
+  got=""
+  if [ "$rc" -eq 0 ]; then
+    [ -n "$want_sha256" ] || exit 0
+    got="$(sha256_of "$out")"
+    [ "$got" != "$want_sha256" ] || exit 0
+  fi
   rm -f "$out"
   case "$code" in
+    2??) what="$url delivered a file with sha256 $got, expected $want_sha256" ;;
     408 | 429 | 500 | 502 | 503 | 504) what="HTTP $code from $url, still after retrying for up to ${share}s" ;;
     000 | "") what="no answer from $url (curl exit $rc)" ;;
     *) what="HTTP $code from $url (not retried: it is not a transient error)" ;;

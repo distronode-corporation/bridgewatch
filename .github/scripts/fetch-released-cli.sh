@@ -15,7 +15,8 @@
 # two downloads agree. The asset ids are pinned for the API's asset URL, which
 # answered when the release page's URL did not (download-release-asset.sh); an
 # id that ever stopped matching only costs that source, and the digest still
-# decides what is accepted.
+# decides what is accepted: a stale id still answers, with another version's
+# file, which the download script refuses on the digest and moves on.
 set -euo pipefail
 
 target="${1:?target}"
@@ -37,7 +38,8 @@ tarball="$out_dir/$name.tar.gz"
 # No token: the release is public, and the download needs none. The API's asset
 # URL first, the release page's second; transient errors are retried within
 # about two minutes in all, and a 404 from both fails with that status.
-bash "$(dirname "${BASH_SOURCE[0]}")/download-release-asset.sh" "$tarball" "$api_url" "$url"
+DOWNLOAD_SHA256="$sha256" \
+  bash "$(dirname "${BASH_SOURCE[0]}")/download-release-asset.sh" "$tarball" "$api_url" "$url"
 
 if command -v sha256sum >/dev/null 2>&1; then
   got="$(sha256sum "$tarball" | cut -d' ' -f1)"
