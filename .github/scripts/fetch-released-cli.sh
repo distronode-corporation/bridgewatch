@@ -30,8 +30,9 @@ name="bridgewatch-cli_${version}_${target}"
 url="https://github.com/distronode-corporation/bridgewatch/releases/download/v${version}/${name}.tar.gz"
 mkdir -p "$out_dir"
 tarball="$out_dir/$name.tar.gz"
-# No token: the release is public, and the download needs none.
-curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$tarball" "$url"
+# No token: the release is public, and the download needs none. A 504 from
+# GitHub's download CDN is retried for up to two minutes; a 404 fails at once.
+bash "$(dirname "${BASH_SOURCE[0]}")/download-release-asset.sh" "$url" "$tarball"
 
 if command -v sha256sum >/dev/null 2>&1; then
   got="$(sha256sum "$tarball" | cut -d' ' -f1)"
