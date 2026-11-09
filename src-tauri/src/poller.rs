@@ -12,7 +12,7 @@ use std::time::Duration;
 use bridgewatch_core::eta::EtaHistory;
 use bridgewatch_core::notify::{Notification, NotifyLedger};
 use bridgewatch_core::poll::Poller;
-use bridgewatch_core::verdict::{IconState, Snapshot};
+use bridgewatch_core::verdict::{IconState, Snapshot, TrayState};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::{ActionPerformed, NotificationExt};
 
@@ -171,9 +171,8 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             // have just been refused; the popover's strip follows on its own
             // (`Status`), and the timed retry below leaves it out.
 
-            set_icon(&app, tick.snapshot.icon_state);
             state.record_tick(tick.next_interval);
-            publish(&app, &state, tick.snapshot);
+            show(&app, &state, tick.snapshot);
             // A pause, or a burst folded into one: see `quiet`.
             let outgoing = state.with_quiet(|q| q.outgoing(chrono::Utc::now(), tick.notifications));
             deliver(&app, &outgoing);
@@ -295,11 +294,42 @@ fn publish(app: &AppHandle, state: &AppState, snapshot: Snapshot) {
     }
 }
 
+/// Fit the acknowledged failures to `snapshot`, draw the tray, and publish.
+///
+/// The one place a tick's snapshot reaches the tray, so an acknowledgement is
+/// re-checked against every new snapshot and forgotten as soon as its failure
+/// is no longer the watch's current one (`verdict::ack`).
+fn show(app: &AppHandle, state: &AppState, mut snapshot: Snapshot) {
+    let tray = state.lock().acks.apply(&mut snapshot);
+    set_tray(app, tray);
+    publish(app, state, snapshot);
+}
+
+/// Draw the tray and publish again from the last snapshot, after an
+/// acknowledgement was given or taken back.
+pub fn redraw(app: &AppHandle, state: &AppState) {
+    let snapshot = state.lock().snapshot.clone();
+    show(app, state, snapshot);
+}
+
 /// Swap the tray image for the state's glyph.
 ///
 /// The icon config is read fresh each time so that editing `[icon]` in the file
 /// takes effect on the next tick without a restart.
 pub fn set_icon(app: &AppHandle, icon_state: IconState) {
+    set_tray(
+        app,
+        TrayState {
+            drawn: icon_state,
+            acknowledged_from: None,
+        },
+    );
+}
+
+/// Swap the tray image for the glyph of `tray.drawn`, and name the real state
+/// in the tooltip when an acknowledgement lowered it.
+pub fn set_tray(app: &AppHandle, tray_state: TrayState) {
+    let icon_state = tray_state.drawn;
     let icon_config = app
         .state::<Arc<AppState>>()
         .config()
@@ -317,17 +347,26 @@ pub fn set_icon(app: &AppHandle, icon_state: IconState) {
         tracing::warn!("the tray icon is gone; nothing to set");
         return;
     };
-    set_tooltip(&tray, icon_state);
+    set_tooltip(&tray, &tooltip_for(tray_state));
     apply_icon(&tray, &LAST_ICON, drawable, std::time::Instant::now());
 }
 
-/// The state the tooltip currently names.
+/// The tooltip's text: the state drawn, or the real state and that it was
+/// acknowledged.
+pub fn tooltip_for(tray: TrayState) -> String {
+    match tray.acknowledged_from {
+        Some(real) => format!("bridgewatch: {real}, acknowledged"),
+        None => format!("bridgewatch: {}", tray.drawn),
+    }
+}
+
+/// The text the tooltip currently shows.
 ///
 /// ⚠ Deliberately not folded into [`IconMemo`]: two states can share one image,
 /// because a glyph that does not draw falls back to the unknown one, and the
 /// tooltip has to follow the STATE rather than the picture.
 #[cfg(not(target_os = "linux"))]
-static LAST_TOOLTIP: std::sync::Mutex<Option<IconState>> = std::sync::Mutex::new(None);
+static LAST_TOOLTIP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Name the current state in the tray's tooltip: "bridgewatch: deployed".
 ///
@@ -339,20 +378,20 @@ static LAST_TOOLTIP: std::sync::Mutex<Option<IconState>> = std::sync::Mutex::new
 /// call would change nothing. Linux has no lever at all for this; the doc on
 /// `TRAY_LABEL` in tray.rs says why.
 #[cfg(not(target_os = "linux"))]
-fn set_tooltip(tray: &tauri::tray::TrayIcon, icon_state: IconState) {
+fn set_tooltip(tray: &tauri::tray::TrayIcon, text: &str) {
     let mut last = LAST_TOOLTIP.lock().unwrap_or_else(|e| e.into_inner());
-    if *last == Some(icon_state) {
+    if last.as_deref() == Some(text) {
         return;
     }
-    match tray.set_tooltip(Some(format!("bridgewatch: {icon_state}"))) {
+    match tray.set_tooltip(Some(text)) {
         // Not remembered on failure, so the next state change tries again.
-        Ok(()) => *last = Some(icon_state),
+        Ok(()) => *last = Some(text.to_string()),
         Err(e) => tracing::warn!(error = %e, "could not set the tray tooltip"),
     }
 }
 
 #[cfg(target_os = "linux")]
-fn set_tooltip(_tray: &tauri::tray::TrayIcon, _icon_state: IconState) {}
+fn set_tooltip(_tray: &tauri::tray::TrayIcon, _text: &str) {}
 
 /// Where a tray image goes. The real one is the Tauri tray; tests use a fake.
 pub trait TraySink {
@@ -673,6 +712,23 @@ mod tests {
 
     fn performed(action: &str, extra: serde_json::Value) -> ActionPerformed {
         performed_payload(action, extra).expect("the plugin's payload decodes")
+    }
+
+    #[test]
+    fn the_tooltip_names_the_real_state_of_an_acknowledged_failure() {
+        let plain = TrayState {
+            drawn: IconState::Failed,
+            acknowledged_from: None,
+        };
+        assert_eq!(tooltip_for(plain), "bridgewatch: failed");
+        let acknowledged = TrayState {
+            drawn: IconState::DeployedWithFailure,
+            acknowledged_from: Some(IconState::Failed),
+        };
+        assert_eq!(
+            tooltip_for(acknowledged),
+            "bridgewatch: failed, acknowledged"
+        );
     }
 
     #[test]

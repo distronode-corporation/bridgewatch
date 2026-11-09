@@ -52,6 +52,32 @@ pub fn resume_notifications(app: AppHandle, state: Shared<'_>) {
     crate::tray::sync_pause(&app);
 }
 
+/// Acknowledge the failure a watch shows now (`acknowledged: true`), so the
+/// tray draws it a level lower, or take that back. Local only: nothing is sent
+/// to the server and nothing is written. Returns false when nothing changed,
+/// because the watch shows no failure or had no acknowledgement to take back.
+#[tauri::command]
+pub fn acknowledge_failure(
+    app: AppHandle,
+    state: Shared<'_>,
+    watch: String,
+    acknowledged: bool,
+) -> bool {
+    let changed = {
+        let mut inner = state.lock();
+        if acknowledged {
+            let snapshot = inner.snapshot.clone();
+            inner.acks.acknowledge(&snapshot, &watch)
+        } else {
+            inner.acks.clear(&watch)
+        }
+    };
+    if changed {
+        crate::poller::redraw(&app, &state);
+    }
+    changed
+}
+
 /// Called when the popover becomes visible. Returns whether a poll was started.
 #[tauri::command]
 pub fn popover_opened(state: Shared<'_>) -> bool {
