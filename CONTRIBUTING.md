@@ -18,6 +18,9 @@ examples/                  The shipped example configs: distronode.toml (GitLab)
                            github.toml (GitHub).
 scripts/                   record-fixture.sh, check-version.py and
                            third-party-licenses-npm.mjs.
+tools/real-device/         The release checks on real devices (CHECKS.md) and the Linux
+                           harness that runs the real app on a private X display with a
+                           throwaway keyring (see its README.md).
 licenses/, about.toml      The cargo-about template and config for the Rust half of
                            the third-party licence texts the release bundles.
 ```
