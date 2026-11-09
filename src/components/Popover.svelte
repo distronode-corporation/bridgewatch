@@ -46,6 +46,8 @@
     oncrashreports?: (send: boolean) => void;
     /** End a notification pause (the paused strip's Resume). */
     onresume?: () => void;
+    /** Acknowledge a watch's failure (`true`) or take it back (`false`). */
+    onacknowledge?: (watch: string, acknowledged: boolean) => void;
   }
 
   let {
@@ -63,6 +65,7 @@
     askCrashReports = false,
     oncrashreports,
     onresume,
+    onacknowledge,
   }: Props = $props();
 
   // Configuration order, primary first. The core already returns watches in
@@ -171,7 +174,13 @@
       </p>
     {:else}
       {#each ordered as watch (watch.id)}
-        <WatchSection {watch} {now} {expansion} />
+        <WatchSection
+          {watch}
+          {now}
+          {expansion}
+          acknowledged={snapshot.acknowledged?.includes(watch.id) ?? false}
+          {onacknowledge}
+        />
       {/each}
     {/if}
   </div>

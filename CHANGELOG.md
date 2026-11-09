@@ -20,6 +20,14 @@ body line with a bracket.
   real app on a private Xvfb display, under a private D-Bus session, with a throwaway HOME
   and gnome-keyring and loopback GitLab stand-ins, so anyone can repeat the checks without
   touching their own desktop, keyring or config.
+- **Acknowledge a failure in the popover, and the tray drops a level.** A failed primary
+  watch has **acknowledge** on its header: the tray then draws it as
+  `deployed_with_failure` (and an acknowledged `deployed_with_failure` as `deployed`),
+  with "acknowledged" in the macOS tooltip, while the popover still says what the pipeline
+  did. It is local state only, held in memory, and it ends on the next new failure: a
+  newer pipeline, the same pipeline failing worse, or the failure going away. **undo**
+  takes it back. `check --json` is unchanged; the app's snapshot gains `acknowledged`
+  only while there is one.
 
 ### Changed
 
