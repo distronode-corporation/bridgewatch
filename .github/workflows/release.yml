@@ -169,8 +169,14 @@ jobs:
     permissions:
       contents: read
     env:
+      # The asset id is the API's name for the same file, the first of the two sources
+      # download-release-asset.sh tries (the release page's URL answered 504 for
+      # minutes on 2026-11-09). Bump the version, digest and id together; a stale id
+      # still answers with the old file, which the digest refuses before the release
+      # page is asked.
       CARGO_ABOUT_VERSION: 0.9.2
       CARGO_ABOUT_SHA256: 9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af
+      CARGO_ABOUT_ASSET_ID: "519590057"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -180,7 +186,9 @@ jobs:
         run: |
           set -euo pipefail
           name="cargo-about-${CARGO_ABOUT_VERSION}-x86_64-unknown-linux-musl"
-          curl -fsSL -o "$RUNNER_TEMP/about.tgz" \
+          DOWNLOAD_SHA256="$CARGO_ABOUT_SHA256" \
+            bash .github/scripts/download-release-asset.sh "$RUNNER_TEMP/about.tgz" \
+            "https://api.github.com/repos/EmbarkStudios/cargo-about/releases/assets/${CARGO_ABOUT_ASSET_ID}" \
             "https://github.com/EmbarkStudios/cargo-about/releases/download/${CARGO_ABOUT_VERSION}/${name}.tar.gz"
           echo "${CARGO_ABOUT_SHA256}  $RUNNER_TEMP/about.tgz" | sha256sum -c -
           tar xzf "$RUNNER_TEMP/about.tgz" -C "$RUNNER_TEMP"
@@ -734,8 +742,10 @@ jobs:
       # writes to GitHub.
       contents: read
     env:
+      # The asset id: see CARGO_ABOUT_ASSET_ID. Bump all three together.
       SENTRY_CLI_VERSION: 3.8.0
       SENTRY_CLI_SHA256: 13f8cb34ae01a6a272d7d7c22e277a105286615b4020de900ea95a8de47cdbb6
+      SENTRY_CLI_ASSET_ID: "568158243"
       SENTRY_URL: https://de.sentry.io
       SENTRY_ORG: distronode-corporation-eu
       SENTRY_PROJECT: bridgewatch
@@ -758,7 +768,9 @@ jobs:
       - name: Install sentry-cli
         run: |
           set -euo pipefail
-          curl -fsSL -o "$RUNNER_TEMP/sentry-cli" \
+          DOWNLOAD_SHA256="$SENTRY_CLI_SHA256" \
+            bash .github/scripts/download-release-asset.sh "$RUNNER_TEMP/sentry-cli" \
+            "https://api.github.com/repos/getsentry/sentry-cli/releases/assets/${SENTRY_CLI_ASSET_ID}" \
             "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64"
           echo "${SENTRY_CLI_SHA256}  $RUNNER_TEMP/sentry-cli" | sha256sum -c -
           mkdir -p "$HOME/.local/bin"
