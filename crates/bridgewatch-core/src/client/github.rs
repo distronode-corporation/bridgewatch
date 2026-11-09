@@ -235,6 +235,9 @@ impl GitHubClient {
         let (page, _) = self
             .get_json::<wire::RunsResponse>(&list_path(&repo, query))
             .await?;
+        // A full page may stop in the middle of its oldest commit's runs.
+        let page_full = page.workflow_runs.len() >= query.per_page.clamp(1, 100) as usize;
+        let last_sha = page.workflow_runs.last().map(|r| r.head_sha.clone());
         let mut by_commit: Vec<(String, Vec<String>)> = Vec::new();
         for run in page.workflow_runs {
             // ⛔ Through `workflow_file`, the one reading of a run's path that
@@ -260,6 +263,17 @@ impl GitHubClient {
                 None if !full => by_commit.push((run.head_sha, vec![file])),
                 None => {}
             }
+        }
+        // ⛔ The page_full rule `group::fold` applies: on a full page the
+        // commit the page ends in may have more runs past it, so its list is
+        // not known to be whole and it is dropped (Seer, #84). Kept only when
+        // it is the one commit there is, where a partial list is still all the
+        // page can say.
+        if page_full
+            && by_commit.len() > 1
+            && let Some(last) = last_sha
+        {
+            by_commit.retain(|(sha, _)| *sha != last);
         }
         Ok(by_commit.into_iter().map(|(_, files)| files).collect())
     }

@@ -2729,6 +2729,60 @@ async fn expect_suggestions_are_the_workflows_of_the_newest_pushes_from_one_requ
     );
 }
 
+/// A full page (30 runs) may stop in the middle of its oldest commit's runs,
+/// so that commit is not counted: its list could be short (Seer, #84).
+#[tokio::test]
+async fn a_full_page_drops_the_commit_it_ends_in() {
+    let run = |id: u64, sha: &str, file: &str| {
+        format!(
+            r#"{{"id":{id},"head_sha":"{sha}","head_branch":"main","status":"completed",
+                "conclusion":"success","event":"push","path":".github/workflows/{file}"}}"#
+        )
+    };
+    // c2 ran 28 workflows, c1 two of its three: the page is full at 30.
+    let mut runs: Vec<String> = (0..28)
+        .map(|i| run(100 - i, "c2", &format!("w{i:02}.yml")))
+        .collect();
+    runs.push(run(50, "c1", "w00.yml"));
+    runs.push(run(49, "c1", "w01.yml"));
+    let body = format!(
+        r#"{{"total_count":40,"workflow_runs":[{}]}}"#,
+        runs.join(",")
+    );
+    let t = Routed::new().route("/repos/acme-corp/monorepo/actions/runs", 200, &body);
+    let got = wizard::suggest_expected_workflows(
+        &gh_client(t.clone()),
+        &ProjectRef::Path("acme-corp/monorepo".into()),
+        "main",
+        &["push".to_string()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(got.commits, 1, "c1 ends the full page and is dropped");
+    assert!(
+        got.workflows.iter().all(|w| w.seen_in == 1),
+        "{:?}",
+        got.workflows
+    );
+    assert_eq!(got.workflows.len(), 28);
+
+    // The same two commits on a page that is not full: both count.
+    let body = format!(
+        r#"{{"total_count":29,"workflow_runs":[{}]}}"#,
+        runs[1..].join(",")
+    );
+    let t = Routed::new().route("/repos/acme-corp/monorepo/actions/runs", 200, &body);
+    let got = wizard::suggest_expected_workflows(
+        &gh_client(t.clone()),
+        &ProjectRef::Path("acme-corp/monorepo".into()),
+        "main",
+        &["push".to_string()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(got.commits, 2);
+}
+
 /// GitLab has no workflows: nothing is asked and nothing is suggested.
 #[tokio::test]
 async fn a_gitlab_project_gets_no_expect_suggestions_and_no_request() {
