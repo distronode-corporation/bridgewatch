@@ -4,6 +4,7 @@
 pub mod cache;
 pub mod planner;
 pub mod policy;
+pub mod wake;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use std::sync::Arc;
 pub use cache::{CacheEntry, PipelineCache};
 pub use planner::{PipelinePlan, Plan};
 pub use policy::{MAX_RETRY_AFTER, POLL_NOW_MIN_GAP, PollNow, PollPolicy};
+pub use wake::WakeWatch;
 
 use crate::client::{AnnotationAnswer, CiClient, ClientError, ListQuery, RequestRing, in_order};
 use crate::config::{Config, JobsMode, ProjectRef, Provider, Role, Watch, WatchRules};
@@ -825,7 +827,8 @@ impl Poller {
         Ok(CommitLookup::Found(Box::new(view)))
     }
 
-    /// Poll forever, sleeping the interval each tick asks for.
+    /// Poll forever, sleeping the interval each tick asks for, or until a
+    /// wake from sleep ([`WakeWatch`]).
     ///
     /// `on_tick` receives every tick, which is where a shell delivers
     /// notifications. Returning `false` stops the loop.
@@ -833,12 +836,17 @@ impl Poller {
     where
         F: FnMut(&Tick) -> bool,
     {
+        let mut wake = WakeWatch::new();
         loop {
+            wake.reset();
             let tick = self.tick().await;
             if !on_tick(&tick) {
                 return;
             }
-            tokio::time::sleep(tick.next_interval).await;
+            tokio::select! {
+                _ = tokio::time::sleep(tick.next_interval) => {}
+                _ = wake.woke() => {}
+            }
         }
     }
 }
