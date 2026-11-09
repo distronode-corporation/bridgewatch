@@ -13,6 +13,17 @@ body line with a bracket.
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-09
+
+bridgewatch 2.1 is the polish set. The popover can be driven from the keyboard, and an
+optional global shortcut opens it from anywhere (X11 only on Linux). A failure you already
+know about can be acknowledged, so the tray drops a level until the next new failure. Each
+row shows its commit's title, and a wake from sleep polls at once. On GitHub, the setup
+wizard writes a commit group, one row per push with the workflows every push must start,
+and its deploy-marker suggestions look below the child pipelines. The release checks on
+real devices are now in the repository. Nothing in 2.1 changes a stored config, the
+notification ledger or `check --json`.
+
 ### Added
 
 - **The release checks on real devices are in the repository.** `tools/real-device/`
@@ -881,7 +892,8 @@ per-workflow status dot other monitors already show.
   `glab:<host>:token` naming, which has not been checked against a live install.
 - Windows is not targeted.
 
-[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/distronode-corporation/bridgewatch/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.1.0...v1.2.0
