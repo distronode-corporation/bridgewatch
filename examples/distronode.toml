@@ -81,6 +81,7 @@ theme_css = ""
 launch_at_login = false
 jobs = "all"                           # all: every job, grouped by stage | failures: only failures, warnings and gates
 # send_crash_reports = false           # unset until answered: the app asks once; true sends a report when it fails
+hotkey = ""                            # show or hide the popover from anywhere, e.g. "CmdOrCtrl+Shift+B"; "" = none (X11 only on Linux)
 
 [log]
 level = "info"

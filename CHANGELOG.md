@@ -28,6 +28,12 @@ body line with a bracket.
   newer pipeline, the same pipeline failing worse, or the failure going away. **undo**
   takes it back. `check --json` is unchanged; the app's snapshot gains `acknowledged`
   only while there is one.
+- **Keyboard navigation in the popover, and an optional global shortcut.** ↓ and ↑ (or
+  `j` and `k`) move between pipeline rows, landing on the commit link, where Enter opens
+  the pipeline; Home and End go to the first and last row and `r` refreshes. The new
+  `[ui].hotkey` (for example `CmdOrCtrl+Shift+B`, empty by default) shows or hides the
+  popover from anywhere. On Linux it works under X11 only: a Wayland session gives apps
+  no global shortcut, so there it fires only while an X11 window has the focus.
 
 ### Changed
 
