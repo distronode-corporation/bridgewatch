@@ -13,6 +13,14 @@ body line with a bracket.
 
 ## [Unreleased]
 
+### Added
+
+- **The release checks on real devices are in the repository.** `tools/real-device/`
+  holds the Linux and macOS check list run before a tag, and a Linux harness that runs the
+  real app on a private Xvfb display, under a private D-Bus session, with a throwaway HOME
+  and gnome-keyring and loopback GitLab stand-ins, so anyone can repeat the checks without
+  touching their own desktop, keyring or config.
+
 ## [2.0.0] - 2026-11-07
 
 bridgewatch 2.0 signs in instead of asking for a token, keeps every stored token with the
