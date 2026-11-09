@@ -627,6 +627,7 @@
   // --- step 3, GitHub: expect for a commit group ---------------------------
   let expectSuggestions = $state<ExpectSuggestions | null>(null);
   let expectKey: string | null = null;
+  let expectAsking: string | null = null;
   let expectLoading = $state(false);
   let expectError = $state<string | null>(null);
 
@@ -642,7 +643,9 @@
     const refName = draft.refName.trim();
     const sources = [...draft.sources];
     const key = JSON.stringify([connKey, project.ref, refName, sources]);
-    if (key === expectKey) return;
+    // Answered already, or being asked right now.
+    if (key === expectKey || key === expectAsking) return;
+    expectAsking = key;
     expectLoading = true;
     expectError = null;
     try {
@@ -658,6 +661,7 @@
       expectError = messageOf(error);
     } finally {
       expectLoading = false;
+      if (expectAsking === key) expectAsking = null;
     }
   }
 

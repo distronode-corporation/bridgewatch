@@ -2625,6 +2625,28 @@ fn a_rerun_sets_a_commit_group_and_never_takes_one_away() {
     assert_eq!(watch.expect, ["ci.yml", "release.yml"]);
 }
 
+/// A commit group follows every workflow: asking for one on a watch that names
+/// a workflow takes the workflow out (Seer, #84), and the file loads clean.
+#[test]
+fn asking_for_a_commit_group_takes_out_the_watchs_workflow() {
+    let run_mode = wizard::build_config(&gh_answers(), None).unwrap();
+    assert_eq!(
+        load(&run_mode.toml).watches[0].workflow.as_deref(),
+        Some("ci.yml")
+    );
+    let grouped = wizard::build_config(&commit_group_answers(), Some(&run_mode.toml)).unwrap();
+    let loaded = config::parse_str(&grouped.toml, std::path::Path::new("config.toml")).unwrap();
+    assert!(
+        loaded.warnings.is_empty(),
+        "{:?}\n{}",
+        loaded.warnings,
+        grouped.toml
+    );
+    let watch = &loaded.config.watches[0];
+    assert_eq!(watch.workflow, None, "{}", grouped.toml);
+    assert_eq!(watch.group, bridgewatch_core::config::GroupMode::Commit);
+}
+
 /// A GitLab answer carrying a group (a UI that sent it anyway) writes none.
 #[test]
 fn a_gitlab_watch_never_gets_a_group_or_expect() {

@@ -37,12 +37,20 @@
 
   function toggleSource(value: string, on: boolean) {
     draft.sources = on ? [...new Set([...draft.sources, value])] : draft.sources.filter((s) => s !== value);
+    if (github && draft.group === "commit") onexpect?.();
   }
 
   function setGrouped(on: boolean) {
     draft.group = on ? "commit" : "run";
-    if (on) onexpect?.();
   }
+
+  // The suggestions follow what the watch will follow: asked when the step
+  // shows a commit group (turned on here, or a re-run that lands with one), and
+  // again when the branch is changed (on its change, not every keystroke) or an
+  // event is ticked. The loader skips a branch and event set it has answered.
+  $effect(() => {
+    if (github && draft.group === "commit") onexpect?.();
+  });
 
   function toggleExpect(file: string, on: boolean) {
     draft.expect = on ? [...new Set([...draft.expect, file])] : draft.expect.filter((f) => f !== file);
@@ -59,6 +67,9 @@
       spellcheck={false}
       bind:value={draft.refName}
       oninput={refChanged}
+      onchange={() => {
+        if (github && draft.group === "commit") onexpect?.();
+      }}
       aria-invalid={errors.ref_name ? "true" : undefined}
       aria-describedby="wizard-ref-msg"
     />

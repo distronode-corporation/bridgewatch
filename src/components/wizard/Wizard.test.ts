@@ -988,6 +988,32 @@ describe("GitHub", () => {
     });
   });
 
+  it("asks again for the expect suggestions when the branch or the events change, and once per answer", async () => {
+    const api = ghApi();
+    await start(api);
+    await click('input[name="provider"][value="github"]');
+    await click('[data-action="test-connection"]');
+    await next();
+    await click('input[name="project"][value="700"]');
+    await next();
+    await click("#wizard-group-commit");
+    expect(api.suggestExpectedWorkflows.mock.calls.length).toBe(1);
+    await type("#wizard-ref", "release");
+    q<HTMLInputElement>("#wizard-ref")!.dispatchEvent(new Event("change"));
+    await settle();
+    await click("#wizard-source-workflow_dispatch");
+    const asked = api.suggestExpectedWorkflows.mock.calls.map((c) => c.slice(2));
+    expect(asked).toEqual([
+      ["trunk", ["push"]],
+      ["release", ["push"]],
+      ["release", ["push", "workflow_dispatch"]],
+    ]);
+    // The same branch and events again cost nothing.
+    q<HTMLInputElement>("#wizard-ref")!.dispatchEvent(new Event("change"));
+    await settle();
+    expect(api.suggestExpectedWorkflows.mock.calls.length).toBe(3);
+  });
+
   it("an Enterprise host is typed, and resolving a repository keeps the path the core returns", async () => {
     const api = ghApi({
       detectCliToken: vi.fn(async () => ({ status: "not_found", service: "gh:ghe.acme.com" })),

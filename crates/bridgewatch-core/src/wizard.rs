@@ -2227,6 +2227,22 @@ fn build_config_inner(
                         }
                     }
                 }
+                // ⛔ A commit group follows every workflow, so a `workflow` the
+                // file already names comes out when a group is asked for:
+                // kept, the watch would list one workflow's runs and group
+                // them, and an `expect` naming any other could never be met
+                // (Seer, #84).
+                if answers.provider == Provider::Github
+                    && answers.group == GroupMode::Commit
+                    && w.workflow.is_some()
+                    && let Some(index) = current
+                        .as_ref()
+                        .and_then(|c| c.watches.iter().position(|x| x.id == answers.watch_id))
+                {
+                    edits.push(Edit::Unset {
+                        path: format!("watches.{index}.workflow"),
+                    });
+                }
             }
         }
 
