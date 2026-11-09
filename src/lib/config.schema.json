@@ -33,6 +33,7 @@
       "description": "Window and presentation settings, consumed by the GUI shell.",
       "$ref": "#/$defs/UiConfig",
       "default": {
+        "hotkey": "",
         "jobs": "all",
         "launch_at_login": false,
         "popover": {
@@ -618,6 +619,11 @@
       "description": "Window and presentation settings. The core reads only `jobs`, to put each\nwatch's effective mode on the view model; the rest are the GUI shell's, and\nthey live here so the config file stays the one source.",
       "type": "object",
       "properties": {
+        "hotkey": {
+          "description": "A global keyboard shortcut that shows or hides the popover, such as\n`CmdOrCtrl+Shift+B`; empty for none. Off unless set. On Linux it works\nunder X11 only: a Wayland session has no global shortcut an app can\nregister, so it fires there only while an X11 window has the focus.",
+          "type": "string",
+          "default": ""
+        },
         "jobs": {
           "description": "Which jobs an expanded pipeline row lists: `all` (every job, grouped by\nstage) or `failures` (only what the verdict names). A watch may override\nit with `show.jobs`.",
           "$ref": "#/$defs/JobsMode",

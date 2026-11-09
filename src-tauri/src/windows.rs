@@ -138,6 +138,68 @@ pub fn toggle_popover(app: &AppHandle) {
     }
 }
 
+/// How long after the global shortcut shows the popover a focus loss is not
+/// taken as a blur.
+///
+/// ⛔ Shown from the shortcut, the popover's focus flaps: on X11 (the harness
+/// in tools/real-device, measured) it went in, out, in and out within a
+/// millisecond as the key grab that caught the shortcut let go, so
+/// hide-on-blur hid it before it was ever drawn. A focus loss inside this
+/// window is ignored, and the focus is asked for again once it has passed.
+pub const SHORTCUT_FOCUS_GRACE: Duration = Duration::from_millis(250);
+
+/// Whether a focus loss now is the shortcut's flapping rather than a blur.
+pub fn in_shortcut_grace(app: &AppHandle) -> bool {
+    app.state::<Arc<AppState>>()
+        .lock()
+        .popover_shortcut_at
+        .is_some_and(|t| t.elapsed() < SHORTCUT_FOCUS_GRACE)
+}
+
+/// Whether the popover counts as open for the global shortcut: showing, or
+/// hidden by a blur within [`BLUR_HIDE_GRACE`].
+///
+/// ⛔ Read when the shortcut is PRESSED and acted on when it is released. The
+/// press itself takes the keyboard (the key grab), which blurs an open popover
+/// and hides it, so by the release it always looked closed and the shortcut
+/// could only ever open it.
+pub fn popover_open_for_shortcut(app: &AppHandle) -> bool {
+    let Some(window) = popover(app) else {
+        return false;
+    };
+    let just_hidden = app
+        .state::<Arc<AppState>>()
+        .lock()
+        .popover_hidden_at
+        .is_some_and(|t| t.elapsed() < BLUR_HIDE_GRACE);
+    just_hidden || window.is_visible().unwrap_or(false)
+}
+
+/// The global shortcut, on release: hide the popover if it was open at the
+/// press, else show it and take the focus again once the shortcut's own focus
+/// changes have settled.
+pub fn toggle_popover_from_shortcut(app: &AppHandle, was_open: bool) {
+    let Some(window) = popover(app) else { return };
+    if was_open {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+            note_popover_hidden(app);
+        }
+        return;
+    }
+    app.state::<Arc<AppState>>().lock().popover_shortcut_at = Some(Instant::now());
+    show_popover(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(SHORTCUT_FOCUS_GRACE);
+        if let Some(window) = popover(&app)
+            && window.is_visible().unwrap_or(false)
+        {
+            let _ = window.set_focus();
+        }
+    });
+}
+
 /// Show the settings window, optionally on a named tab.
 ///
 /// The tab is BOTH emitted and parked in the shared state. Emitting alone

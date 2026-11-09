@@ -1,6 +1,7 @@
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import fixture from "./lib/__fixtures__/ca41ab28.json" with { type: "json" };
 import type { Snapshot, Status } from "./lib/types";
 
 /**
@@ -40,6 +41,7 @@ const calls = {
   resumes: 0,
   resizes: [] as number[],
   acks: [] as [string, boolean][],
+  refreshes: 0,
 };
 
 /** What the shell answers for the two "open" requests; reset per test. */
@@ -82,7 +84,10 @@ vi.mock("./lib/ipc", () => ({
   openWizard: () => shell.openWizard(),
   pipelinesUrl: () => shell.pipelinesUrl(),
   quit: () => Promise.resolve(),
-  refreshNow: () => Promise.resolve(true),
+  refreshNow: () => {
+    calls.refreshes++;
+    return Promise.resolve(true);
+  },
   resizePopover: (height: number) => {
     calls.resizes.push(height);
     shell.resize(height);
@@ -113,6 +118,7 @@ beforeEach(() => {
   calls.resumes = 0;
   calls.resizes = [];
   calls.acks = [];
+  calls.refreshes = 0;
   shell.snapshot = snapshot;
   shell.acknowledgeFailure = () => Promise.resolve(true);
   shell.resize = () => {};
@@ -575,5 +581,48 @@ describe("PopoverApp, acknowledging a failure", () => {
     button().click();
     await settle();
     expect(notice()).toBe("Could not acknowledge the failure: the shell is gone");
+  });
+});
+
+describe("PopoverApp, the keyboard", () => {
+  async function settle() {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    flushSync();
+  }
+  const press = (key: string, init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", { key, cancelable: true, ...init });
+    window.dispatchEvent(event);
+    flushSync();
+    return event;
+  };
+  const shas = () => [...host.querySelectorAll<HTMLElement>("[data-scroll] .row")].map((r) => r.querySelector(".sha"));
+
+  it("moves between rows with the arrows and j and k, landing on the commit link", async () => {
+    // The recorded snapshot's primary watch, with a second, older row under it.
+    const recorded = fixture as unknown as Snapshot;
+    const watch = recorded.watches[0];
+    const older = { ...watch.rows[0], id: watch.rows[0].id - 1, sha7: "0000000" };
+    shell.snapshot = { ...recorded, watches: [{ ...watch, rows: [watch.rows[0], older] }] };
+    await render();
+    await settle();
+    const rows = shas();
+    expect(rows.length).toBe(2);
+    expect(press("ArrowDown").defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(rows[0]);
+    press("j");
+    expect(document.activeElement).toBe(rows[1]);
+    press("k");
+    expect(document.activeElement).toBe(rows[0]);
+    press("End");
+    expect(document.activeElement).toBe(rows[rows.length - 1]);
+  });
+
+  it("refreshes on r, and leaves a key with a modifier to the system", async () => {
+    await render();
+    await settle();
+    press("r");
+    expect(calls.refreshes).toBe(1);
+    expect(press("r", { ctrlKey: true }).defaultPrevented).toBe(false);
+    expect(calls.refreshes).toBe(1);
   });
 });
