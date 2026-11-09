@@ -109,9 +109,12 @@
   The lines of a row are 8px apart (`gap-2`); rows in a watch are split by an
   inset hairline.
 -->
+<!-- `tabindex="-1"`: focusable by the popover's ↑ and ↓ (lib/keyboard.ts) when
+     the row has no link to land on, never a Tab stop of its own. -->
 <div
-  class="row border-border/60 mx-3 flex flex-col gap-2 border-b py-2 last:border-b-0"
+  class="row border-border/60 focus-visible:ring-ring/50 mx-3 flex flex-col gap-2 border-b py-2 outline-none last:border-b-0 focus-visible:ring-2"
   data-state={row.state}
+  tabindex="-1"
 >
   <!-- Line 1. The verdict is said ONCE: the state word only when the watch
        header above does not already say it (else for screen readers only),

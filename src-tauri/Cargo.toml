@@ -55,6 +55,7 @@ tauri-plugin-opener = "2"
 # `tray-icon` is what makes Position::TrayBottomCenter resolve to anything; the
 # plugin records the tray's rectangle from the events it is handed.
 tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2.4.1"
 
 notify = "8"
 # Already in the tree through tauri; used to compare a link's origin with an

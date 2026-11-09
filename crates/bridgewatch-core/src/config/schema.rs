@@ -1269,6 +1269,11 @@ pub struct UiConfig {
     /// A build with no crash-report address (one you compile yourself, or a
     /// fork's) sends nothing either way.
     pub send_crash_reports: Option<bool>,
+    /// A global keyboard shortcut that shows or hides the popover, such as
+    /// `CmdOrCtrl+Shift+B`; empty for none. Off unless set. On Linux it works
+    /// under X11 only: a Wayland session has no global shortcut an app can
+    /// register, so it fires there only while an X11 window has the focus.
+    pub hotkey: String,
     /// Show each pipeline row's commit title in the popover. On GitHub the run
     /// carries it; on GitLab it costs one request per new commit, at most three
     /// per watch per tick, kept while the row is shown. Not used by the CLI.
@@ -1286,6 +1291,7 @@ impl Default for UiConfig {
             launch_at_login: false,
             jobs: JobsMode::default(),
             send_crash_reports: None,
+            hotkey: String::new(),
             commit_titles: true,
         }
     }

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import Popover from "./components/Popover.svelte";
   import {
+    acknowledgeFailure,
     applyConfigEdits,
     getSnapshot,
     getStatus,
@@ -20,6 +21,8 @@
   } from "./lib/ipc";
   import { crashReportsAnswer, shouldAskAboutCrashReports } from "./lib/crash-reports";
   import { messageOf } from "./lib/format";
+  import { navigableRows, popoverKey } from "./lib/keyboard";
+  import { createSingleFlight } from "./lib/single-flight";
   import type { Snapshot, Status } from "./lib/types";
 
   // An empty snapshot rather than a null one: the popover renders the same way
@@ -138,8 +141,17 @@
     window.addEventListener("blur", onBlur);
     document.addEventListener("visibilitychange", onVisibility);
 
+    // Escape hides; the rest move between rows and refresh (lib/keyboard.ts).
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") void hidePopover();
+      if (event.key === "Escape") {
+        void hidePopover();
+        return;
+      }
+      const action = popoverKey(event, navigableRows(document), document.activeElement);
+      if (!action) return;
+      event.preventDefault();
+      if (action.kind === "refresh") void refreshNow();
+      else action.target.focus();
     };
     window.addEventListener("keydown", onKey);
 
@@ -244,6 +256,22 @@
   }
 
   /**
+   * Acknowledge a watch's failure, or take that back. The shell republishes the
+   * snapshot, which is what moves the label; this only says when nothing
+   * happened. ⛔ One request per watch at a time.
+   */
+  const acknowledging = createSingleFlight();
+  function acknowledge(watch: string, acknowledged: boolean) {
+    notice = "";
+    acknowledging
+      .run(watch, () => acknowledgeFailure(watch, acknowledged))
+      ?.then((changed) => {
+        if (!changed && acknowledged) notice = `Nothing to acknowledge on ${watch}: its failure has changed.`;
+      })
+      .catch((error) => (notice = `Could not acknowledge the failure: ${messageOf(error)}`));
+  }
+
+  /**
    * Ask the shell to open something; say why when it could not.
    *
    * ⛔ These were `void` calls, so a rejection (no handler for the URL, a
@@ -280,4 +308,5 @@
   {askCrashReports}
   oncrashreports={(send) => void answerCrashReports(send)}
   onresume={() => void resume()}
+  onacknowledge={acknowledge}
 />

@@ -14,6 +14,7 @@ mod commands;
 mod config;
 mod crash;
 mod guard;
+mod hotkey;
 mod icons;
 mod jobs;
 mod links;
@@ -111,6 +112,7 @@ fn main() {
             commands::get_status,
             commands::refresh_now,
             commands::resume_notifications,
+            commands::acknowledge_failure,
             commands::popover_opened,
             commands::read_config_text,
             commands::get_config_json,
@@ -162,6 +164,10 @@ fn main() {
 
             tray::build(app.handle())?;
             windows::apply_vibrancy(app.handle());
+            hotkey::apply(
+                app.handle(),
+                &state.config().map(|c| c.ui.hotkey).unwrap_or_default(),
+            );
 
             // ⚠ A no-op on desktop today: `Notification::permission_state()`
             // returns `Granted` unconditionally in the plugin's desktop
@@ -253,6 +259,9 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
         }
         WindowEvent::Focused(false) if window.label() == windows::POPOVER => {
             let app = window.app_handle().clone();
+            if windows::in_shortcut_grace(&app) {
+                return;
+            }
             let hide = app
                 .state::<Arc<AppState>>()
                 .config()

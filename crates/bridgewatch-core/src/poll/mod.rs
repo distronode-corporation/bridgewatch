@@ -735,6 +735,7 @@ impl Poller {
             last_poll: chrono::Utc::now(),
             request_log: self.ring.entries(),
             tokens,
+            acknowledged: Vec::new(),
         };
 
         let any_live = snapshot.any_live();

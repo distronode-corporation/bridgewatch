@@ -52,6 +52,33 @@ pub fn resume_notifications(app: AppHandle, state: Shared<'_>) {
     crate::tray::sync_pause(&app);
 }
 
+/// Acknowledge the failure a watch shows now (`acknowledged: true`), so the
+/// tray draws it a level lower, or take that back. Local only: nothing is sent
+/// to the server and nothing is written. Returns false when nothing changed,
+/// because the watch shows no failure or had no acknowledgement to take back.
+///
+/// ⛔ `async`, so it runs on the async runtime and never on the main thread:
+/// redrawing the tray hands calls to the main thread and waits for them, and
+/// a synchronous command would be that thread waiting on itself, or on a lock
+/// a worker holds while it waits for the main thread.
+#[tauri::command]
+pub async fn acknowledge_failure(app: AppHandle, watch: String, acknowledged: bool) -> bool {
+    let state = app.state::<Arc<AppState>>();
+    let changed = {
+        let mut inner = state.lock();
+        if acknowledged {
+            let snapshot = inner.snapshot.clone();
+            inner.acks.acknowledge(&snapshot, &watch)
+        } else {
+            inner.acks.clear(&watch)
+        }
+    };
+    if changed {
+        crate::poller::redraw(&app, &state);
+    }
+    changed
+}
+
 /// Called when the popover becomes visible. Returns whether a poll was started.
 #[tauri::command]
 pub fn popover_opened(state: Shared<'_>) -> bool {
@@ -475,6 +502,9 @@ fn reload(app: &AppHandle, force: bool, bound_for: Option<&str>) {
     crate::crash::global().set_consent(crate::crash::consent_of(
         running.as_ref().and_then(|c| c.ui.send_crash_reports),
     ));
+    // The same for `[ui].hotkey`: unchanged is a no-op, so this costs nothing
+    // on a reload that left it alone.
+    crate::hotkey::apply(app, running.as_ref().map_or("", |c| c.ui.hotkey.as_str()));
     // ⛔ The line the startup one cannot be: on a FIRST run there is no file, so
     // no level is applied, so `[log].level = "info"` in the file the wizard is
     // about to write cannot show the startup line: it was filtered before the
