@@ -98,6 +98,9 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
       # ⛔ No checkout, anywhere in this workflow, on purpose. Nothing here needs the
       # tree, and not having it means a Dependabot PR's contents (a lockfile that could
       # pull a compromised package, a build script) can never execute in a job holding a
