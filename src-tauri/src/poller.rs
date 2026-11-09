@@ -322,17 +322,36 @@ fn publish(app: &AppHandle, state: &AppState, snapshot: Snapshot) {
 /// The one place a tick's snapshot reaches the tray, so an acknowledgement is
 /// re-checked against every new snapshot and forgotten as soon as its failure
 /// is no longer the watch's current one (`verdict::ack`).
-fn show(app: &AppHandle, state: &AppState, mut snapshot: Snapshot) {
-    let tray = state.lock().acks.apply(&mut snapshot);
-    set_tray(app, tray);
-    publish(app, state, snapshot);
+fn show(app: &AppHandle, state: &AppState, snapshot: Snapshot) {
+    let _drawing = DRAWING.lock().unwrap_or_else(|e| e.into_inner());
+    draw(app, state, snapshot);
 }
 
 /// Draw the tray and publish again from the last snapshot, after an
 /// acknowledgement was given or taken back.
+///
+/// The snapshot is read inside [`DRAWING`], so it is the newest one published:
+/// read outside it, a tick finishing in between was overwritten by the older
+/// snapshot read here, in the tray and the popover, until the next tick.
 pub fn redraw(app: &AppHandle, state: &AppState) {
+    let _drawing = DRAWING.lock().unwrap_or_else(|e| e.into_inner());
     let snapshot = state.lock().snapshot.clone();
-    show(app, state, snapshot);
+    draw(app, state, snapshot);
+}
+
+/// One drawing at a time: the acknowledgements applied, the tray set and the
+/// snapshot published, by a tick ([`show`]) or an acknowledgement
+/// ([`redraw`]), never interleaved.
+///
+/// ⛔ Held across tray calls that wait for the main thread, so it must never
+/// be taken ON the main thread: both callers run on the async runtime (the
+/// poll task, and `acknowledge_failure`, which is async for this reason).
+static DRAWING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn draw(app: &AppHandle, state: &AppState, mut snapshot: Snapshot) {
+    let tray = state.lock().acks.apply(&mut snapshot);
+    set_tray(app, tray);
+    publish(app, state, snapshot);
 }
 
 /// Swap the tray image for the state's glyph.
