@@ -60,6 +60,10 @@ jobs:
 
       - name: Install cargo-deny
         uses: $/.github/actions/install-cargo-deny
+        # The job's own token, sent only to api.github.com by the download script:
+        # unauthenticated, a shared runner's address can be out of API requests.
+        env:
+          DOWNLOAD_GITHUB_TOKEN: ${{ github.token }}
 
       # `--locked`: the advisory answer is about the tree that is committed, so a run
       # that quietly resolved a different Cargo.lock would be answering another
