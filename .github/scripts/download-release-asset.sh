@@ -5,11 +5,13 @@
 #   bash .github/scripts/download-release-asset.sh <out-file> <url> [<url>...]
 #
 # Each URL is a source of the same file, tried in turn. On each, curl retries a
-# transient answer (408, 429, 500, 502, 503, 504, a timeout, a reset connection)
-# with a delay that doubles from one second, for that source's share of
+# transient answer (408, 429, 500, 502, 503, 504, a timeout, a refused
+# connection) with a delay that doubles from one second, for that source's share of
 # DOWNLOAD_MAX_SECS (120 unless set); the whole download never takes much
 # longer than that. Any other answer (a 404, a 403) is not retried on that
-# source. Whatever the last source answers decides a failure, which ends with
+# source, and neither is a connection reset: curl retries a reset only under
+# `--retry-all-errors`, which would retry a 404 as well, so a reset moves on to
+# the next source instead. Whatever the last source answers decides a failure, which ends with
 # one `::error::` line naming the HTTP status and the URL; an earlier source's
 # failure is a `::warning::` and the next source is tried.
 #
@@ -43,13 +45,13 @@ for url in "$@"; do
   rc=0
   code="$(curl -fsSL --proto "$proto" --tlsv1.2 \
     -H 'Accept: application/octet-stream' \
-    --retry 30 --retry-max-time "$share" --connect-timeout 20 \
+    --retry 30 --retry-connrefused --retry-max-time "$share" --connect-timeout 20 \
     -w '%{http_code}' -o "$out" "$url")" || rc=$?
   [ "$rc" -ne 0 ] || exit 0
   rm -f "$out"
   case "$code" in
     408 | 429 | 500 | 502 | 503 | 504) what="HTTP $code from $url, still after retrying for up to ${share}s" ;;
-    000 | "") what="no answer from $url (curl exit $rc), after retrying for up to ${share}s" ;;
+    000 | "") what="no answer from $url (curl exit $rc)" ;;
     *) what="HTTP $code from $url (not retried: it is not a transient error)" ;;
   esac
   if [ "$left" -gt 0 ]; then

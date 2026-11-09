@@ -101,6 +101,13 @@ check "a 404 from every source fails with the last one's 404, one request each" 
   test "$rc" -ne 0 -a "$a" -eq 1 -a "$b" -eq 1
 check "  ...naming it" says "::error::HTTP 404 from $base/b (not retried"
 
+# A source that refuses the connection (nothing listens on the discard port) is
+# retried within its share, then the next source is asked.
+run "200" "200" 4 "http://127.0.0.1:9/a" "$base/b"
+check "a refused connection is retried, then hands over to the next source" \
+  test "$rc" -eq 0 -a "$b" -eq 1 -a "$secs" -le 15
+check "  ...with a warning naming it" says "::warning::no answer from http://127.0.0.1:9/a"
+
 run "200" "200" 120 "$base/a" "$base/b"
 check "the first source that answers is the only one asked" test "$rc" -eq 0 -a "$a" -eq 1 -a "$b" -eq 0
 check "every request asked for application/octet-stream" test ! -e "$work/bad-accept"
