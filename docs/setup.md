@@ -36,7 +36,9 @@ The wizard's steps:
    always gets the typing form.
 3. **What to watch.** The default branch and push pipelines are pre-filled. On GitHub
    the events are workflow events, and an optional workflow file narrows the watch to
-   one workflow. Optionally add a secondary watch for scheduled pipelines on the same
+   one workflow; or **One row per push** groups every workflow of a push into one row
+   (`group = "commit"`) and offers the workflows every push must start (`expect`), see
+   [the wizard on GitHub](github-actions.md#quick-start-the-wizard). Optionally add a secondary watch for scheduled pipelines on the same
    branch, and on GitLab one for a preflight ref glob such as `pf/*`.
 4. **Deploy detection.** Suggested marker jobs, ranked from the latest pipeline's (or
    workflow run's) job names and stages, the parent's and its child pipelines' down to

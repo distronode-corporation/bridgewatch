@@ -34,8 +34,8 @@ use serde::{Deserialize, Serialize};
 use crate::client::{CiClient, ClientError, ListQuery};
 use crate::config::edit::{ConfigEditor, Edit, EditError, EditValue, quote_path_segment};
 use crate::config::{
-    self, Config, Diagnostic, KNOWN_GITHUB_EVENTS, KNOWN_PIPELINE_SOURCES, Pattern, ProjectRef,
-    Provider, RefMatcher, Role, Severity, TokenSource, Watch,
+    self, Config, Diagnostic, GroupMode, KNOWN_GITHUB_EVENTS, KNOWN_PIPELINE_SOURCES, Pattern,
+    ProjectRef, Provider, RefMatcher, Role, Severity, TokenSource, Watch,
 };
 use crate::model::{Job, Pipeline, User};
 
@@ -1285,6 +1285,70 @@ pub async fn suggest_deploy_markers(
     })
 }
 
+/// How many recent pushes [`suggest_expected_workflows`] reads.
+pub const EXPECT_SAMPLE_COMMITS: usize = 3;
+
+/// One workflow file the newest pushes ran, for `expect`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpectedWorkflow {
+    /// The file name, `ci.yml`: what `expect` matches.
+    pub file: String,
+    /// In how many of the sampled pushes it ran.
+    pub seen_in: usize,
+}
+
+/// The `expect` step's answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpectSuggestions {
+    /// How many pushes were read (at most [`EXPECT_SAMPLE_COMMITS`]); 0 when
+    /// the branch has no runs.
+    pub commits: usize,
+    /// Every workflow file seen, the ones in every push first, then by name.
+    /// The wizard pre-ticks the ones with `seen_in == commits`: a workflow
+    /// that skipped one of them (a `paths` filter, a branch rule) would turn
+    /// every push like that into a dead bridge.
+    pub workflows: Vec<ExpectedWorkflow>,
+}
+
+/// Suggest `expect` for a GitHub commit group: the workflow files the newest
+/// [`EXPECT_SAMPLE_COMMITS`] pushes on `ref_name` ran, from ONE request (a
+/// page of 30 runs). `sources` narrows the runs to an event when it names
+/// exactly one, as the watch will.
+pub async fn suggest_expected_workflows(
+    client: &dyn CiClient,
+    project: &ProjectRef,
+    ref_name: &str,
+    sources: &[String],
+) -> Result<ExpectSuggestions, WizardError> {
+    let event = match sources {
+        [one] => Some(one.clone()),
+        _ => None,
+    };
+    let per_commit = client
+        .recent_workflow_files(
+            project,
+            &ListQuery::exact(ref_name, event, 30),
+            EXPECT_SAMPLE_COMMITS,
+        )
+        .await
+        .map_err(|e| WizardError::from_client(e, format!("workflow runs of {project}")))?;
+    let mut workflows: Vec<ExpectedWorkflow> = Vec::new();
+    for file in per_commit.iter().flatten() {
+        match workflows.iter_mut().find(|w| &w.file == file) {
+            Some(w) => w.seen_in += 1,
+            None => workflows.push(ExpectedWorkflow {
+                file: file.clone(),
+                seen_in: 1,
+            }),
+        }
+    }
+    workflows.sort_by(|a, b| b.seen_in.cmp(&a.seen_in).then_with(|| a.file.cmp(&b.file)));
+    Ok(ExpectSuggestions {
+        commits: per_commit.len(),
+        workflows,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Step 6: the config
 // ---------------------------------------------------------------------------
@@ -1325,6 +1389,14 @@ pub struct WizardAnswers {
     /// GitHub only: the one workflow to follow, by file name (`ci.yml`) or
     /// numeric id. `None` or empty is every workflow.
     pub workflow: Option<String>,
+    /// GitHub only: one row per workflow run (`run`, the default, which is
+    /// what answers written before this key existed mean), or one row per
+    /// push with each run a bridge (`commit`). A commit group follows every
+    /// workflow, so `workflow` is not written with it.
+    pub group: GroupMode,
+    /// GitHub only, with `group = commit`: the workflow FILES every push must
+    /// start ([`suggest_expected_workflows`] offers them). Ignored otherwise.
+    pub expect: Vec<String>,
     /// Pipeline sources to accept. `["push"]` by default.
     pub sources: Vec<String>,
     /// Deploy markers; empty is "none".
@@ -1367,6 +1439,8 @@ impl Default for WizardAnswers {
             watch_id: "main".into(),
             ref_name: "main".into(),
             workflow: None,
+            group: GroupMode::Run,
+            expect: Vec::new(),
             sources: vec!["push".into()],
             deploy_markers: Vec::new(),
             schedule_watch: false,
@@ -1890,6 +1964,17 @@ const ALWAYS_WRITTEN: &[&str] = &["id", "account", "project", "ref", "role"];
 /// re-timing a watch somebody had tuned would be a change nothing on screen
 /// announced. GitLab's are the schema defaults and are left alone here so the
 /// keys stay out of the file entirely.
+/// `expect` as the wizard writes it: trimmed, no empty or repeated entry.
+fn expected_files(answers: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for file in answers.iter().map(|f| f.trim()).filter(|f| !f.is_empty()) {
+        if !out.iter().any(|o| o == file) {
+            out.push(file.to_string());
+        }
+    }
+    out
+}
+
 fn apply_poll_defaults(watch: &mut Watch, answers: &WizardAnswers) {
     if answers.provider == Provider::Github {
         watch.poll.live_secs = GITHUB_LIVE_SECS;
@@ -2114,12 +2199,17 @@ fn build_config_inner(
                     watch.poll.live_secs = live;
                 }
                 if answers.provider == Provider::Github {
-                    watch.workflow = answers
-                        .workflow
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|w| !w.is_empty())
-                        .map(str::to_string);
+                    if answers.group == GroupMode::Commit {
+                        watch.group = GroupMode::Commit;
+                        watch.expect = expected_files(&answers.expect);
+                    } else {
+                        watch.workflow = answers
+                            .workflow
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|w| !w.is_empty())
+                            .map(str::to_string);
+                    }
                 }
                 if let Some(n) = answers.notify {
                     watch.notify.deployed = n.deployed;
@@ -2155,6 +2245,7 @@ fn build_config_inner(
                 // names one, and there the file wins rather than being quietly
                 // widened to every workflow in the repository.
                 if answers.provider == Provider::Github
+                    && answers.group == GroupMode::Run
                     && let Some(workflow) = answers
                         .workflow
                         .as_deref()
@@ -2163,6 +2254,18 @@ fn build_config_inner(
                     && w.workflow.as_deref() != Some(workflow)
                 {
                     set("workflow", s(workflow));
+                }
+                // A commit group, like a workflow, is written when the answer
+                // asks for it and never taken away: a run-mode answer over a
+                // file that groups by commit leaves the file's choice alone.
+                if answers.provider == Provider::Github && answers.group == GroupMode::Commit {
+                    if w.group != GroupMode::Commit {
+                        set("group", s("commit"));
+                    }
+                    let expect = expected_files(&answers.expect);
+                    if !expect.is_empty() && w.expect != expect {
+                        set("expect", strings(&expect));
+                    }
                 }
                 if w.deploy_markers != answers.deploy_markers {
                     set("deploy_markers", strings(&answers.deploy_markers));
@@ -2186,6 +2289,22 @@ fn build_config_inner(
                             set(key, EditValue::Boolean(want));
                         }
                     }
+                }
+                // ⛔ A commit group follows every workflow, so a `workflow` the
+                // file already names comes out when a group is asked for:
+                // kept, the watch would list one workflow's runs and group
+                // them, and an `expect` naming any other could never be met
+                // (Seer, #84).
+                if answers.provider == Provider::Github
+                    && answers.group == GroupMode::Commit
+                    && w.workflow.is_some()
+                    && let Some(index) = current
+                        .as_ref()
+                        .and_then(|c| c.watches.iter().position(|x| x.id == answers.watch_id))
+                {
+                    edits.push(Edit::Unset {
+                        path: format!("watches.{index}.workflow"),
+                    });
                 }
             }
         }

@@ -40,6 +40,11 @@ body line with a bracket.
   per poll, asked once per commit. `[ui].commit_titles` (on by default) turns it off.
   Stored config, the notification ledger and `check --json` are unchanged: the CLI never
   asks for titles, and a row without one serialises as before.
+- **The setup wizard writes a GitHub commit group.** On GitHub the watch step offers
+  **One row per push**, which writes `group = "commit"` (and no `workflow`, since a group
+  follows every workflow) and `expect`: the workflow files the newest three pushes on the
+  branch ran, from one page of runs, with those every push ran ticked. A re-run sets a
+  commit group on an existing watch when asked and never takes one away.
 
 ### Changed
 

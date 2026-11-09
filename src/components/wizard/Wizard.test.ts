@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 import type {
   Identity,
+  ExpectSuggestions,
   MarkerSuggestions,
   ProjectListing,
   ResolvedProject,
@@ -66,6 +67,15 @@ const SUGGESTIONS: MarkerSuggestions = {
   unread_children: [],
 };
 
+const EXPECT: ExpectSuggestions = {
+  commits: 3,
+  workflows: [
+    { file: "ci.yml", seen_in: 3 },
+    { file: "release.yml", seen_in: 3 },
+    { file: "docs.yml", seen_in: 1 },
+  ],
+};
+
 const PREVIEW: WizardPreview = {
   toml: '[accounts.gitlab]\nbase_url = "https://gitlab.com"\n\n[[watches]]\nid = "web-trunk"\n',
   warnings: [],
@@ -87,6 +97,7 @@ function fakeApi(overrides: Partial<{ [K in keyof Api]: Mock<(...args: never[]) 
     listProjects: vi.fn<Api["listProjects"]>(async () => LISTING),
     resolveProject: vi.fn<Api["resolveProject"]>(async () => RESOLVED),
     suggestDeployMarkers: vi.fn<Api["suggestDeployMarkers"]>(async () => SUGGESTIONS),
+    suggestExpectedWorkflows: vi.fn<Api["suggestExpectedWorkflows"]>(async () => EXPECT),
     previewConfig: vi.fn<Api["previewConfig"]>(async () => PREVIEW),
     save: vi.fn<Api["save"]>(async () => SAVED),
     skip: vi.fn<Api["skip"]>(async () => {}),
@@ -958,6 +969,95 @@ describe("GitHub", () => {
       live_secs: 30,
     });
     expect(text('[data-slot="token-note"]')).toContain("gh's keychain entry");
+  });
+
+  it("writes a commit group: one row per push, with the workflows every push ran ticked as expect", async () => {
+    const api = ghApi();
+    await start(api);
+    await click('input[name="provider"][value="github"]');
+    await click('[data-action="test-connection"]');
+    await next();
+    await click('input[name="project"][value="700"]');
+    await next();
+    expect(stepId()).toBe("watch");
+    expect(q('[data-slot="expect"]')).toBeNull();
+    await click("#wizard-group-commit");
+    // One request, for the branch and events the watch will follow.
+    expect(api.suggestExpectedWorkflows.mock.calls.map((c) => c.slice(1))).toEqual([["acme/web", "trunk", ["push"]]]);
+    // A commit group follows every workflow: no workflow field.
+    expect(q("#wizard-workflow")).toBeNull();
+    const ticked = (file: string) => q(`#wizard-expect-${file.replace(".", "\\.")}`)?.getAttribute("data-state");
+    expect(ticked("ci.yml")).toBe("checked");
+    expect(ticked("release.yml")).toBe("checked");
+    expect(ticked("docs.yml"), "seen in one push of three: not ticked").toBe("unchecked");
+    await next();
+    expect(stepId()).toBe("deploy");
+    // The deploy names come from every workflow's newest push run.
+    expect(api.suggestDeployMarkers.mock.calls[0].slice(1)).toEqual(["acme/web", "trunk"]);
+    await click('input[name="marker-mode"][value="none"]');
+    await next();
+    await next();
+    expect(stepId()).toBe("review");
+    expect(api.previewConfig.mock.calls[0][0]).toMatchObject({
+      provider: "github",
+      group: "commit",
+      expect: ["ci.yml", "release.yml"],
+      workflow: null,
+    });
+  });
+
+  it("asks again for the expect suggestions when the branch or the events change, and once per answer", async () => {
+    const api = ghApi();
+    await start(api);
+    await click('input[name="provider"][value="github"]');
+    await click('[data-action="test-connection"]');
+    await next();
+    await click('input[name="project"][value="700"]');
+    await next();
+    await click("#wizard-group-commit");
+    expect(api.suggestExpectedWorkflows.mock.calls.length).toBe(1);
+    await type("#wizard-ref", "release");
+    q<HTMLInputElement>("#wizard-ref")!.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    await click("#wizard-source-workflow_dispatch");
+    const asked = api.suggestExpectedWorkflows.mock.calls.map((c) => c.slice(2));
+    expect(asked).toEqual([
+      ["trunk", ["push"]],
+      ["release", ["push"]],
+      ["release", ["push", "workflow_dispatch"]],
+    ]);
+    // The same branch and events again cost nothing.
+    q<HTMLInputElement>("#wizard-ref")!.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    expect(api.suggestExpectedWorkflows.mock.calls.length).toBe(3);
+  });
+
+  it("asks nothing while the branch is typed, and keeps only the newest answer", async () => {
+    const answers: Array<(r: ExpectSuggestions) => void> = [];
+    const api = ghApi({
+      suggestExpectedWorkflows: vi.fn(() => new Promise<ExpectSuggestions>((resolve) => answers.push(resolve))),
+    });
+    await start(api);
+    await click('input[name="provider"][value="github"]');
+    await click('[data-action="test-connection"]');
+    await next();
+    await click('input[name="project"][value="700"]');
+    await next();
+    await click("#wizard-group-commit");
+    expect(api.suggestExpectedWorkflows.mock.calls.length).toBe(1);
+    // Letter by letter, as typing does: no request until the field's change event.
+    for (const ref of ["r", "re", "rel", "release"]) await type("#wizard-ref", ref);
+    expect(api.suggestExpectedWorkflows.mock.calls.length).toBe(1);
+    q<HTMLInputElement>("#wizard-ref")!.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    expect(api.suggestExpectedWorkflows.mock.calls.map((c) => c[2])).toEqual(["trunk", "release"]);
+    // The newer answer lands first; the older one, landing after it, is dropped.
+    answers[1]({ commits: 1, workflows: [{ file: "release.yml", seen_in: 1 }] });
+    await settle();
+    answers[0]({ commits: 1, workflows: [{ file: "trunk-only.yml", seen_in: 1 }] });
+    await settle();
+    expect(q("#wizard-expect-release\\.yml")).not.toBeNull();
+    expect(q("#wizard-expect-trunk-only\\.yml")).toBeNull();
   });
 
   it("an Enterprise host is typed, and resolving a repository keeps the path the core returns", async () => {

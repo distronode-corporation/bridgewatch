@@ -153,6 +153,14 @@ export interface MarkerSuggestions {
   truncated?: boolean;
 }
 
+/** `ExpectSuggestions`: the workflow files the newest pushes ran, for `expect`. */
+export interface ExpectSuggestions {
+  /** How many pushes were read, at most 3; 0 when the branch has no runs. */
+  commits: number;
+  /** Every file seen, the ones in every push first. */
+  workflows: { file: string; seen_in: number }[];
+}
+
 /** `NotifyAnswers`. */
 export interface NotifyAnswers {
   deployed: boolean;
@@ -176,6 +184,10 @@ export interface WizardAnswers {
   ref_name: string;
   /** GitHub only: the workflow file name (`ci.yml`) or id; absent or null is every workflow. */
   workflow?: string | null;
+  /** GitHub only: one row per run (absent, the default) or per push. */
+  group?: "run" | "commit";
+  /** GitHub only, with `group: "commit"`: workflow FILES every push must start. */
+  expect?: string[];
   sources: string[];
   deploy_markers: string[];
   schedule_watch: boolean;
@@ -317,6 +329,17 @@ export interface WizardApi {
     refName: string,
     workflow?: string,
   ): Promise<Confirmable<MarkerSuggestions>>;
+  /**
+   * Step 3, GitHub with one row per push: the workflow files the newest
+   * pushes on the branch ran, from one request, for `expect`. Optional:
+   * without it no suggestions are offered.
+   */
+  suggestExpectedWorkflows?(
+    connection: Connection,
+    project: ProjectRef,
+    refName: string,
+    sources: string[],
+  ): Promise<Confirmable<ExpectSuggestions>>;
   /** Step 6: the config.toml the answers produce (editing an existing file in place). */
   previewConfig(answers: WizardAnswers): Promise<WizardPreview>;
   /**
