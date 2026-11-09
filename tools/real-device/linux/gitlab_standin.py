@@ -9,6 +9,7 @@ State is <workdir>/<name>.state.json, re-read on every request, so the harness c
 pipeline by rewriting that file. Shape:
   {"token_expires_at": "YYYY-MM-DD" | null,
    "projects": {"101": {"path": "acme/web", "pipeline": 9101, "sha": "<40 hex>",
+                        "title": "the commit's first line (optional)",
                         "jobs": [["build", "build", "success"], ["test", "test:unit", "failed"]]}}}
 The pipeline status is derived from the jobs (any running/pending -> running, any failed
 not allowed to fail -> failed, else success).
@@ -134,7 +135,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if len(rest) == 3 and rest[0] == "pipelines" and rest[2] == "bridges":
                 return self.send(200, [], [("x-next-page", "")])
             if len(rest) == 3 and rest[:2] == ["repository", "commits"]:
-                return self.send(200, {"id": pr["sha"]})
+                return self.send(200, {"id": pr["sha"], "title": pr.get("title")})
         return self.send(404, {"message": "404 Not Found"})
 
     def log_message(self, *args):
