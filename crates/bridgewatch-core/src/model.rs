@@ -62,6 +62,13 @@ pub struct Pipeline {
     /// When the pipeline reached a settled status.
     #[serde(default)]
     pub finished_at: Option<String>,
+    /// The commit's title (its first line), when the provider sent it with
+    /// the pipeline: GitHub's `display_title`. GitLab's pipelines carry none;
+    /// the poller asks for those separately, and only when commit titles are
+    /// on ([`crate::poll::Poller::with_commit_titles`]). Left out of JSON when
+    /// absent, so a recorded pipeline reads as it always has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 impl Pipeline {

@@ -105,6 +105,7 @@ and call depth are capped. A script that errors or returns an unknown name yield
 | `launch_at_login` | Register a login item. The checkbox in Settings and the tray menu set the OS login item and mirror its state here [false]. |
 | `send_crash_reports` | Send a crash report when the app fails, see [Crash reports (opt in)](app.md#crash-reports-opt-in). Unset means not answered yet, and the popover asks once; only `true` sends [unset]. |
 | `jobs` | `all` or `failures`, see [the job view](app.md#the-job-view-and-what-live-means) [`all`]. |
+| `commit_titles` | Show each pipeline row's commit title, its first line, in the popover [true]. GitHub's runs carry it; on GitLab it costs one request per new commit (`/repository/commits/:sha`), at most three per watch per poll, and each is asked once. The CLI never shows titles. |
 
 **`[log]`**:
 

@@ -1296,6 +1296,7 @@ async fn a_group_row_the_client_did_not_list_is_rebuilt_from_its_commit() {
         updated_at: None,
         started_at: None,
         finished_at: None,
+        title: None,
     };
 
     let (jobs, bridges) = CiClient::listed_detail(&client, &repo(), &row, &grouped("push", 20, 90))

@@ -33,6 +33,7 @@
       "description": "Window and presentation settings, consumed by the GUI shell.",
       "$ref": "#/$defs/UiConfig",
       "default": {
+        "commit_titles": true,
         "jobs": "all",
         "launch_at_login": false,
         "popover": {
@@ -618,6 +619,11 @@
       "description": "Window and presentation settings. The core reads only `jobs`, to put each\nwatch's effective mode on the view model; the rest are the GUI shell's, and\nthey live here so the config file stays the one source.",
       "type": "object",
       "properties": {
+        "commit_titles": {
+          "description": "Show each pipeline row's commit title in the popover. On GitHub the run\ncarries it; on GitLab it costs one request per new commit, at most three\nper watch per tick, kept while the row is shown. Not used by the CLI.",
+          "type": "boolean",
+          "default": true
+        },
         "jobs": {
           "description": "Which jobs an expanded pipeline row lists: `all` (every job, grouped by\nstage) or `failures` (only what the verdict names). A watch may override\nit with `show.jobs`.",
           "$ref": "#/$defs/JobsMode",

@@ -181,6 +181,7 @@ fn row(id: u64, status: &str, updated: &str) -> Pipeline {
         updated_at: Some(updated.into()),
         started_at: None,
         finished_at: None,
+        title: None,
     }
 }
 

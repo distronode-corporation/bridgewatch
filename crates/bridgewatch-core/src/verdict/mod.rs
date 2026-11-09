@@ -203,6 +203,11 @@ pub struct PipelineView {
     /// the key only where there is something in it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eta: Option<crate::eta::Eta>,
+    /// The commit's title (its first line), when commit titles are on
+    /// ([`crate::poll::Poller::with_commit_titles`]). Omitted when absent, so a
+    /// row serialises exactly as it did before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// One watch's contribution to the popover.
@@ -688,6 +693,7 @@ pub fn evaluate_pipeline(
         created_at: detail.pipeline.created_at.clone(),
         live: anything_live,
         eta: None,
+        title: detail.pipeline.title.clone(),
     };
 
     let mut script_error = None;

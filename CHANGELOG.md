@@ -15,6 +15,15 @@ body line with a bracket.
 
 ### Added
 
+- **Commit titles on pipeline rows.** Each row in the popover shows its commit's first
+  line on the sha's line. GitHub's runs carry it, so it costs nothing there; on GitLab
+  it is one request per new commit (`/repository/commits/:sha`), at most three per watch
+  per poll, asked once per commit. `[ui].commit_titles` (on by default) turns it off.
+  Stored config, the notification ledger and `check --json` are unchanged: the CLI never
+  asks for titles, and a row without one serialises as before.
+
+### Added
+
 - **The release checks on real devices are in the repository.** `tools/real-device/`
   holds the Linux and macOS check list run before a tag, and a Linux harness that runs the
   real app on a private Xvfb display, under a private D-Bus session, with a throwaway HOME

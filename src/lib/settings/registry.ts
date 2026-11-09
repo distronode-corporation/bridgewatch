@@ -438,6 +438,13 @@ export const REGISTRY: RegistryEntry[] = [
   },
   { path: "ui.launch_at_login", tab: "ui", control: "boolean", label: "Launch at login" },
   {
+    path: "ui.commit_titles",
+    tab: "ui",
+    control: "boolean",
+    label: "Commit titles",
+    hint: "Each row shows its commit's first line. On GitLab that is one request per new commit, a few per poll.",
+  },
+  {
     path: "ui.send_crash_reports",
     tab: "ui",
     control: "boolean",

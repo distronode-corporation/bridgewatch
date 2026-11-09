@@ -83,7 +83,15 @@ struct WatchState {
     /// over a single dropped connection, while the cache still holds every
     /// detail the last tick built — an answer that is both wrong and available.
     last_view: Option<WatchView>,
+    /// Commit titles by sha, for the rows on screen ([`fill_titles`]): `None`
+    /// is a commit known to have no title to show. Trimmed to this tick's rows.
+    titles: HashMap<String, Option<String>>,
 }
+
+/// The most commit titles one watch asks for in one tick. On GitLab each is a
+/// request (`/repository/commits/{sha}`), answered once per commit and kept,
+/// so a new watch fills its rows over a few ticks instead of in one burst.
+pub const TITLES_PER_TICK: usize = 3;
 
 /// Polls every watch and produces snapshots.
 ///
@@ -123,6 +131,8 @@ pub struct Poller {
     /// Each account's [`crate::health::Observed::accepted`] count as of the
     /// last tick, to tell whether an answer accepted it since.
     accepted_seen: HashMap<String, u64>,
+    /// Whether rows carry their commit's title ([`Poller::with_commit_titles`]).
+    commit_titles: bool,
 }
 
 /// How a client's transport is made, per account: the network's
@@ -180,6 +190,7 @@ impl Poller {
                 cache: PipelineCache::new(),
                 last_bridges: HashMap::new(),
                 last_view: None,
+                titles: HashMap::new(),
             });
         }
 
@@ -213,6 +224,7 @@ impl Poller {
             retry: None,
             expiry_due: BTreeSet::new(),
             accepted_seen: HashMap::new(),
+            commit_titles: false,
         })
     }
 
@@ -412,6 +424,16 @@ impl Poller {
         &self.clients
     }
 
+    /// Put each row's commit title on it (`PipelineView::title`): free on
+    /// GitHub, where the run carries it, and one request per new commit on
+    /// GitLab, at most [`TITLES_PER_TICK`] per watch per tick. Off unless
+    /// asked, so `check --json` and every request count stay as they were:
+    /// the app turns it on from `[ui].commit_titles`.
+    pub fn with_commit_titles(mut self, on: bool) -> Self {
+        self.commit_titles = on;
+        self
+    }
+
     /// Load and persist the notification ledger at this path.
     pub fn with_ledger(mut self, path: std::path::PathBuf) -> Self {
         self.ledger = NotifyLedger::load(&path);
@@ -571,22 +593,26 @@ impl Poller {
 
         let clients = &self.clients;
         let script = self.script.as_deref();
-        let polled = in_order(
-            self.watches
-                .iter_mut()
-                .zip(&turns)
-                .filter(|(_, turn)| matches!(turn, Turn::Poll))
-                .filter_map(|(state, _)| {
-                    let client = clients.get(&state.watch.account)?;
-                    let owner = state
-                        .watch
-                        .mine
-                        .then(|| owners.get(&state.watch.account).cloned())
-                        .flatten();
-                    Some(async move { poll_watch(client.as_ref(), state, script, owner).await })
-                }),
-        )
-        .await;
+        let titles = self.commit_titles;
+        let polled =
+            in_order(
+                self.watches
+                    .iter_mut()
+                    .zip(&turns)
+                    .filter(|(_, turn)| matches!(turn, Turn::Poll))
+                    .filter_map(|(state, _)| {
+                        let client = clients.get(&state.watch.account)?;
+                        let owner = state
+                            .watch
+                            .mine
+                            .then(|| owners.get(&state.watch.account).cloned())
+                            .flatten();
+                        Some(async move {
+                            poll_watch(client.as_ref(), state, script, owner, titles).await
+                        })
+                    }),
+            )
+            .await;
         let mut polled = polled.into_iter();
         // One clock for the whole apply phase, so two rows of one tick cannot
         // disagree about what time it is.
@@ -816,13 +842,16 @@ impl Poller {
         if let Some(e) = fetched.errors.into_iter().next() {
             return Err(e);
         }
-        let (view, _) = evaluate_pipeline(
+        let (mut view, _) = evaluate_pipeline(
             &fetched.detail,
             DetailSource::Fetched,
             &state.watch,
             &state.rules,
             self.script.as_deref(),
         );
+        if !self.commit_titles {
+            view.title = None;
+        }
         Ok(CommitLookup::Found(Box::new(view)))
     }
 
@@ -973,6 +1002,7 @@ async fn poll_watch(
     state: &mut WatchState,
     script: Option<&VerdictScript>,
     owner: Option<Result<String, ClientError>>,
+    titles: bool,
 ) -> (WatchView, Option<ClientError>, bool) {
     let project = state.watch.project.clone();
     let query = list_query(&state.watch, &state.rules);
@@ -1102,6 +1132,13 @@ async fn poll_watch(
         }
         views.push(view);
     }
+    if titles {
+        fill_titles(client, &project, state, &mut views).await;
+    } else {
+        for view in &mut views {
+            view.title = None;
+        }
+    }
 
     // The icon follows the highest pipeline id, which is the newest run, not the
     // one that happens to have finished most recently.
@@ -1125,6 +1162,66 @@ async fn poll_watch(
         None,
         true,
     )
+}
+
+/// Put each row's commit title on it.
+///
+/// A title the provider sent with the pipeline (GitHub) is used as it is.
+/// Otherwise it is asked for, newest rows first, at most [`TITLES_PER_TICK`]
+/// per tick, and kept by sha for as long as a row shows that commit.
+///
+/// ⛔ A title is a nicety: a failed request is no error on the watch and no
+/// backoff. A rate limit or a 5xx stops this tick's asking and is asked again
+/// next tick; any other failure (a 403, a 404, a body that does not decode) is
+/// kept as "no title", so a commit that will never answer is asked once.
+async fn fill_titles(
+    client: &dyn CiClient,
+    project: &ProjectRef,
+    state: &mut WatchState,
+    views: &mut [PipelineView],
+) {
+    let on_screen: HashSet<&str> = views.iter().map(|v| v.sha.as_str()).collect();
+    state
+        .titles
+        .retain(|sha, _| on_screen.contains(sha.as_str()));
+    for view in views.iter() {
+        if let Some(title) = &view.title {
+            state.titles.insert(view.sha.clone(), Some(title.clone()));
+        }
+    }
+    let mut wanted: Vec<String> = Vec::new();
+    for view in views.iter() {
+        if wanted.len() == TITLES_PER_TICK {
+            break;
+        }
+        if view.title.is_none()
+            && !view.sha.is_empty()
+            && !state.titles.contains_key(&view.sha)
+            && !wanted.contains(&view.sha)
+        {
+            wanted.push(view.sha.clone());
+        }
+    }
+    for sha in wanted {
+        match client.commit_title(project, &sha).await {
+            Ok(title) => {
+                state.titles.insert(sha, title);
+            }
+            Err(e) if e.should_back_off() => {
+                tracing::debug!(error = %e, "commit title not read; asking again next tick");
+                break;
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, sha, "commit title not readable; not asked again");
+                state.titles.insert(sha, None);
+            }
+        }
+    }
+    for view in views.iter_mut() {
+        if view.title.is_none() {
+            view.title = state.titles.get(&view.sha).cloned().flatten();
+        }
+    }
 }
 
 /// One pipeline's detail, plus whatever went wrong fetching parts of it.

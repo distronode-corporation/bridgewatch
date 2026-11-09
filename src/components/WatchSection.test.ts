@@ -192,6 +192,32 @@ describe("PipelineRow, the deploy ETA", () => {
   });
 });
 
+describe("PipelineRow, the commit title", () => {
+  const primary = (row: PipelineView): WatchView => ({
+    id: "main-push",
+    role: "primary",
+    icon_state: "deployed",
+    rows: [row],
+    error: null,
+  });
+
+  it("shows the title last on the commit's line, with the whole line as its tooltip", () => {
+    render(primary({ ...ROW, title: "Ship the popover keys" }));
+    const title = host.querySelector<HTMLElement>(".row .sub .title");
+    expect(title?.textContent).toBe("Ship the popover keys");
+    expect(title?.getAttribute("title")).toBe("Ship the popover keys");
+    // Last on the line, where it takes the room that is left and truncates.
+    const sub = [...host.querySelector(".row .sub")!.children];
+    expect(sub[0].classList.contains("sha")).toBe(true);
+    expect(sub.at(-1)).toBe(title);
+  });
+
+  it("shows nothing for a row with no title, the recorded snapshots included", () => {
+    render(primary(ROW));
+    expect(host.querySelector(".row .title")).toBe(null);
+  });
+});
+
 describe("WatchSection, the layout", () => {
   function primary(rows: PipelineView[], icon_state: WatchView["icon_state"] = "deployed"): WatchView {
     return { id: "main-push", role: "primary", icon_state, rows, error: null };
