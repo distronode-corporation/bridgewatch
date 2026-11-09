@@ -88,6 +88,8 @@ export interface MarkerJob {
 }
 
 export interface PipelineView {
+  /** The commit's first line, when commit titles are on and it is known. */
+  title?: string;
   id: number;
   iid: number | null;
   sha: string;

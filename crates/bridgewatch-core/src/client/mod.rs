@@ -87,6 +87,18 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
         })
     }
 
+    /// A commit's title (its first line), for a provider whose pipelines do
+    /// not carry it: GitLab. `Ok(None)` when the commit has none to show or
+    /// does not exist. The default answers `None` without a request: GitHub's
+    /// runs carry the title already.
+    async fn commit_title(
+        &self,
+        _project: &ProjectRef,
+        _sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        Ok(None)
+    }
+
     /// The first failure annotation of a failed job: what its first failing
     /// line is made of (F2). The poller asks this for each pipeline's first
     /// BLOCKING failure under the watch's `[watches.jobs]` rules, which only

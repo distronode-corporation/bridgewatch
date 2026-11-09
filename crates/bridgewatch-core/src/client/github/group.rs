@@ -353,6 +353,12 @@ fn build(
         // Nothing reports when a run finished, so nothing reports it for a
         // group of them either.
         finished_at: None,
+        // Every run of a push names the same commit; the newest one's title.
+        title: newest
+            .run
+            .display_title
+            .as_deref()
+            .and_then(crate::model::first_line),
         sha,
     };
 

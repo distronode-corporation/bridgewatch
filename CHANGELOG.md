@@ -34,6 +34,12 @@ body line with a bracket.
   `[ui].hotkey` (for example `CmdOrCtrl+Shift+B`, empty by default) shows or hides the
   popover from anywhere. On Linux it works under X11 only: a Wayland session gives apps
   no global shortcut, so there it fires only while an X11 window has the focus.
+- **Commit titles on pipeline rows.** Each row in the popover shows its commit's first
+  line on the sha's line. GitHub's runs carry it, so it costs nothing there; on GitLab
+  it is one request per new commit (`/repository/commits/:sha`), at most three per watch
+  per poll, asked once per commit. `[ui].commit_titles` (on by default) turns it off.
+  Stored config, the notification ledger and `check --json` are unchanged: the CLI never
+  asks for titles, and a row without one serialises as before.
 
 ### Changed
 

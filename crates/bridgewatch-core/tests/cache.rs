@@ -18,6 +18,7 @@ fn row(id: u64, status: &str, updated: Option<&str>) -> Pipeline {
         updated_at: updated.map(str::to_string),
         started_at: None,
         finished_at: None,
+        title: None,
     }
 }
 
