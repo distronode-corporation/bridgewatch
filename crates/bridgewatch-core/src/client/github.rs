@@ -237,10 +237,14 @@ impl GitHubClient {
             .await?;
         let mut by_commit: Vec<(String, Vec<String>)> = Vec::new();
         for run in page.workflow_runs {
+            // ⛔ Through `workflow_file`, the one reading of a run's path that
+            // `expect` matching uses too: a path can carry a ref suffix
+            // (`.github/workflows/ci.yml@refs/pull/12/merge`), and splitting it
+            // on `/` alone suggested `merge` (Seer, #84).
             let Some(file) = run
                 .path
                 .as_deref()
-                .and_then(|p| p.rsplit('/').next())
+                .map(crate::config::workflow_file)
                 .filter(|f| !f.is_empty())
                 .map(str::to_string)
             else {

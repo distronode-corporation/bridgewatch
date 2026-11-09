@@ -2684,8 +2684,21 @@ async fn expect_suggestions_are_the_workflows_of_the_newest_pushes_from_one_requ
         run(2, "c1", ".github/workflows/ci.yml"),
         run(1, "c0", ".github/workflows/old.yml"),
     ];
+    // A run of a dynamic or reusable workflow carries a ref after its path.
+    let runs = [
+        run(10, "c3", ".github/workflows/ci.yml@refs/pull/12/merge"),
+        runs[0].clone(),
+        runs[1].clone(),
+        runs[2].clone(),
+        runs[3].clone(),
+        runs[4].clone(),
+        runs[5].clone(),
+        runs[6].clone(),
+        runs[7].clone(),
+        runs[8].clone(),
+    ];
     let body = format!(
-        r#"{{"total_count":9,"workflow_runs":[{}]}}"#,
+        r#"{{"total_count":10,"workflow_runs":[{}]}}"#,
         runs.join(",")
     );
     let t = Routed::new().route("/repos/acme-corp/monorepo/actions/runs", 200, &body);
@@ -2703,7 +2716,11 @@ async fn expect_suggestions_are_the_workflows_of_the_newest_pushes_from_one_requ
         .iter()
         .map(|w| (w.file.as_str(), w.seen_in))
         .collect();
-    assert_eq!(seen, [("ci.yml", 3), ("release.yml", 3), ("docs.yml", 1)]);
+    assert_eq!(
+        seen,
+        [("ci.yml", 3), ("release.yml", 3), ("docs.yml", 1)],
+        "a ref suffix is not a file name"
+    );
     let asked = t.seen();
     assert_eq!(asked.len(), 1, "{asked:?}");
     assert!(
