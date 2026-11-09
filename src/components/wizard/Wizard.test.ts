@@ -999,7 +999,7 @@ describe("GitHub", () => {
     await click("#wizard-group-commit");
     expect(api.suggestExpectedWorkflows.mock.calls.length).toBe(1);
     await type("#wizard-ref", "release");
-    q<HTMLInputElement>("#wizard-ref")!.dispatchEvent(new Event("change"));
+    q<HTMLInputElement>("#wizard-ref")!.dispatchEvent(new Event("change", { bubbles: true }));
     await settle();
     await click("#wizard-source-workflow_dispatch");
     const asked = api.suggestExpectedWorkflows.mock.calls.map((c) => c.slice(2));
@@ -1009,9 +1009,37 @@ describe("GitHub", () => {
       ["release", ["push", "workflow_dispatch"]],
     ]);
     // The same branch and events again cost nothing.
-    q<HTMLInputElement>("#wizard-ref")!.dispatchEvent(new Event("change"));
+    q<HTMLInputElement>("#wizard-ref")!.dispatchEvent(new Event("change", { bubbles: true }));
     await settle();
     expect(api.suggestExpectedWorkflows.mock.calls.length).toBe(3);
+  });
+
+  it("asks nothing while the branch is typed, and keeps only the newest answer", async () => {
+    const answers: Array<(r: ExpectSuggestions) => void> = [];
+    const api = ghApi({
+      suggestExpectedWorkflows: vi.fn(() => new Promise<ExpectSuggestions>((resolve) => answers.push(resolve))),
+    });
+    await start(api);
+    await click('input[name="provider"][value="github"]');
+    await click('[data-action="test-connection"]');
+    await next();
+    await click('input[name="project"][value="700"]');
+    await next();
+    await click("#wizard-group-commit");
+    expect(api.suggestExpectedWorkflows.mock.calls.length).toBe(1);
+    // Letter by letter, as typing does: no request until the field's change event.
+    for (const ref of ["r", "re", "rel", "release"]) await type("#wizard-ref", ref);
+    expect(api.suggestExpectedWorkflows.mock.calls.length).toBe(1);
+    q<HTMLInputElement>("#wizard-ref")!.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    expect(api.suggestExpectedWorkflows.mock.calls.map((c) => c[2])).toEqual(["trunk", "release"]);
+    // The newer answer lands first; the older one, landing after it, is dropped.
+    answers[1]({ commits: 1, workflows: [{ file: "release.yml", seen_in: 1 }] });
+    await settle();
+    answers[0]({ commits: 1, workflows: [{ file: "trunk-only.yml", seen_in: 1 }] });
+    await settle();
+    expect(q("#wizard-expect-release\\.yml")).not.toBeNull();
+    expect(q("#wizard-expect-trunk-only\\.yml")).toBeNull();
   });
 
   it("an Enterprise host is typed, and resolving a repository keeps the path the core returns", async () => {

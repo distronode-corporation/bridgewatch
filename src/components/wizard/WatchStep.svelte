@@ -1,5 +1,7 @@
 <script lang="ts">
   /** Step 3: branch, pipeline sources (GitHub: events and a workflow), optional secondary watches. */
+  import { untrack } from "svelte";
+
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
@@ -48,8 +50,14 @@
   // shows a commit group (turned on here, or a re-run that lands with one), and
   // again when the branch is changed (on its change, not every keystroke) or an
   // event is ticked. The loader skips a branch and event set it has answered.
+  //
+  // ⛔ `untrack`: the loader reads the branch and the events before its first
+  // await, and an effect tracks every read in the call. Tracked, each keystroke
+  // in the branch field was a request (Seer, #84). The group and the provider
+  // are the effect's only triggers; the branch's change event and the event
+  // checkboxes ask on their own.
   $effect(() => {
-    if (github && draft.group === "commit") onexpect?.();
+    if (github && draft.group === "commit") untrack(() => onexpect?.());
   });
 
   function toggleExpect(file: string, on: boolean) {

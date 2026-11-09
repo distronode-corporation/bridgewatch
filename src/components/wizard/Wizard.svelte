@@ -645,23 +645,29 @@
     const key = JSON.stringify([connKey, project.ref, refName, sources]);
     // Answered already, or being asked right now.
     if (key === expectKey || key === expectAsking) return;
+    // ⛔ Only the newest question's answer is kept: an older one that lands
+    // after it is dropped, and does not end the newer one's loading (Seer, #84).
     expectAsking = key;
     expectLoading = true;
     expectError = null;
+    const newest = () => expectAsking === key;
     try {
       const result = await live((c) => suggest(c, project.ref, refName, sources));
-      if (result === null) return;
+      if (result === null || !newest()) return;
       expectSuggestions = result;
       expectKey = key;
       if (draft.expect.length === 0) {
         draft.expect = result.workflows.filter((w) => w.seen_in === result.commits).map((w) => w.file);
       }
     } catch (error) {
+      if (!newest()) return;
       expectSuggestions = null;
       expectError = messageOf(error);
     } finally {
-      expectLoading = false;
-      if (expectAsking === key) expectAsking = null;
+      if (newest()) {
+        expectLoading = false;
+        expectAsking = null;
+      }
     }
   }
 
