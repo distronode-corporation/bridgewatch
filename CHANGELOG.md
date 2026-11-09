@@ -15,6 +15,14 @@ body line with a bracket.
 
 ### Added
 
+- **The setup wizard writes a GitHub commit group.** On GitHub the watch step offers
+  **One row per push**, which writes `group = "commit"` (and no `workflow`, since a group
+  follows every workflow) and `expect`: the workflow files the newest three pushes on the
+  branch ran, from one page of runs, with those every push ran ticked. A re-run sets a
+  commit group on an existing watch when asked and never takes one away.
+
+### Added
+
 - **The release checks on real devices are in the repository.** `tools/real-device/`
   holds the Linux and macOS check list run before a tag, and a Linux harness that runs the
   real app on a private Xvfb display, under a private D-Bus session, with a throwaway HOME

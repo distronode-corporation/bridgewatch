@@ -33,9 +33,9 @@ use bridgewatch_core::config::{Account, Config, ProjectRef, Provider, TokenSourc
 use bridgewatch_core::poll::{self, PollerError};
 use bridgewatch_core::token::{self, Secret, SystemTokenProvider, TokenProvider};
 use bridgewatch_core::wizard::{
-    self, CliTokenDetection, FailureKind, Identity, MarkerSuggestions, ProjectListing,
-    RecentListing, ResolvedProject, StepIssue, SystemKeyringProbe, WizardAnswers, WizardError,
-    WizardFailure, WizardStep,
+    self, CliTokenDetection, ExpectSuggestions, FailureKind, Identity, MarkerSuggestions,
+    ProjectListing, RecentListing, ResolvedProject, StepIssue, SystemKeyringProbe, WizardAnswers,
+    WizardError, WizardFailure, WizardStep,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -441,6 +441,26 @@ pub async fn wizard_suggest_deploy_markers(
         Err(confirm) => return Ok(Confirmable::NeedsConfirm { confirm }),
     };
     wizard::suggest_deploy_markers(client.as_ref(), &project, &ref_name, workflow.as_deref())
+        .await
+        .map(Confirmable::Ready)
+        .map_err(fail)
+}
+
+/// Step 3, GitHub with one row per push: the workflow files the newest pushes
+/// ran, for `expect`. One request.
+#[tauri::command]
+pub async fn wizard_suggest_expected_workflows(
+    connection: Connection,
+    project: ProjectRef,
+    ref_name: String,
+    sources: Vec<String>,
+    app: AppHandle,
+) -> Result<Confirmable<ExpectSuggestions>, WizardFailure> {
+    let client = match connect(&app, &connection).await? {
+        Ok(c) => c,
+        Err(confirm) => return Ok(Confirmable::NeedsConfirm { confirm }),
+    };
+    wizard::suggest_expected_workflows(client.as_ref(), &project, &ref_name, &sources)
         .await
         .map(Confirmable::Ready)
         .map_err(fail)

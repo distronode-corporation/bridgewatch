@@ -19,8 +19,6 @@
   but a merged-result pipeline is not paired with its branch pipeline.
 - **The wizard's deploy-marker suggestions look one level deep** (parent and direct
   children).
-- **The wizard does not write a GitHub commit group.** It writes one row per run; set
-  `group = "commit"` and `expect` in Settings or by hand.
 - **A GitHub commit group is formed by time.** A run that starts more than
   `fan_out_secs` after the rest of its push (a slow `workflow_dispatch`, a re-push of the
   same commit) is a row of its own. See [`expect`](github-actions.md#expect-a-workflow-that-never-started).

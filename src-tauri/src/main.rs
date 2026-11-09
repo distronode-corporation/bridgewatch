@@ -139,6 +139,7 @@ fn main() {
             wizard::wizard_recent_projects,
             wizard::wizard_resolve_project,
             wizard::wizard_suggest_deploy_markers,
+            wizard::wizard_suggest_expected_workflows,
             wizard::wizard_preview_config,
             wizard::wizard_save,
             wizard::wizard_skip,

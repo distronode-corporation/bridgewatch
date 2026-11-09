@@ -833,6 +833,8 @@ fn answers() -> WizardAnswers {
         watch_id: "app-main".into(),
         ref_name: "main".into(),
         workflow: None,
+        group: Default::default(),
+        expect: Vec::new(),
         sources: vec!["push".into()],
         deploy_markers: vec!["deploy:production".into()],
         schedule_watch: true,
@@ -1380,6 +1382,8 @@ fn gh_answers() -> WizardAnswers {
         watch_id: "monorepo-main".into(),
         ref_name: "main".into(),
         workflow: Some("ci.yml".into()),
+        group: Default::default(),
+        expect: Vec::new(),
         sources: vec!["push".into()],
         deploy_markers: vec!["publish".into()],
         schedule_watch: false,
@@ -2562,4 +2566,143 @@ fn the_one_click_shapes_are_the_ones_api_ts_reads() {
     .unwrap();
     assert_eq!(answers.watches[0].deploy_markers, Vec::<String>::new());
     assert!(wizard::build_config(&answers, None).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// GitHub: a commit group (2.1)
+// ---------------------------------------------------------------------------
+
+fn commit_group_answers() -> WizardAnswers {
+    WizardAnswers {
+        group: bridgewatch_core::config::GroupMode::Commit,
+        expect: vec![
+            "ci.yml".into(),
+            " release.yml ".into(),
+            "ci.yml".into(),
+            "".into(),
+        ],
+        ..gh_answers()
+    }
+}
+
+/// One row per push: `group = "commit"` and `expect` (trimmed, no repeats, no
+/// empties) are written, `workflow` is not (a group follows every workflow),
+/// and the file loads with no warning of its own.
+#[test]
+fn a_github_commit_group_is_written_with_its_expect_and_without_a_workflow() {
+    let built = wizard::build_config(&commit_group_answers(), None).unwrap();
+    let loaded = config::parse_str(&built.toml, std::path::Path::new("config.toml"))
+        .unwrap_or_else(|e| panic!("{e}\n{}", built.toml));
+    assert!(
+        loaded.warnings.is_empty(),
+        "{:?}\n{}",
+        loaded.warnings,
+        built.toml
+    );
+    let watch = &loaded.config.watches[0];
+    assert_eq!(watch.group, bridgewatch_core::config::GroupMode::Commit);
+    assert_eq!(watch.expect, ["ci.yml", "release.yml"]);
+    assert_eq!(watch.workflow, None, "{}", built.toml);
+
+    // Re-running on its own output changes nothing.
+    let again = wizard::build_config(&commit_group_answers(), Some(&built.toml)).unwrap();
+    assert_eq!(again.toml, built.toml);
+}
+
+/// A re-run that asks for a commit group sets it on an existing run-mode
+/// watch; a run-mode answer over a commit group leaves the file's choice alone.
+#[test]
+fn a_rerun_sets_a_commit_group_and_never_takes_one_away() {
+    let run_mode = wizard::build_config(&gh_answers(), None).unwrap();
+    let grouped = wizard::build_config(&commit_group_answers(), Some(&run_mode.toml)).unwrap();
+    let watch = &load(&grouped.toml).watches[0];
+    assert_eq!(watch.group, bridgewatch_core::config::GroupMode::Commit);
+    assert_eq!(watch.expect, ["ci.yml", "release.yml"]);
+
+    let back = wizard::build_config(&gh_answers(), Some(&grouped.toml)).unwrap();
+    let watch = &load(&back.toml).watches[0];
+    assert_eq!(watch.group, bridgewatch_core::config::GroupMode::Commit);
+    assert_eq!(watch.expect, ["ci.yml", "release.yml"]);
+}
+
+/// A GitLab answer carrying a group (a UI that sent it anyway) writes none.
+#[test]
+fn a_gitlab_watch_never_gets_a_group_or_expect() {
+    let built = wizard::build_config(
+        &WizardAnswers {
+            group: bridgewatch_core::config::GroupMode::Commit,
+            expect: vec!["ci.yml".into()],
+            ..answers()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(!built.toml.contains("group"), "{}", built.toml);
+    assert!(!built.toml.contains("expect"), "{}", built.toml);
+}
+
+/// The suggestions come from ONE page of runs: the workflow files of the
+/// newest three commits, the ones every push ran first.
+#[tokio::test]
+async fn expect_suggestions_are_the_workflows_of_the_newest_pushes_from_one_request() {
+    let run = |id: u64, sha: &str, path: &str| {
+        format!(
+            r#"{{"id":{id},"head_sha":"{sha}","head_branch":"main","status":"completed",
+                "conclusion":"success","event":"push","path":"{path}"}}"#
+        )
+    };
+    let runs = [
+        run(9, "c3", ".github/workflows/ci.yml"),
+        run(8, "c3", ".github/workflows/docs.yml"),
+        run(7, "c3", ".github/workflows/release.yml"),
+        run(6, "c2", ".github/workflows/ci.yml"),
+        run(5, "c2", ".github/workflows/release.yml"),
+        run(4, "c1", ".github/workflows/ci.yml"),
+        run(3, "c1", ".github/workflows/release.yml"),
+        run(2, "c1", ".github/workflows/ci.yml"),
+        run(1, "c0", ".github/workflows/old.yml"),
+    ];
+    let body = format!(
+        r#"{{"total_count":9,"workflow_runs":[{}]}}"#,
+        runs.join(",")
+    );
+    let t = Routed::new().route("/repos/acme-corp/monorepo/actions/runs", 200, &body);
+    let got = wizard::suggest_expected_workflows(
+        &gh_client(t.clone()),
+        &ProjectRef::Path("acme-corp/monorepo".into()),
+        "main",
+        &["push".to_string()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(got.commits, 3, "c0 is the fourth commit and is not read");
+    let seen: Vec<(&str, usize)> = got
+        .workflows
+        .iter()
+        .map(|w| (w.file.as_str(), w.seen_in))
+        .collect();
+    assert_eq!(seen, [("ci.yml", 3), ("release.yml", 3), ("docs.yml", 1)]);
+    let asked = t.seen();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(
+        asked[0].contains("branch=main") && asked[0].contains("event=push"),
+        "{asked:?}"
+    );
+}
+
+/// GitLab has no workflows: nothing is asked and nothing is suggested.
+#[tokio::test]
+async fn a_gitlab_project_gets_no_expect_suggestions_and_no_request() {
+    let t = Routed::new();
+    let got = wizard::suggest_expected_workflows(
+        &client(t.clone()),
+        &ProjectRef::Id(42),
+        "main",
+        &["push".to_string()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(got.commits, 0);
+    assert!(got.workflows.is_empty());
+    assert!(t.seen().is_empty());
 }

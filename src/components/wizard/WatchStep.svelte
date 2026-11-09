@@ -4,15 +4,29 @@
   import { Input } from "$lib/components/ui/input/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
   import { Switch } from "$lib/components/ui/switch/index.js";
+  import type { ExpectSuggestions } from "./api";
   import FieldMessage from "./FieldMessage.svelte";
   import { sourceChoices, suggestWatchId, type Draft, type StepErrors } from "./model";
 
   interface Props {
     draft: Draft;
     errors: StepErrors;
+    /** GitHub, one row per push: the workflow files the newest pushes ran. */
+    expectSuggestions?: ExpectSuggestions | null;
+    expectLoading?: boolean;
+    expectError?: string | null;
+    /** Ask for the suggestions (when "one row per push" is turned on). */
+    onexpect?: () => void;
   }
 
-  let { draft = $bindable(), errors }: Props = $props();
+  let {
+    draft = $bindable(),
+    errors,
+    expectSuggestions = null,
+    expectLoading = false,
+    expectError = null,
+    onexpect,
+  }: Props = $props();
 
   const github = $derived(draft.provider === "github");
   const choices = $derived(sourceChoices(draft.provider));
@@ -23,6 +37,15 @@
 
   function toggleSource(value: string, on: boolean) {
     draft.sources = on ? [...new Set([...draft.sources, value])] : draft.sources.filter((s) => s !== value);
+  }
+
+  function setGrouped(on: boolean) {
+    draft.group = on ? "commit" : "run";
+    if (on) onexpect?.();
+  }
+
+  function toggleExpect(file: string, on: boolean) {
+    draft.expect = on ? [...new Set([...draft.expect, file])] : draft.expect.filter((f) => f !== file);
   }
 </script>
 
@@ -59,6 +82,55 @@
   </fieldset>
 
   {#if github}
+    <div class="flex flex-col gap-1">
+      <div class="flex items-center gap-2">
+        <Switch
+          id="wizard-group-commit"
+          checked={draft.group === "commit"}
+          onCheckedChange={(on) => setGrouped(on === true)}
+        />
+        <Label for="wizard-group-commit" class="font-normal">One row per push, every workflow as a part of it</Label>
+      </div>
+      <FieldMessage
+        id="wizard-group-msg"
+        hint="A push that deployed while another workflow failed then reads as deployed with a failure, as a GitLab pipeline with a failed child does."
+      />
+    </div>
+  {/if}
+
+  {#if github && draft.group === "commit"}
+    <fieldset class="flex flex-col gap-1.5" data-slot="expect" aria-describedby="wizard-expect-msg">
+      <legend class="mb-1 font-medium">Workflows every push must start</legend>
+      {#if expectLoading}
+        <p class="text-muted-foreground m-0">Reading the newest pushes…</p>
+      {:else if expectError}
+        <p class="text-destructive m-0" role="alert">{expectError}</p>
+      {:else if expectSuggestions && expectSuggestions.workflows.length > 0}
+        {#each expectSuggestions.workflows as w (w.file)}
+          <div class="flex items-center gap-2">
+            <Checkbox
+              id={`wizard-expect-${w.file}`}
+              checked={draft.expect.includes(w.file)}
+              onCheckedChange={(on) => toggleExpect(w.file, on === true)}
+              aria-label={w.file}
+            />
+            <Label for={`wizard-expect-${w.file}`} class="font-normal"
+              ><span class="font-mono">{w.file}</span>
+              <span class="text-muted-foreground">in {w.seen_in} of the last {expectSuggestions.commits}</span></Label
+            >
+          </div>
+        {/each}
+      {:else if expectSuggestions}
+        <p class="text-muted-foreground m-0" data-slot="expect-none">
+          No runs on this branch yet. Add them later in Settings.
+        </p>
+      {/if}
+      <FieldMessage
+        id="wizard-expect-msg"
+        hint="A ticked workflow that does not start for a push makes that push read as failed. Leave out any whose paths or branches filters can skip a push."
+      />
+    </fieldset>
+  {:else if github}
     <div class="flex flex-col gap-1">
       <Label for="wizard-workflow">Workflow (optional)</Label>
       <Input

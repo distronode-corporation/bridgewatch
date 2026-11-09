@@ -18,6 +18,7 @@ import type {
   Connection,
   CliTokenDetection,
   Identity,
+  ExpectSuggestions,
   MarkerSuggestions,
   ProjectListing,
   RecentListing,
@@ -243,6 +244,13 @@ export function wizardApi(fallbackAccount?: string): WizardApi {
         // Only when there is one: the shell reads a missing key as `None`, so
         // a GitLab call carries exactly the three keys it always did.
         ...(workflow ? { workflow } : {}),
+      }),
+    suggestExpectedWorkflows: (connection, project, refName, sources) =>
+      invoke<Confirmable<ExpectSuggestions>>("wizard_suggest_expected_workflows", {
+        connection: withAccount(connection),
+        project,
+        refName,
+        sources,
       }),
     previewConfig: async (answers) => {
       const preview = await invoke<WizardPreview>("wizard_preview_config", { answers });

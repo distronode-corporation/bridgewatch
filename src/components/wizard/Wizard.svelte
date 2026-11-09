@@ -31,6 +31,7 @@
     type CliTokenDetection,
     type Connection,
     type Identity,
+    type ExpectSuggestions,
     type MarkerSuggestions,
     type ProjectListing,
     type ProjectSummary,
@@ -623,6 +624,43 @@
     }
   }
 
+  // --- step 3, GitHub: expect for a commit group ---------------------------
+  let expectSuggestions = $state<ExpectSuggestions | null>(null);
+  let expectKey: string | null = null;
+  let expectLoading = $state(false);
+  let expectError = $state<string | null>(null);
+
+  /**
+   * The workflow files the newest pushes ran, once per branch and event set.
+   * The first answer pre-ticks the ones every push ran, unless something is
+   * ticked already (a re-run's own `expect`).
+   */
+  async function loadExpect() {
+    const project = draft.project;
+    const suggest = api.suggestExpectedWorkflows;
+    if (!project || draft.provider !== "github" || draft.group !== "commit" || !suggest) return;
+    const refName = draft.refName.trim();
+    const sources = [...draft.sources];
+    const key = JSON.stringify([connKey, project.ref, refName, sources]);
+    if (key === expectKey) return;
+    expectLoading = true;
+    expectError = null;
+    try {
+      const result = await live((c) => suggest(c, project.ref, refName, sources));
+      if (result === null) return;
+      expectSuggestions = result;
+      expectKey = key;
+      if (draft.expect.length === 0) {
+        draft.expect = result.workflows.filter((w) => w.seen_in === result.commits).map((w) => w.file);
+      }
+    } catch (error) {
+      expectSuggestions = null;
+      expectError = messageOf(error);
+    } finally {
+      expectLoading = false;
+    }
+  }
+
   // --- step 6: preview and save -------------------------------------------
   let preview = $state<WizardPreview | null>(null);
   let previewLoading = $state(false);
@@ -885,7 +923,14 @@
             : null}
         />
       {:else if step.id === "watch"}
-        <WatchStep bind:draft {errors} />
+        <WatchStep
+          bind:draft
+          {errors}
+          {expectSuggestions}
+          {expectLoading}
+          {expectError}
+          onexpect={() => void loadExpect()}
+        />
       {:else if step.id === "deploy"}
         <DeployStep bind:draft {errors} {suggestions} loading={sugLoading} loadError={sugError} />
       {:else if step.id === "preferences"}
