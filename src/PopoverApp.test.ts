@@ -622,6 +622,10 @@ describe("PopoverApp, the keyboard", () => {
     await settle();
     press("r");
     expect(calls.refreshes).toBe(1);
+    // Held down: the auto-repeated keydowns refresh nothing more.
+    press("r", { repeat: true });
+    press("r", { repeat: true });
+    expect(calls.refreshes).toBe(1);
     expect(press("r", { ctrlKey: true }).defaultPrevented).toBe(false);
     expect(calls.refreshes).toBe(1);
   });
