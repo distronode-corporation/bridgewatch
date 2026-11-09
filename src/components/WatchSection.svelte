@@ -11,9 +11,13 @@
     now: number;
     /** Bridge open/closed choices, shared by every row in the window. */
     expansion: ExpansionStore;
+    /** This watch's current failure was acknowledged: the tray draws it a level lower. */
+    acknowledged?: boolean;
+    /** Acknowledge the failure (`true`) or take it back (`false`). No button without it. */
+    onacknowledge?: (watch: string, acknowledged: boolean) => void;
   }
 
-  let { watch, now, expansion }: Props = $props();
+  let { watch, now, expansion, acknowledged = false, onacknowledge }: Props = $props();
 
   // A secondary watch is one line until asked. That is the whole reason the
   // role exists: an hourly schedule that is red by design must be visible
@@ -26,6 +30,13 @@
   const mode = $derived(watch.jobs ?? "all");
   // Absent means GitLab: the core omits the key for it, so its JSON is unchanged.
   const provider = $derived(watch.provider ?? "gitlab");
+  // Only a primary watch's failure colours the tray, so only it can be
+  // acknowledged; the core refuses anything else anyway.
+  const acknowledgeable = $derived(
+    !secondary && (watch.icon_state === "failed" || watch.icon_state === "deployed_with_failure"),
+  );
+  const TOOL_BUTTON =
+    "text-muted-foreground hover:text-foreground hover:bg-background focus-visible:ring-ring/50 text-ui-meta shrink-0 rounded-sm px-1 outline-none focus-visible:ring-2";
 </script>
 
 <!-- Watches are set apart by 16px of space above each header (`pt-4`), with
@@ -54,6 +65,25 @@
     <span class="flex-1"></span>
     {#if watch.rows.length === 0 && !watch.error}
       <span class="empty text-muted-foreground text-ui-meta shrink-0">no matching pipelines</span>
+    {/if}
+    {#if acknowledgeable && onacknowledge}
+      <!-- Local only: the tray drops a level until the next new failure. -->
+      {#if acknowledged}
+        <span class="acknowledged text-muted-foreground text-ui-meta shrink-0" data-slot="acknowledged">acknowledged</span>
+      {/if}
+      <button
+        type="button"
+        class={TOOL_BUTTON}
+        data-slot="acknowledge"
+        aria-pressed={acknowledged}
+        aria-label={acknowledged
+          ? `Stop acknowledging the failure of ${watch.id}`
+          : `Acknowledge the failure of ${watch.id}`}
+        title={acknowledged
+          ? "Show this failure at full level in the tray again"
+          : "Draw the tray a level lower for this failure, until the next new one"}
+        onclick={() => onacknowledge(watch.id, !acknowledged)}>{acknowledged ? "undo" : "acknowledge"}</button
+      >
     {/if}
     {#if watch.icon_state}
       <!-- The watch's verdict, right-aligned, said once for the watch. -->
