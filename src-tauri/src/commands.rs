@@ -56,13 +56,14 @@ pub fn resume_notifications(app: AppHandle, state: Shared<'_>) {
 /// tray draws it a level lower, or take that back. Local only: nothing is sent
 /// to the server and nothing is written. Returns false when nothing changed,
 /// because the watch shows no failure or had no acknowledgement to take back.
+///
+/// ⛔ `async`, so it runs on the async runtime and never on the main thread:
+/// redrawing the tray hands calls to the main thread and waits for them, and
+/// a synchronous command would be that thread waiting on itself, or on a lock
+/// a worker holds while it waits for the main thread.
 #[tauri::command]
-pub fn acknowledge_failure(
-    app: AppHandle,
-    state: Shared<'_>,
-    watch: String,
-    acknowledged: bool,
-) -> bool {
+pub async fn acknowledge_failure(app: AppHandle, watch: String, acknowledged: bool) -> bool {
+    let state = app.state::<Arc<AppState>>();
     let changed = {
         let mut inner = state.lock();
         if acknowledged {

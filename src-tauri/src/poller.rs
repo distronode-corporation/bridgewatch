@@ -402,13 +402,18 @@ static LAST_TOOLTIP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(No
 /// `TRAY_LABEL` in tray.rs says why.
 #[cfg(not(target_os = "linux"))]
 fn set_tooltip(tray: &tauri::tray::TrayIcon, text: &str) {
-    let mut last = LAST_TOOLTIP.lock().unwrap_or_else(|e| e.into_inner());
-    if last.as_deref() == Some(text) {
+    let last = || LAST_TOOLTIP.lock().unwrap_or_else(|e| e.into_inner());
+    let unchanged = last().as_deref() == Some(text);
+    if unchanged {
         return;
     }
+    // ⛔ The lock is NOT held across `set_tooltip`, which hands the call to the
+    // main thread and waits for it. Held, a tick on a worker thread waited on
+    // the main thread while the main thread waited on the lock. Two callers
+    // racing here at worst set the same text twice.
     match tray.set_tooltip(Some(text)) {
         // Not remembered on failure, so the next state change tries again.
-        Ok(()) => *last = Some(text.to_string()),
+        Ok(()) => *last() = Some(text.to_string()),
         Err(e) => tracing::warn!(error = %e, "could not set the tray tooltip"),
     }
 }
