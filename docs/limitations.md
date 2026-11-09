@@ -14,6 +14,12 @@
 - **A poll on wake can come before the network.** A wake is noticed within 5 seconds of
   resume and polls at once; if the network is not back yet, that poll fails and the
   watch backs off as after any failed poll. Opening the popover or Refresh polls again.
+- **The global shortcut does not work on Wayland.** `[ui].hotkey` registers through
+  X11, the only Linux backend the hotkey library has, and a Wayland session gives apps
+  no global shortcut of their own: under XWayland it fires only while an X11 window has
+  the focus. It is off unless set, and the log says so when it is set in a Wayland
+  session. There is no Wayland route yet (the desktop portal's GlobalShortcuts
+  interface would be one, through D-Bus).
 - **Windows is not targeted.** Nothing is tested there, the keyring code least of all.
 - **No merge-request pairing.** `merge_request_event` works as a source like any other,
   but a merged-result pipeline is not paired with its branch pipeline.

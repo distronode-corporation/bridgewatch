@@ -88,6 +88,8 @@ export interface MarkerJob {
 }
 
 export interface PipelineView {
+  /** The commit's first line, when commit titles are on and it is known. */
+  title?: string;
   id: number;
   iid: number | null;
   sha: string;
@@ -211,6 +213,11 @@ export interface Snapshot {
   request_log: RequestLog[];
   /** Absent when every token is healthy: the core skips an empty list. */
   tokens?: TokenHealth[];
+  /**
+   * The watches whose current failure was acknowledged in this app, so the
+   * tray draws them a level lower. Absent when there is none.
+   */
+  acknowledged?: string[];
 }
 
 /** One problem in a configuration file, with its position resolved. */

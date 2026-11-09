@@ -15,19 +15,36 @@ body line with a bracket.
 
 ### Added
 
-- **The setup wizard writes a GitHub commit group.** On GitHub the watch step offers
-  **One row per push**, which writes `group = "commit"` (and no `workflow`, since a group
-  follows every workflow) and `expect`: the workflow files the newest three pushes on the
-  branch ran, from one page of runs, with those every push ran ticked. A re-run sets a
-  commit group on an existing watch when asked and never takes one away.
-
-### Added
-
 - **The release checks on real devices are in the repository.** `tools/real-device/`
   holds the Linux and macOS check list run before a tag, and a Linux harness that runs the
   real app on a private Xvfb display, under a private D-Bus session, with a throwaway HOME
   and gnome-keyring and loopback GitLab stand-ins, so anyone can repeat the checks without
   touching their own desktop, keyring or config.
+- **Acknowledge a failure in the popover, and the tray drops a level.** A failed primary
+  watch has **acknowledge** on its header: the tray then draws it as
+  `deployed_with_failure` (and an acknowledged `deployed_with_failure` as `deployed`),
+  with "acknowledged" in the macOS tooltip, while the popover still says what the pipeline
+  did. It is local state only, held in memory, and it ends on the next new failure: a
+  newer pipeline, the same pipeline failing worse, or the failure going away. **undo**
+  takes it back. `check --json` is unchanged; the app's snapshot gains `acknowledged`
+  only while there is one.
+- **Keyboard navigation in the popover, and an optional global shortcut.** ↓ and ↑ (or
+  `j` and `k`) move between pipeline rows, landing on the commit link, where Enter opens
+  the pipeline; Home and End go to the first and last row and `r` refreshes. The new
+  `[ui].hotkey` (for example `CmdOrCtrl+Shift+B`, empty by default) shows or hides the
+  popover from anywhere. On Linux it works under X11 only: a Wayland session gives apps
+  no global shortcut, so there it fires only while an X11 window has the focus.
+- **Commit titles on pipeline rows.** Each row in the popover shows its commit's first
+  line on the sha's line. GitHub's runs carry it, so it costs nothing there; on GitLab
+  it is one request per new commit (`/repository/commits/:sha`), at most three per watch
+  per poll, asked once per commit. `[ui].commit_titles` (on by default) turns it off.
+  Stored config, the notification ledger and `check --json` are unchanged: the CLI never
+  asks for titles, and a row without one serialises as before.
+- **The setup wizard writes a GitHub commit group.** On GitHub the watch step offers
+  **One row per push**, which writes `group = "commit"` (and no `workflow`, since a group
+  follows every workflow) and `expect`: the workflow files the newest three pushes on the
+  branch ran, from one page of runs, with those every push ran ticked. A re-run sets a
+  commit group on an existing watch when asked and never takes one away.
 
 ### Changed
 

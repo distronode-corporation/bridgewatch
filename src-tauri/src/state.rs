@@ -46,6 +46,9 @@ pub struct Inner {
     pub settings_tab: Option<String>,
     /// When the popover was last hidden. See `windows::BLUR_HIDE_GRACE`.
     pub popover_hidden_at: Option<Instant>,
+    /// When the global shortcut last showed the popover. See
+    /// `windows::SHORTCUT_FOCUS_GRACE`.
+    pub popover_shortcut_at: Option<Instant>,
     /// The file's text as the last reload read it, so a reload of identical
     /// text can be skipped. See `commands::reload_from_disk`.
     pub disk_text: Option<String>,
@@ -54,11 +57,14 @@ pub struct Inner {
     /// bound, its request ring and its sign-in with the watches. Empty until a
     /// poller is built, and again while one cannot be.
     pub clients: BTreeMap<String, Arc<dyn CiClient>>,
-    /// "Pause notifications", from the tray menu. In memory: a pause ends
-    /// when the app quits.
     /// The accounts the running poller refuses, by name.
     pub refused: Vec<String>,
+    /// "Pause notifications", from the tray menu. In memory: a pause ends
+    /// when the app quits.
     pub quiet: crate::quiet::Quiet,
+    /// The failures acknowledged in the popover, which the tray draws a level
+    /// lower. In memory, like a pause: nothing about them is written anywhere.
+    pub acks: bridgewatch_core::verdict::Acknowledgements,
 }
 
 /// Shared application state, reachable from every command and from the poller.
@@ -165,10 +171,12 @@ impl AppState {
                 seeded: resolved.seeded,
                 settings_tab: None,
                 popover_hidden_at: None,
+                popover_shortcut_at: None,
                 disk_text: resolved.text,
                 clients: BTreeMap::new(),
                 refused: Vec::new(),
                 quiet: Default::default(),
+                acks: Default::default(),
             }),
             poll_now: Arc::new(Notify::new()),
             reload: Arc::new(Notify::new()),

@@ -87,6 +87,18 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
         })
     }
 
+    /// A commit's title (its first line), for a provider whose pipelines do
+    /// not carry it: GitLab. `Ok(None)` when the commit has none to show or
+    /// does not exist. The default answers `None` without a request: GitHub's
+    /// runs carry the title already.
+    async fn commit_title(
+        &self,
+        _project: &ProjectRef,
+        _sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        Ok(None)
+    }
+
     /// The workflow FILES (`ci.yml`) each of the newest commits ran on GitHub,
     /// newest commit first, one list per commit, at most `commits` of them,
     /// from ONE page of runs (`query` as for [`Self::list_pipelines`]). The

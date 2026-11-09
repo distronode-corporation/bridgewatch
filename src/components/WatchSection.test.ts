@@ -27,12 +27,12 @@ afterEach(() => {
   host?.remove();
 });
 
-function render(watch: WatchView) {
+function render(watch: WatchView, extra: Record<string, unknown> = {}) {
   host = document.createElement("div");
   document.body.append(host);
   component = mount(WatchSection, {
     target: host,
-    props: { watch, now: Date.parse("2026-09-17T15:00:00Z"), expansion: createExpansionStore() },
+    props: { watch, now: Date.parse("2026-09-17T15:00:00Z"), expansion: createExpansionStore(), ...extra },
   });
   flushSync();
   return {
@@ -192,6 +192,32 @@ describe("PipelineRow, the deploy ETA", () => {
   });
 });
 
+describe("PipelineRow, the commit title", () => {
+  const primary = (row: PipelineView): WatchView => ({
+    id: "main-push",
+    role: "primary",
+    icon_state: "deployed",
+    rows: [row],
+    error: null,
+  });
+
+  it("shows the title last on the commit's line, with the whole line as its tooltip", () => {
+    render(primary({ ...ROW, title: "Ship the popover keys" }));
+    const title = host.querySelector<HTMLElement>(".row .sub .title");
+    expect(title?.textContent).toBe("Ship the popover keys");
+    expect(title?.getAttribute("title")).toBe("Ship the popover keys");
+    // Last on the line, where it takes the room that is left and truncates.
+    const sub = [...host.querySelector(".row .sub")!.children];
+    expect(sub[0].classList.contains("sha")).toBe(true);
+    expect(sub.at(-1)).toBe(title);
+  });
+
+  it("shows nothing for a row with no title, the recorded snapshots included", () => {
+    render(primary(ROW));
+    expect(host.querySelector(".row .title")).toBe(null);
+  });
+});
+
 describe("WatchSection, the layout", () => {
   function primary(rows: PipelineView[], icon_state: WatchView["icon_state"] = "deployed"): WatchView {
     return { id: "main-push", role: "primary", icon_state, rows, error: null };
@@ -230,3 +256,49 @@ describe("WatchSection, the layout", () => {
   });
 });
 
+
+describe("WatchSection, acknowledging a failure", () => {
+  const failed: WatchView = { id: "web", role: "primary", icon_state: "failed", rows: [ROW], error: null };
+  const button = () => host.querySelector<HTMLButtonElement>("[data-slot=acknowledge]");
+
+  it("offers it on a failed primary watch and says which way it was clicked", () => {
+    const calls: [string, boolean][] = [];
+    render(failed, { onacknowledge: (w: string, a: boolean) => calls.push([w, a]) });
+    expect(button()?.textContent).toBe("acknowledge");
+    expect(button()?.getAttribute("aria-pressed")).toBe("false");
+    expect(host.querySelector("[data-slot=acknowledged]")).toBeNull();
+    button()!.click();
+    expect(calls).toEqual([["web", true]]);
+  });
+
+  it("shows an acknowledged failure, and undo takes it back", () => {
+    const calls: [string, boolean][] = [];
+    render(failed, { acknowledged: true, onacknowledge: (w: string, a: boolean) => calls.push([w, a]) });
+    expect(host.querySelector("[data-slot=acknowledged]")?.textContent).toBe("acknowledged");
+    expect(button()?.textContent).toBe("undo");
+    expect(button()?.getAttribute("aria-pressed")).toBe("true");
+    button()!.click();
+    expect(calls).toEqual([["web", false]]);
+  });
+
+  it("offers it on deployed_with_failure, and on nothing that is not a failure", () => {
+    const onacknowledge = () => {};
+    render({ ...failed, icon_state: "deployed_with_failure" }, { onacknowledge });
+    expect(button()).not.toBeNull();
+    for (const icon_state of ["deployed", "running", "succeeded_no_deploy", "unknown"] as const) {
+      void unmount(component!);
+      host.remove();
+      render({ ...failed, icon_state }, { onacknowledge });
+      expect(button(), icon_state).toBeNull();
+    }
+  });
+
+  it("never offers it on a secondary watch, or without a handler", () => {
+    render({ ...failed, role: "secondary", icon_state: null }, { onacknowledge: () => {} });
+    expect(button()).toBeNull();
+    void unmount(component!);
+    host.remove();
+    render(failed);
+    expect(button()).toBeNull();
+  });
+});

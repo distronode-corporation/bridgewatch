@@ -1251,7 +1251,7 @@ pub struct VerdictConfig {
 /// Window and presentation settings. The core reads only `jobs`, to put each
 /// watch's effective mode on the view model; the rest are the GUI shell's, and
 /// they live here so the config file stays the one source.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct UiConfig {
     /// Popover geometry and behaviour.
@@ -1269,6 +1269,32 @@ pub struct UiConfig {
     /// A build with no crash-report address (one you compile yourself, or a
     /// fork's) sends nothing either way.
     pub send_crash_reports: Option<bool>,
+    /// A global keyboard shortcut that shows or hides the popover, such as
+    /// `CmdOrCtrl+Shift+B`; empty for none. Off unless set. On Linux it works
+    /// under X11 only: a Wayland session has no global shortcut an app can
+    /// register, so it fires there only while an X11 window has the focus.
+    pub hotkey: String,
+    /// Show each pipeline row's commit title in the popover. On GitHub the run
+    /// carries it; on GitLab it costs one request per new commit, at most three
+    /// per watch per tick, kept while the row is shown. Not used by the CLI.
+    pub commit_titles: bool,
+}
+
+/// Hand-written for `commit_titles`, the one key whose default is not its
+/// type's: a file with no `[ui]` table, and one with a `[ui]` table that leaves
+/// it out, both read as on.
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            popover: PopoverConfig::default(),
+            theme_css: String::new(),
+            launch_at_login: false,
+            jobs: JobsMode::default(),
+            send_crash_reports: None,
+            hotkey: String::new(),
+            commit_titles: true,
+        }
+    }
 }
 
 /// Popover geometry.

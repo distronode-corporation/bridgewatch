@@ -4,6 +4,7 @@
 //! Nothing here does I/O, reads a clock or needs a token, which is what lets the
 //! whole of it be tested against recorded fixtures of real pipelines.
 
+pub mod ack;
 pub mod bridge;
 pub mod deploy;
 pub mod icon;
@@ -12,6 +13,7 @@ pub mod script;
 
 use serde::{Deserialize, Serialize};
 
+pub use ack::{Acknowledgements, TrayState};
 pub use bridge::BridgeVerdict;
 pub use deploy::{DeployOutcome, MarkerJob};
 pub use icon::{IconState, PipelineFacts};
@@ -203,6 +205,11 @@ pub struct PipelineView {
     /// the key only where there is something in it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eta: Option<crate::eta::Eta>,
+    /// The commit's title (its first line), when commit titles are on
+    /// ([`crate::poll::Poller::with_commit_titles`]). Omitted when absent, so a
+    /// row serialises exactly as it did before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// One watch's contribution to the popover.
@@ -276,6 +283,12 @@ pub struct Snapshot {
     /// a healthy `check --json` reads as it always has.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tokens: Vec<crate::health::TokenHealth>,
+    /// The watches whose current failure was acknowledged in the app
+    /// ([`ack`]): the tray draws them a level lower. Filled in by the shell,
+    /// never by the poller, and left out when empty, so `check --json` reads
+    /// as it always has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acknowledged: Vec<String>,
 }
 
 impl Snapshot {
@@ -288,6 +301,7 @@ impl Snapshot {
             last_poll: chrono::Utc::now(),
             request_log: Vec::new(),
             tokens: Vec::new(),
+            acknowledged: Vec::new(),
         }
     }
 
@@ -688,6 +702,7 @@ pub fn evaluate_pipeline(
         created_at: detail.pipeline.created_at.clone(),
         live: anything_live,
         eta: None,
+        title: detail.pipeline.title.clone(),
     };
 
     let mut script_error = None;

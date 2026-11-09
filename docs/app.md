@@ -10,6 +10,21 @@
   submenu reads **Notifications paused** and offers **Resume**),
   **Reload config**, **Open config file**, **Open log folder**, **Settings…**, **Setup
   wizard…**, **Launch at login** and **Quit bridgewatch**.
+- **Acknowledge a failure** you already know about with **acknowledge** on the watch's
+  header in the popover. The tray then draws that watch a level lower (`failed` as
+  `deployed_with_failure`, `deployed_with_failure` as `deployed`) and, on macOS, the tooltip says
+  "acknowledged"; the popover still shows what the pipeline did. It is local: nothing is
+  sent to GitLab or GitHub and nothing is written, so it ends when the app quits. It
+  ends sooner on its own when that failure stops being the watch's current one: a newer
+  pipeline, the same pipeline failing worse, or the failure going away. **undo** takes it
+  back. Only a primary watch's failure can be acknowledged, since only those colour the
+  tray.
+- **The keyboard.** In the popover, ↓ and ↑ (or `j` and `k`) move between pipeline
+  rows, landing on the commit link, where Enter opens the pipeline; Home and End go to
+  the first and last row, `r` refreshes, Escape hides it, and Tab still reaches every link
+  and button. `[ui].hotkey` (for example `CmdOrCtrl+Shift+B`) adds a global shortcut
+  that shows or hides the popover from anywhere. It is off unless set, and on Linux it
+  works under X11 only (see [Limitations](limitations.md)).
 - **Config problems** appear in a strip at the top of the popover, with a button that
   opens Settings. A file that fails validation does not take effect; the last good
   configuration keeps running.
@@ -44,7 +59,9 @@ Each pipeline row in the popover expands into its jobs: the parent's own jobs, t
 row per bridge with that child pipeline's (or workflow run's) jobs, each list grouped by
 stage in pipeline order, with a status dot per job, a marker on running jobs and a duration that ticks
 locally between polls. Live pipelines start expanded and settled ones collapsed; a bridge
-that failed or lost its child starts expanded either way. What you open or close stays
+that failed or lost its child starts expanded either way. Each row's second line starts with the
+commit: its short sha, then what started it and, with `[ui].commit_titles` on (the
+default), its title. What you open or close stays
 that way across refreshes. Every job links to its page on GitLab or GitHub. A GitHub
 workflow in `expect` that never started shows as a bridge marked **never started**, linked
 to the workflow's page.
