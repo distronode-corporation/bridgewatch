@@ -434,6 +434,8 @@ jobs:
         id: released
         env:
           TARGET: ${{ matrix.target }}
+          # For the REST API fallback's rate limit only; the job stays contents: read.
+          GH_TOKEN: ${{ github.token }}
         run: |
           bin="$(bash .github/scripts/fetch-released-cli.sh "$TARGET" "$RUNNER_TEMP/released")"
           echo "cli=$bin" >> "$GITHUB_OUTPUT"
