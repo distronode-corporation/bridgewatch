@@ -41,7 +41,9 @@ The wizard's steps:
    [the wizard on GitHub](github-actions.md#quick-start-the-wizard). Optionally add a secondary watch for scheduled pipelines on the same
    branch, and on GitLab one for a preflight ref glob such as `pf/*`.
 4. **Deploy detection.** Suggested marker jobs, ranked from the latest pipeline's (or
-   workflow run's) job names and stages (parent and direct children), or none. A job
+   workflow run's) job names and stages, the parent's and its child pipelines' down to
+   three levels (at most 12 children, nearest first; a grandchild's job is labelled with
+   the path to it), or none. A job
    whose name or stage leads with a checking word (`verify`, `test`, `lint`, `check`,
    `validate`, `smoke`) is never offered, whatever else its name says.
 5. **Notifications and polling.** Which events notify, launch at login, and the live

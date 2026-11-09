@@ -1129,7 +1129,21 @@ pub struct MarkerSuggestions {
     /// Trigger jobs whose child pipeline could not be read (a multi-project
     /// child the token cannot see, say). Their jobs are not in the list.
     pub unread_children: Vec<String>,
+    /// The walk stopped at [`MARKER_CHILDREN`] child pipelines, so deeper or
+    /// later ones were not read. Absent in older answers, which is false.
+    #[serde(default)]
+    pub truncated: bool,
 }
+
+/// How deep the deploy step walks the bridges: the parent's children (1),
+/// theirs (2) and theirs (3). A deploy two levels down (a release pipeline
+/// that triggers a per-region deploy) was invisible at one level.
+pub const MARKER_DEPTH: usize = 3;
+
+/// The most child pipelines the deploy step reads, at any depth: each costs a
+/// request for its jobs and, above [`MARKER_DEPTH`], one for its bridges, so
+/// the step never costs more than about 25 requests whatever the tree.
+pub const MARKER_CHILDREN: usize = 12;
 
 /// Pick the pipeline to learn from: the newest `push` one, else the newest
 /// that is not a schedule (an hourly schedule is often not representative),
@@ -1145,7 +1159,9 @@ fn representative(rows: &[Pipeline]) -> Option<&Pipeline> {
 }
 
 /// Step 4: suggest deploy markers from the latest pipeline on `ref_name`,
-/// reading its jobs and, through its bridges, every child pipeline's jobs.
+/// reading its jobs and, through its bridges, the child pipelines' jobs, down
+/// to [`MARKER_DEPTH`] levels and at most [`MARKER_CHILDREN`] children,
+/// breadth first, so the nearest children are always read.
 ///
 /// ⚠️ On GitHub this is the same code one level shallower, and deliberately so:
 /// [`CiClient::pipeline_bridges`] answers empty without a request for a github
@@ -1173,6 +1189,7 @@ pub async fn suggest_deploy_markers(
             pipeline_url: None,
             suggestions: Vec::new(),
             unread_children: Vec::new(),
+            truncated: false,
         });
     };
     let what = || format!("pipeline {}", pipeline.id);
@@ -1187,21 +1204,66 @@ pub async fn suggest_deploy_markers(
 
     let mut children: Vec<(String, Vec<Job>)> = Vec::new();
     let mut unread = Vec::new();
-    for bridge in &bridges {
-        let Some(down) = &bridge.downstream_pipeline else {
-            continue;
-        };
-        let child_project = down
-            .project_id
-            .map(ProjectRef::Id)
-            .unwrap_or_else(|| project.clone());
-        match client.child_jobs(&child_project, down.id).await {
-            Ok(js) => children.push((bridge.name.clone(), js)),
-            Err(ClientError::Auth { .. }) | Err(ClientError::NotFound { .. }) => {
-                unread.push(bridge.name.clone());
+    let mut truncated = false;
+    // One level at a time: (label of the pipeline the bridges are in, its
+    // project, its bridges). The parent's label is empty.
+    let mut level: Vec<(String, ProjectRef, Vec<crate::model::Bridge>)> =
+        vec![(String::new(), project.clone(), bridges)];
+    for depth in 1..=MARKER_DEPTH {
+        let mut next = Vec::new();
+        for (above, in_project, bridges) in &level {
+            for bridge in bridges {
+                let Some(down) = &bridge.downstream_pipeline else {
+                    continue;
+                };
+                // A child is named by its trigger job, a grandchild by the
+                // path down to it: `trigger:release / deploy:eu`.
+                let label = if above.is_empty() {
+                    bridge.name.clone()
+                } else {
+                    format!("{above} / {}", bridge.name)
+                };
+                if children.len() + unread.len() >= MARKER_CHILDREN {
+                    truncated = true;
+                    continue;
+                }
+                let child_project = down
+                    .project_id
+                    .map(ProjectRef::Id)
+                    .unwrap_or_else(|| in_project.clone());
+                match client.child_jobs(&child_project, down.id).await {
+                    Ok(js) => children.push((label.clone(), js)),
+                    Err(ClientError::Auth { .. }) | Err(ClientError::NotFound { .. }) => {
+                        unread.push(label);
+                        continue;
+                    }
+                    // A direct child's failure is the step's, as it always
+                    // was; a deeper one only costs that branch of the tree.
+                    Err(e) if depth == 1 => return Err(WizardError::Client(e)),
+                    Err(e) => {
+                        tracing::debug!(error = %e, child = label, "child pipeline not read");
+                        unread.push(label);
+                        continue;
+                    }
+                }
+                if depth < MARKER_DEPTH {
+                    match client.pipeline_bridges(&child_project, down.id).await {
+                        Ok(below) if !below.is_empty() => {
+                            next.push((label, child_project, below));
+                        }
+                        Ok(_) => {}
+                        // Its jobs are in; only what is below it is missing.
+                        Err(e) => {
+                            tracing::debug!(error = %e, child = label, "bridges of a child not read");
+                        }
+                    }
+                }
             }
-            Err(e) => return Err(WizardError::Client(e)),
         }
+        if next.is_empty() {
+            break;
+        }
+        level = next;
     }
 
     let mut scopes = vec![MarkerScope {
@@ -1219,6 +1281,7 @@ pub async fn suggest_deploy_markers(
         pipeline_url: pipeline.web_url.clone(),
         suggestions: rank_deploy_markers(&scopes),
         unread_children: unread,
+        truncated,
     })
 }
 
