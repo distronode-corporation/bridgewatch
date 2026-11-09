@@ -64,3 +64,6 @@ secret-service = { version = "5.1.0", features = ["crypto-rust"] }
 # carries (and that a request line never carries the token) without installing
 # anything globally.
 tracing-subscriber = "0.3.23"
+# `test-util` for the wake watch's tests (poll/wake.rs), which run its checks on a
+# paused clock instead of waiting real seconds.
+tokio = { workspace = true, features = ["test-util"] }

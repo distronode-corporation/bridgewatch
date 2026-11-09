@@ -1333,7 +1333,9 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
         return Ok(verdict);
     }
 
+    let mut wake = bridgewatch_core::poll::WakeWatch::new();
     loop {
+        wake.reset();
         let mut tick = tokio::select! {
             tick = poller.tick() => tick,
             _ = &mut interrupt => return Ok(verdict),
@@ -1379,8 +1381,11 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
             return Ok(exit_code(&tick.snapshot));
         }
 
+        // A wake from sleep polls at once: the sleep runs on the monotonic
+        // clock, which stops while the machine sleeps (`WakeWatch`).
         tokio::select! {
             _ = tokio::time::sleep(tick.next_interval) => {}
+            _ = wake.woke() => {}
             _ = &mut interrupt => return Ok(verdict),
         }
     }
