@@ -183,6 +183,10 @@ jobs:
           persist-credentials: false
 
       - name: Install cargo-about
+        # The job's own token, sent only to api.github.com by the download script:
+        # unauthenticated, a shared runner's address can be out of API requests.
+        env:
+          DOWNLOAD_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           name="cargo-about-${CARGO_ABOUT_VERSION}-x86_64-unknown-linux-musl"
@@ -766,6 +770,10 @@ jobs:
           path: debug-files
 
       - name: Install sentry-cli
+        # The job's own token, sent only to api.github.com by the download script:
+        # unauthenticated, a shared runner's address can be out of API requests.
+        env:
+          DOWNLOAD_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           DOWNLOAD_SHA256="$SENTRY_CLI_SHA256" \

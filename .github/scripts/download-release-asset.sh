@@ -4,23 +4,33 @@
 #
 #   bash .github/scripts/download-release-asset.sh <out-file> <url> [<url>...]
 #
-# Each URL is a source of the same file, tried in turn. On each, curl retries a
-# transient answer (408, 429, 500, 502, 503, 504, a timeout, a refused
-# connection) with a delay that doubles from one second, for that source's share of
-# DOWNLOAD_MAX_SECS (120 unless set); the whole download never takes much
-# longer than that. Any other answer (a 404, a 403) is not retried on that
-# source, and neither is a connection reset: curl retries a reset only under
-# `--retry-all-errors`, which would retry a 404 as well, so a reset moves on to
-# the next source instead. Whatever the last source answers decides a failure, which ends with
-# one `::error::` line naming the HTTP status and the URL; an earlier source's
-# failure is a `::warning::` and the next source is tried.
+# Each URL is a source of the same file, tried in turn. On each, a transient
+# failure is asked again, with a delay that doubles from one second (capped at
+# 30 s), for that source's share of DOWNLOAD_MAX_SECS (120 unless set), so the
+# whole download never takes much longer than that. Transient is an HTTP 408,
+# 429, 500, 502, 503 or 504, or no usable answer at all: the connection refused,
+# reset or timed out (curl exit 6, 7, 28, 35, 52, 55 or 56). Anything else, a 404
+# or a 403 above all, is not asked again on that source. Whatever the last source
+# answers decides a failure, which ends with one `::error::` line naming the HTTP
+# status or curl's exit and the URL; an earlier source's failure is a
+# `::warning::` and the next source is tried.
 #
-# ⛔ `curl --retry 3` alone was the cause of red `cli` jobs: three retries with
-# its default delays (1, 2 and 4 s) spent about eight seconds on a run of 504s
-# that lasted longer. And on 2026-11-09 the release page's download URL
+# ⛔ The retrying is this loop's, not curl's `--retry`. `--retry 3` gave up
+# after about eight seconds of a run of 504s that lasted minutes, and on a macOS
+# runner curl reported such a 504 as exit 56 and did not retry it at all, so one
+# 504 failed the source (2026-11-09). The loop reads the status itself.
+#
+# ⛔ And on 2026-11-09 the release page's download URL
 # (github.com/.../releases/download/...) answered 504 after ~11 s per request
 # for over two minutes while the API's asset URL answered in about a second, so
 # a time bound alone was not enough either: the caller names both.
+#
+# DOWNLOAD_GITHUB_TOKEN, when set, is sent (as a bearer token, through curl's
+# config on stdin, never on the command line) to URLs that start with
+# DOWNLOAD_TOKEN_PREFIX (`https://api.github.com/` unless set) and to no other.
+# Unauthenticated, the API allows 60 requests an hour per address, and a shared
+# CI runner's address had used them up: the API's asset URL answered 403. curl
+# does not carry the header across the redirect to the download host.
 #
 # Every request carries `Accept: application/octet-stream`, which the API's
 # asset URL needs to send the file rather than its metadata, and which the
@@ -44,6 +54,8 @@ shift
 max_secs="${DOWNLOAD_MAX_SECS:-120}"
 proto="${DOWNLOAD_PROTO:-=https}"
 want_sha256="${DOWNLOAD_SHA256:-}"
+token="${DOWNLOAD_GITHUB_TOKEN:-}"
+token_prefix="${DOWNLOAD_TOKEN_PREFIX:-https://api.github.com/}"
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -52,18 +64,45 @@ sha256_of() {
     shasum -a 256 "$1" | cut -d' ' -f1
   fi
 }
+
+# One request: sets `code` (the HTTP status, 000 for none) and `rc` (curl's exit).
+fetch() {
+  local url="$1" config=""
+  if [ -n "$token" ] && [ "${url#"$token_prefix"}" != "$url" ]; then
+    config="header = \"Authorization: Bearer $token\""
+  fi
+  rc=0
+  code="$(printf '%s\n' "$config" | curl -fsSL --config - --proto "$proto" --tlsv1.2 \
+    -H 'Accept: application/octet-stream' --connect-timeout 20 --max-time 90 \
+    -w '%{http_code}' -o "$out" "$url")" || rc=$?
+}
+
+transient() {
+  case "$code" in
+    408 | 429 | 500 | 502 | 503 | 504) return 0 ;;
+    000 | "" | 2??)
+      case "$rc" in 6 | 7 | 28 | 35 | 52 | 55 | 56) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
 share=$((max_secs / $#))
 [ "$share" -ge 1 ] || share=1
 
 left=$#
 for url in "$@"; do
   left=$((left - 1))
-  code=""
-  rc=0
-  code="$(curl -fsSL --proto "$proto" --tlsv1.2 \
-    -H 'Accept: application/octet-stream' \
-    --retry 30 --retry-connrefused --retry-max-time "$share" --connect-timeout 20 \
-    -w '%{http_code}' -o "$out" "$url")" || rc=$?
+  deadline=$((SECONDS + share))
+  delay=1
+  while :; do
+    fetch "$url"
+    [ "$rc" -ne 0 ] || break
+    transient || break
+    [ $((SECONDS + delay)) -lt "$deadline" ] || break
+    sleep "$delay"
+    delay=$((delay * 2))
+    [ "$delay" -le 30 ] || delay=30
+  done
   got=""
   if [ "$rc" -eq 0 ]; then
     [ -n "$want_sha256" ] || exit 0
@@ -76,9 +115,13 @@ for url in "$@"; do
   # finished (rc 0), and a broken one says curl's exit (Seer, #82).
   if [ "$rc" -eq 0 ]; then
     what="$url delivered a file with sha256 $got, expected $want_sha256"
+  elif transient; then
+    case "$code" in
+      000 | "" | 2??) what="no usable answer from $url (curl exit $rc), still after retrying for up to ${share}s" ;;
+      *) what="HTTP $code from $url, still after retrying for up to ${share}s" ;;
+    esac
   else
     case "$code" in
-      408 | 429 | 500 | 502 | 503 | 504) what="HTTP $code from $url, still after retrying for up to ${share}s" ;;
       000 | "") what="no answer from $url (curl exit $rc)" ;;
       2??) what="the transfer from $url broke off after HTTP $code (curl exit $rc)" ;;
       *) what="HTTP $code from $url (not retried: it is not a transient error)" ;;
