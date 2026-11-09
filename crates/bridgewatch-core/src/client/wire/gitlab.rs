@@ -76,6 +76,8 @@ impl From<Pipeline> for model::Pipeline {
             updated_at: p.updated_at,
             started_at: p.started_at,
             finished_at: p.finished_at,
+            // GitLab's pipelines carry no commit title; see `model::Pipeline::title`.
+            title: None,
         }
     }
 }

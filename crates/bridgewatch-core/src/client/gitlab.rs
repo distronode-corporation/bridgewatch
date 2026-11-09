@@ -254,6 +254,30 @@ impl GitLabClient {
         }
     }
 
+    /// `GET /projects/{project}/repository/commits/{sha}`: the commit's title,
+    /// its first line. A 404 is `None`.
+    pub async fn commit_title(
+        &self,
+        project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        #[derive(serde::Deserialize)]
+        struct Commit {
+            #[serde(default)]
+            title: Option<String>,
+        }
+        let path = format!(
+            "/projects/{}/repository/commits/{}",
+            project.url_segment(),
+            urlencoding::encode(sha)
+        );
+        match self.get_json::<Commit>(&path).await {
+            Ok(commit) => Ok(commit.title.as_deref().and_then(crate::model::first_line)),
+            Err(ClientError::NotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// `GET /projects/{project}/pipelines/{id}/jobs`, all pages.
     pub async fn pipeline_jobs(
         &self,
@@ -552,6 +576,14 @@ impl CiClient for GitLabClient {
         sha: &str,
     ) -> Result<Option<String>, ClientError> {
         GitLabClient::commit_sha(self, project, sha).await
+    }
+
+    async fn commit_title(
+        &self,
+        project: &ProjectRef,
+        sha: &str,
+    ) -> Result<Option<String>, ClientError> {
+        GitLabClient::commit_title(self, project, sha).await
     }
 
     async fn list_pipelines(

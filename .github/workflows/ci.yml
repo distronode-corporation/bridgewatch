@@ -208,6 +208,11 @@ jobs:
       - name: Tray icons are generated, not hand-edited
         run: python3 src-tauri/icons/generate.py --check
 
+      # The released-CLI download the `cli` job depends on: a run of 504s is retried
+      # within a time bound, a 404 fails at once. Against a loopback stand-in.
+      - name: The release-asset download retries a 504 and not a 404
+        run: bash .github/scripts/download-release-asset.test.sh
+
   frontend:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

@@ -13,15 +13,6 @@ body line with a bracket.
 
 ## [Unreleased]
 
-### Changed
-
-- **The wizard's deploy-marker suggestions look below the children.** A deploy two
-  levels down (a release pipeline that triggers the per-region deploys) was never
-  offered; the walk now reads child pipelines three levels deep, breadth first, at most
-  12 of them (each a request for its jobs and one for its bridges), labels a deeper job
-  with the path to it (`trigger:release / trigger:eu`), and says when it stopped at the
-  limit. A deeper child it cannot read costs only that branch.
-
 ### Added
 
 - **The release checks on real devices are in the repository.** `tools/real-device/`
@@ -37,6 +28,18 @@ body line with a bracket.
   newer pipeline, the same pipeline failing worse, or the failure going away. **undo**
   takes it back. `check --json` is unchanged; the app's snapshot gains `acknowledged`
   only while there is one.
+- **Keyboard navigation in the popover, and an optional global shortcut.** ↓ and ↑ (or
+  `j` and `k`) move between pipeline rows, landing on the commit link, where Enter opens
+  the pipeline; Home and End go to the first and last row and `r` refreshes. The new
+  `[ui].hotkey` (for example `CmdOrCtrl+Shift+B`, empty by default) shows or hides the
+  popover from anywhere. On Linux it works under X11 only: a Wayland session gives apps
+  no global shortcut, so there it fires only while an X11 window has the focus.
+- **Commit titles on pipeline rows.** Each row in the popover shows its commit's first
+  line on the sha's line. GitHub's runs carry it, so it costs nothing there; on GitLab
+  it is one request per new commit (`/repository/commits/:sha`), at most three per watch
+  per poll, asked once per commit. `[ui].commit_titles` (on by default) turns it off.
+  Stored config, the notification ledger and `check --json` are unchanged: the CLI never
+  asks for titles, and a row without one serialises as before.
 
 ### Changed
 
@@ -46,6 +49,12 @@ body line with a bracket.
   and `bridgewatch wait` now read the wall clock against the monotonic clock every 5
   seconds, and a jump of 10 seconds or more between two readings polls at once. No
   logind, D-Bus or other sleep notification is used.
+- **The wizard's deploy-marker suggestions look below the children.** A deploy two
+  levels down (a release pipeline that triggers the per-region deploys) was never
+  offered; the walk now reads child pipelines three levels deep, breadth first, at most
+  12 of them (each a request for its jobs and one for its bridges), labels a deeper job
+  with the path to it (`trigger:release / trigger:eu`), and says when it stopped at the
+  limit. A deeper child it cannot read costs only that branch.
 
 ## [2.0.0] - 2026-11-07
 

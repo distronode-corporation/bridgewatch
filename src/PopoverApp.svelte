@@ -21,6 +21,7 @@
   } from "./lib/ipc";
   import { crashReportsAnswer, shouldAskAboutCrashReports } from "./lib/crash-reports";
   import { messageOf } from "./lib/format";
+  import { navigableRows, popoverKey } from "./lib/keyboard";
   import { createSingleFlight } from "./lib/single-flight";
   import type { Snapshot, Status } from "./lib/types";
 
@@ -140,8 +141,17 @@
     window.addEventListener("blur", onBlur);
     document.addEventListener("visibilitychange", onVisibility);
 
+    // Escape hides; the rest move between rows and refresh (lib/keyboard.ts).
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") void hidePopover();
+      if (event.key === "Escape") {
+        void hidePopover();
+        return;
+      }
+      const action = popoverKey(event, navigableRows(document), document.activeElement);
+      if (!action) return;
+      event.preventDefault();
+      if (action.kind === "refresh") void refreshNow();
+      else action.target.focus();
     };
     window.addEventListener("keydown", onKey);
 

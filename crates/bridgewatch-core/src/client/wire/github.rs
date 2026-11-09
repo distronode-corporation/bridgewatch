@@ -4,11 +4,14 @@
 //! ⛔ **The allow-list here is a privacy boundary, not a tidiness one.** A raw
 //! workflow run carries `actor` and `triggering_actor` (whole user profiles),
 //! `head_commit` (author and committer names, email addresses and the full
-//! message), `display_title` (the commit's first line), `repository` and
-//! `head_repository` (owner profiles); a raw job carries `runner_name`,
-//! `runner_group_name` and `labels`, which on a self-hosted fleet name internal
-//! machines. **None of them is declared below**, so serde drops them while the
-//! body is being read and nothing downstream can leak what was never decoded.
+//! message), `repository` and `head_repository` (owner profiles); a raw job
+//! carries `runner_name`, `runner_group_name` and `labels`, which on a
+//! self-hosted fleet name internal machines. **None of them is declared
+//! below**, so serde drops them while the body is being read and nothing
+//! downstream can leak what was never decoded. The one exception is
+//! `display_title`, the commit's first line, decoded since 2.1 for the
+//! popover's rows (see [`WorkflowRun::display_title`]); it names no person, and
+//! the poller drops it unless commit titles are on.
 //! Adding a field here is therefore a decision about what bridgewatch is
 //! allowed to hold, not only about what it can use.
 //!
@@ -96,6 +99,11 @@ pub struct WorkflowRun {
     /// queued.
     #[serde(default)]
     pub run_started_at: Option<String>,
+    /// The commit's first line for a push (a pull request's title for a
+    /// `pull_request` run). Shown on the row, never sent anywhere, and never
+    /// kept in a recorded fixture: the fixture allow-list does not name it.
+    #[serde(default)]
+    pub display_title: Option<String>,
 }
 
 impl From<WorkflowRun> for model::Pipeline {
@@ -122,6 +130,10 @@ impl From<WorkflowRun> for model::Pipeline {
             // a completed run simply has no `finished_at`, exactly as a GitLab
             // pipeline that has not finished does.
             finished_at: None,
+            title: r
+                .display_title
+                .as_deref()
+                .and_then(crate::model::first_line),
         }
     }
 }
