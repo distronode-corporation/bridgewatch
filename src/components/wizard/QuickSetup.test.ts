@@ -74,6 +74,7 @@ function fakeApi(listing: RecentListing = TEN): FakeApi {
       if (project === 2) return MARKERS(null);
       throw { kind: "network", message: "timed out", issues: [], diagnostics: [] };
     }),
+    suggestExpectedWorkflows: vi.fn<Api["suggestExpectedWorkflows"]>(async () => ({ commits: 0, workflows: [] })),
     previewConfig: vi.fn<Api["previewConfig"]>(async () => ({
       toml: "[accounts.gitlab]\n",
       warnings: [],

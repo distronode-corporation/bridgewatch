@@ -60,6 +60,7 @@ function fakeApi(): { [K in keyof Required<WizardApi>]: Mock } {
     listProjects: vi.fn(async () => ({ mode: "projects", truncated: false, projects: [] })),
     resolveProject: vi.fn(async () => ({ id: 1, path: "acme/web", project: "acme/web", default_branch: "main", web_url: null })),
     suggestDeployMarkers: vi.fn(async () => ({ pipeline_id: null, pipeline_url: null, suggestions: [], unread_children: [] })),
+    suggestExpectedWorkflows: vi.fn(async () => ({ commits: 0, workflows: [] })),
     previewConfig: vi.fn(async () => ({ toml: "[accounts.github]\n", warnings: [], edited_existing: false })),
     save: vi.fn(async () => ({ ok: true, diagnostics: [], path: "config.toml" })),
     skip: vi.fn(async () => {}),
