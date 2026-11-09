@@ -258,9 +258,12 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
                 windows::note_popover_hidden(&window.app_handle().clone());
             }
         }
+        WindowEvent::Focused(true) if window.label() == windows::POPOVER => {
+            windows::shortcut_focus_event(&window.app_handle().clone(), true);
+        }
         WindowEvent::Focused(false) if window.label() == windows::POPOVER => {
             let app = window.app_handle().clone();
-            if windows::in_shortcut_grace(&app) {
+            if windows::shortcut_focus_event(&app, false) {
                 return;
             }
             let hide = app

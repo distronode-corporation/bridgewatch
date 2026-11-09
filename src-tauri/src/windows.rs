@@ -138,22 +138,89 @@ pub fn toggle_popover(app: &AppHandle) {
     }
 }
 
-/// How long after the global shortcut shows the popover a focus loss is not
-/// taken as a blur.
+/// How soon after the popover first gains the focus a focus loss is the
+/// global shortcut's own flapping rather than a blur.
 ///
 /// ⛔ Shown from the shortcut, the popover's focus flaps: on X11 (the harness
 /// in tools/real-device, measured) it went in, out, in and out within a
-/// millisecond as the key grab that caught the shortcut let go, so
-/// hide-on-blur hid it before it was ever drawn. A focus loss inside this
-/// window is ignored, and the focus is asked for again once it has passed.
-pub const SHORTCUT_FOCUS_GRACE: Duration = Duration::from_millis(250);
+/// millisecond of first gaining the focus, as the key grab that caught the
+/// shortcut let go, and hide-on-blur hid it before it was ever drawn. Counted
+/// from that first focus, not from the shortcut, so a slow show still gets
+/// the whole window; and short, because a person cannot click elsewhere this
+/// fast, so a real blur is never taken for flapping (Seer, #91).
+pub const SHORTCUT_FLAP: Duration = Duration::from_millis(60);
 
-/// Whether a focus loss now is the shortcut's flapping rather than a blur.
-pub fn in_shortcut_grace(app: &AppHandle) -> bool {
-    app.state::<Arc<AppState>>()
-        .lock()
-        .popover_shortcut_at
-        .is_some_and(|t| t.elapsed() < SHORTCUT_FOCUS_GRACE)
+/// When, after a shortcut show, the focus is asked for again if the flapping
+/// left the popover without it.
+pub const SHORTCUT_SETTLE: Duration = Duration::from_millis(250);
+
+/// The focus state of the last shortcut show.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShortcutFocus {
+    /// When the shortcut showed the popover.
+    pub shown_at: Option<Instant>,
+    /// When the popover first gained the focus after that.
+    pub focused_at: Option<Instant>,
+    /// A real blur happened since: the focus is not asked for again.
+    pub blurred: bool,
+}
+
+impl ShortcutFocus {
+    /// A new shortcut show, at `now`.
+    pub fn shown(now: Instant) -> Self {
+        Self {
+            shown_at: Some(now),
+            focused_at: None,
+            blurred: false,
+        }
+    }
+
+    fn settling(&self, now: Instant) -> bool {
+        self.shown_at
+            .is_some_and(|s| now.saturating_duration_since(s) < SHORTCUT_SETTLE)
+    }
+
+    /// The popover gained the focus. The first time after a show is what
+    /// [`SHORTCUT_FLAP`] counts from.
+    pub fn on_focus(&mut self, now: Instant) {
+        if self.settling(now) && self.focused_at.is_none() {
+            self.focused_at = Some(now);
+        }
+    }
+
+    /// The popover lost the focus. Returns true when that is the shortcut's
+    /// flapping and is to be ignored; otherwise it is a real blur, which also
+    /// stops the focus being asked for again.
+    pub fn on_blur(&mut self, now: Instant) -> bool {
+        let flap = self.settling(now)
+            && self
+                .focused_at
+                .is_some_and(|f| now.saturating_duration_since(f) < SHORTCUT_FLAP);
+        if !flap {
+            self.blurred = true;
+        }
+        flap
+    }
+
+    /// Whether to ask for the focus again once [`SHORTCUT_SETTLE`] has
+    /// passed: only when no real blur happened.
+    pub fn refocus(&self) -> bool {
+        self.shown_at.is_some() && !self.blurred
+    }
+}
+
+/// The popover gained or lost the focus: see [`ShortcutFocus`]. Returns true
+/// for a focus loss that is the shortcut's flapping.
+pub fn shortcut_focus_event(app: &AppHandle, focused: bool) -> bool {
+    let state = app.state::<Arc<AppState>>();
+    let mut inner = state.lock();
+    let now = Instant::now();
+    if focused {
+        inner.popover_shortcut.on_focus(now);
+        false
+    } else {
+        inner.popover_shortcut.on_blur(now)
+    }
 }
 
 /// Whether the popover counts as open for the global shortcut: showing, or
@@ -187,12 +254,18 @@ pub fn toggle_popover_from_shortcut(app: &AppHandle, was_open: bool) {
         }
         return;
     }
-    app.state::<Arc<AppState>>().lock().popover_shortcut_at = Some(Instant::now());
+    app.state::<Arc<AppState>>().lock().popover_shortcut = ShortcutFocus::shown(Instant::now());
     show_popover(app);
     let app = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(SHORTCUT_FOCUS_GRACE);
-        if let Some(window) = popover(&app)
+        std::thread::sleep(SHORTCUT_SETTLE);
+        let refocus = app
+            .state::<Arc<AppState>>()
+            .lock()
+            .popover_shortcut
+            .refocus();
+        if refocus
+            && let Some(window) = popover(&app)
             && window.is_visible().unwrap_or(false)
         {
             let _ = window.set_focus();
@@ -216,5 +289,65 @@ pub fn show_settings(app: &AppHandle, tab: Option<&str>) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    /// The flapping measured on the harness: in, out, in, out within a
+    /// millisecond of first gaining the focus. All of it is ignored, and the
+    /// focus is asked for again once it has settled.
+    #[test]
+    fn the_shortcuts_own_flapping_is_ignored_and_the_focus_asked_again() {
+        let t0 = Instant::now();
+        let mut f = ShortcutFocus::shown(t0);
+        f.on_focus(t0 + ms(15));
+        assert!(f.on_blur(t0 + ms(15)));
+        f.on_focus(t0 + ms(16));
+        assert!(f.on_blur(t0 + ms(16)));
+        assert!(f.refocus());
+    }
+
+    /// A slow show: the window counts from the first focus, not from the
+    /// shortcut, so flapping 200 ms after the shortcut is still flapping.
+    #[test]
+    fn a_slow_show_still_gets_the_whole_flap_window() {
+        let t0 = Instant::now();
+        let mut f = ShortcutFocus::shown(t0);
+        f.on_focus(t0 + ms(200));
+        assert!(f.on_blur(t0 + ms(210)));
+    }
+
+    /// ⛔ A person clicking elsewhere soon after the shortcut is a real blur:
+    /// not ignored, and the focus is not pulled back afterwards (Seer, #91).
+    #[test]
+    fn a_real_blur_soon_after_is_not_ignored_and_the_focus_is_not_pulled_back() {
+        let t0 = Instant::now();
+        let mut f = ShortcutFocus::shown(t0);
+        f.on_focus(t0 + ms(15));
+        assert!(!f.on_blur(t0 + ms(15) + SHORTCUT_FLAP));
+        assert!(!f.refocus());
+    }
+
+    /// A focus loss before any focus was gained, and any after the show has
+    /// settled, is a blur like any other; so is one with no shortcut show.
+    #[test]
+    fn without_a_recent_shortcut_focus_a_blur_is_a_blur() {
+        let t0 = Instant::now();
+        let mut f = ShortcutFocus::shown(t0);
+        assert!(!f.on_blur(t0 + ms(5)));
+        let mut f = ShortcutFocus::shown(t0);
+        f.on_focus(t0 + ms(10));
+        assert!(!f.on_blur(t0 + SHORTCUT_SETTLE));
+        let mut f = ShortcutFocus::default();
+        f.on_focus(t0);
+        assert!(!f.on_blur(t0));
+        assert!(!f.refocus());
     }
 }
