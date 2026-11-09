@@ -112,6 +112,11 @@
           Could not read the child pipelines of {suggestions.unread_children.join(", ")}.
         </p>
       {/if}
+      {#if suggestions?.truncated}
+        <p class="text-muted-foreground text-xs" data-slot="markers-truncated">
+          The nearest child pipelines were read and the farther ones were not, to keep this step to a few requests. Type a job name below if it is not listed.
+        </p>
+      {/if}
 
       <div class="flex gap-2">
         <Label for="wizard-marker-custom" class="sr-only">Another job name</Label>

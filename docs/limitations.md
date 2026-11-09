@@ -17,8 +17,8 @@
 - **Windows is not targeted.** Nothing is tested there, the keyring code least of all.
 - **No merge-request pairing.** `merge_request_event` works as a source like any other,
   but a merged-result pipeline is not paired with its branch pipeline.
-- **The wizard's deploy-marker suggestions look one level deep** (parent and direct
-  children).
+- **The wizard's deploy-marker suggestions read at most 12 child pipelines, three
+  levels down,** nearest first. A marker beyond that is typed by name.
 - **The wizard does not write a GitHub commit group.** It writes one row per run; set
   `group = "commit"` and `expect` in Settings or by hand.
 - **A GitHub commit group is formed by time.** A run that starts more than

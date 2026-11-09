@@ -149,6 +149,8 @@ export interface MarkerSuggestions {
   pipeline_url: string | null;
   suggestions: MarkerSuggestion[];
   unread_children: string[];
+  /** The walk stopped at its child budget; absent means it did not. */
+  truncated?: boolean;
 }
 
 /** `NotifyAnswers`. */

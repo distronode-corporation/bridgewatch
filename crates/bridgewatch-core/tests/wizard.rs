@@ -729,6 +729,158 @@ async fn a_schedule_is_skipped_and_an_unreadable_child_is_reported() {
     );
 }
 
+/// Below the children: a release child that triggers the per-region deploy.
+/// At one level its `deploy:eu` was never seen; now it is offered, labelled
+/// with the path to it, down to MARKER_DEPTH levels and no further.
+#[tokio::test]
+async fn suggestions_walk_grandchildren_and_stop_at_the_depth() {
+    let bridge = |id: u64, name: &str, child: u64| {
+        format!(
+            r#"[{{"id":{id},"name":"{name}","status":"success",
+                 "downstream_pipeline":{{"id":{child},"project_id":1,"status":"success"}}}}]"#
+        )
+    };
+    let jobs = |id: u64, name: &str, stage: &str| {
+        format!(r#"[{{"id":{id},"name":"{name}","stage":"{stage}","status":"success"}}]"#)
+    };
+    let t = Routed::new()
+        .route(
+            "/projects/1/pipelines?",
+            200,
+            r#"[{"id":10,"status":"success","source":"push"}]"#,
+        )
+        .route(
+            "/projects/1/pipelines/10/jobs",
+            200,
+            &jobs(1, "build", "build"),
+        )
+        .route(
+            "/projects/1/pipelines/10/bridges",
+            200,
+            &bridge(2, "trigger:release", 20),
+        )
+        .route(
+            "/projects/1/pipelines/20/jobs",
+            200,
+            &jobs(3, "publish:images", "release"),
+        )
+        .route(
+            "/projects/1/pipelines/20/bridges",
+            200,
+            &bridge(4, "trigger:eu", 30),
+        )
+        .route(
+            "/projects/1/pipelines/30/jobs",
+            200,
+            &jobs(5, "deploy:eu", "deploy"),
+        )
+        .route(
+            "/projects/1/pipelines/30/bridges",
+            200,
+            &bridge(6, "trigger:a", 40),
+        )
+        .route(
+            "/projects/1/pipelines/40/jobs",
+            200,
+            &jobs(7, "deploy:region_a", "deploy"),
+        )
+        .route(
+            "/projects/1/pipelines/40/bridges",
+            200,
+            &bridge(8, "trigger:deeper", 50),
+        )
+        .route(
+            "/projects/1/pipelines/50/jobs",
+            200,
+            &jobs(9, "deploy:too_deep", "deploy"),
+        );
+    let got = wizard::suggest_deploy_markers(&client(t.clone()), &ProjectRef::Id(1), "main", None)
+        .await
+        .unwrap();
+    let names: Vec<(&str, &str)> = got
+        .suggestions
+        .iter()
+        .map(|s| (s.name.as_str(), s.pipeline.as_str()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("deploy:eu", "trigger:release / trigger:eu"),
+            (
+                "deploy:region_a",
+                "trigger:release / trigger:eu / trigger:a"
+            ),
+            ("publish:images", "trigger:release"),
+        ]
+    );
+    assert!(!got.truncated);
+    let seen = t.seen();
+    assert!(
+        seen.iter().all(|p| !p.contains("/pipelines/50/")),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter().all(|p| !p.contains("/pipelines/40/bridges")),
+        "the last level's bridges are not asked: {seen:?}"
+    );
+}
+
+/// The walk reads at most MARKER_CHILDREN children, nearest first, and says
+/// when it stopped; the request count is bounded whatever the tree.
+#[tokio::test]
+async fn suggestions_read_at_most_the_child_budget_and_say_so() {
+    let bridges: Vec<String> = (0..(wizard::MARKER_CHILDREN as u64 + 3))
+        .map(|i| {
+            format!(
+                r#"{{"id":{},"name":"trigger:c{i}","status":"success",
+                     "downstream_pipeline":{{"id":{},"project_id":1,"status":"success"}}}}"#,
+                100 + i,
+                200 + i
+            )
+        })
+        .collect();
+    let mut t = Routed::new()
+        .route(
+            "/projects/1/pipelines?",
+            200,
+            r#"[{"id":10,"status":"success","source":"push"}]"#,
+        )
+        .route("/projects/1/pipelines/10/jobs", 200, "[]")
+        .route(
+            "/projects/1/pipelines/10/bridges",
+            200,
+            &format!("[{}]", bridges.join(",")),
+        );
+    for i in 0..(wizard::MARKER_CHILDREN as u64 + 3) {
+        t = t
+            .route(
+                &format!("/projects/1/pipelines/{}/jobs", 200 + i),
+                200,
+                "[]",
+            )
+            .route(
+                &format!("/projects/1/pipelines/{}/bridges", 200 + i),
+                200,
+                "[]",
+            );
+    }
+    let got = wizard::suggest_deploy_markers(&client(t.clone()), &ProjectRef::Id(1), "main", None)
+        .await
+        .unwrap();
+    assert!(got.truncated);
+    let child_jobs = t
+        .seen()
+        .iter()
+        .filter(|p| p.contains("/jobs") && !p.contains("/pipelines/10/"))
+        .count();
+    assert_eq!(child_jobs, wizard::MARKER_CHILDREN);
+    assert!(
+        t.seen().len() <= 3 + 2 * wizard::MARKER_CHILDREN,
+        "{:?}",
+        t.seen()
+    );
+}
+
 #[tokio::test]
 async fn a_ref_with_no_pipelines_suggests_nothing() {
     let t = Routed::new().route("/projects/1/pipelines?", 200, "[]");

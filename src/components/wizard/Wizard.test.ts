@@ -227,6 +227,24 @@ describe("navigation and per-step validation", () => {
     expect(stepId()).toBe("preferences");
   });
 
+  it("says when the deploy suggestions stopped at the child-pipeline limit, and only then", async () => {
+    for (const truncated of [true, false, undefined]) {
+      const api = fakeApi({
+        suggestDeployMarkers: vi.fn(async () => ({ ...SUGGESTIONS, ...(truncated === undefined ? {} : { truncated }) })),
+      });
+      await start(api);
+      await toWatch();
+      await next();
+      expect(stepId()).toBe("deploy");
+      expect(q('[data-slot="markers-truncated"]') !== null, String(truncated)).toBe(truncated === true);
+      void unmount(component!);
+      component = null;
+      document.body.innerHTML = "";
+      host = document.createElement("div");
+      document.body.append(host);
+    }
+  });
+
   it("goes back without validating and keeps what was typed", async () => {
     await start(fakeApi());
     await toWatch();

@@ -13,6 +13,15 @@ body line with a bracket.
 
 ## [Unreleased]
 
+### Changed
+
+- **The wizard's deploy-marker suggestions look below the children.** A deploy two
+  levels down (a release pipeline that triggers the per-region deploys) was never
+  offered; the walk now reads child pipelines three levels deep, breadth first, at most
+  12 of them (each a request for its jobs and one for its bridges), labels a deeper job
+  with the path to it (`trigger:release / trigger:eu`), and says when it stopped at the
+  limit. A deeper child it cannot read costs only that branch.
+
 ### Added
 
 - **The release checks on real devices are in the repository.** `tools/real-device/`
