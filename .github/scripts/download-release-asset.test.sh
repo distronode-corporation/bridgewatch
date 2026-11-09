@@ -18,7 +18,8 @@ cleanup() {
 trap cleanup EXIT
 
 # The stand-in: two sources, /a and /b. Each answers its requests with the next
-# status in $work/statuses-<a|b> (the last one repeats), on a 200 the body
+# status in $work/statuses-<a|b> (the last one repeats; "cut" is a 200 whose body
+# stops short), on a 200 the body
 # "payload" from /a and "payload-b" from /b, and counts its requests in
 # $work/count-<a|b>. It records whether every
 # request asked for application/octet-stream.
@@ -34,7 +35,17 @@ class H(http.server.BaseHTTPRequestHandler):
         count.write_text(str(n + 1))
         if self.headers.get("Accept") != "application/octet-stream":
             (work / "bad-accept").write_text(self.headers.get("Accept", ""))
-        status = int(statuses[min(n, len(statuses) - 1)])
+        step = statuses[min(n, len(statuses) - 1)]
+        if step == "cut":
+            # A 200 whose body stops short: headers promise 100 bytes, 7 arrive,
+            # and the connection closes.
+            self.send_response(200)
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            self.wfile.write(b"payload")
+            self.close_connection = True
+            return
+        status = int(step)
         body = (b"payload" if src == "a" else b"payload-" + src.encode()) if status == 200 else b'{"message":"scripted"}'
         self.send_response(status)
         self.send_header("Content-Length", str(len(body)))
@@ -75,6 +86,7 @@ check() { # check <name> <condition...>
   fi
 }
 says() { grep -qF "$1" <<<"$err"; }
+lacks() { ! grep -qF "$1" <<<"$err"; }
 
 run "504 504 200" "200" 120 "$base/a"
 check "504, 504, then 200: downloaded on the third request" \
@@ -124,6 +136,15 @@ check "  ...with a warning naming both digests" says "expected $sha_b; trying th
 WANT="$sha_b" run "200" "200" 120 "$base/a"
 check "the last source's wrong bytes fail, and no file is left" test "$rc" -ne 0 -a ! -e "$work/out"
 check "  ...naming the digest it wanted" says "::error::$base/a delivered a file with sha256"
+
+# A body that breaks off after a 200 is curl's failure, not a digest mismatch.
+WANT="$sha_b" run "cut" "200" 120 "$base/a" "$base/b"
+check "a 200 whose body breaks off hands over to the next source" \
+  test "$rc" -eq 0 -a "$a" -eq 1 -a "$b" -eq 1 -a "$(cat "$work/out" 2>/dev/null)" = payload-b
+check "  ...saying it broke off, with curl's exit" says "::warning::the transfer from $base/a broke off after HTTP 200 (curl exit"
+check "  ...and not as a digest mismatch" lacks "delivered a file"
+run "cut" "200" 120 "$base/a"
+check "on the last source it is the error" says "::error::the transfer from $base/a broke off after HTTP 200 (curl exit"
 
 [ "$failures" -eq 0 ] || { echo "$failures failed"; exit 1; }
 echo "all passed"

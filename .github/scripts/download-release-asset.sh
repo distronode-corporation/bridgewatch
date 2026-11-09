@@ -71,12 +71,19 @@ for url in "$@"; do
     [ "$got" != "$want_sha256" ] || exit 0
   fi
   rm -f "$out"
-  case "$code" in
-    2??) what="$url delivered a file with sha256 $got, expected $want_sha256" ;;
-    408 | 429 | 500 | 502 | 503 | 504) what="HTTP $code from $url, still after retrying for up to ${share}s" ;;
-    000 | "") what="no answer from $url (curl exit $rc)" ;;
-    *) what="HTTP $code from $url (not retried: it is not a transient error)" ;;
-  esac
+  # ⛔ A 2xx status says nothing on its own: curl reports the status it got even
+  # when the body then broke off, so the digest message is for a transfer that
+  # finished (rc 0), and a broken one says curl's exit (Seer, #82).
+  if [ "$rc" -eq 0 ]; then
+    what="$url delivered a file with sha256 $got, expected $want_sha256"
+  else
+    case "$code" in
+      408 | 429 | 500 | 502 | 503 | 504) what="HTTP $code from $url, still after retrying for up to ${share}s" ;;
+      000 | "") what="no answer from $url (curl exit $rc)" ;;
+      2??) what="the transfer from $url broke off after HTTP $code (curl exit $rc)" ;;
+      *) what="HTTP $code from $url (not retried: it is not a transient error)" ;;
+    esac
+  fi
   if [ "$left" -gt 0 ]; then
     echo "::warning::$what; trying the next source" >&2
   else
