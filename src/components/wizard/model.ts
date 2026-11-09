@@ -207,6 +207,10 @@ export interface Draft {
   refName: string;
   /** GitHub only: the workflow file name or id. Empty is every workflow. */
   workflow: string;
+  /** GitHub only: one row per workflow run, or one per push (a commit group). */
+  group: "run" | "commit";
+  /** GitHub only, with a commit group: the workflow files every push must start. */
+  expect: string[];
   sources: string[];
   watchId: string;
   watchIdEdited: boolean;
@@ -253,6 +257,8 @@ export function emptyDraft(provider: Provider = "gitlab"): Draft {
     projectInput: "",
     refName: "main",
     workflow: "",
+    group: "run",
+    expect: [],
     sources: ["push"],
     watchId: "main",
     watchIdEdited: false,
@@ -303,6 +309,8 @@ export function switchProvider(draft: Draft, provider: Provider): void {
     draft.preflightRef = "";
   } else {
     draft.workflow = "";
+    draft.group = "run";
+    draft.expect = [];
   }
   if (draft.liveSecs === defaultLiveSecs(previous)) draft.liveSecs = defaultLiveSecs(provider);
 }
@@ -352,6 +360,10 @@ export function draftFromAnswers(answers: Partial<WizardAnswers>): Draft {
   if (answers.ref_name) draft.refName = answers.ref_name;
   if (answers.sources?.length) draft.sources = [...answers.sources];
   if (provider === "github" && answers.workflow) draft.workflow = answers.workflow;
+  if (provider === "github" && answers.group === "commit") {
+    draft.group = "commit";
+    draft.expect = [...(answers.expect ?? [])];
+  }
   if (answers.watch_id) {
     draft.watchId = answers.watch_id;
     draft.watchIdEdited = true;
@@ -545,6 +557,11 @@ export function answersOf(draft: Draft): WizardAnswers {
     // Only for GitHub: absent is gitlab in the core, so a GitLab payload is
     // exactly the one it always was.
     ...(github ? { provider: "github" as const, workflow: workflow || null } : {}),
+    // A commit group follows every workflow, so it sends none; a run-mode
+    // payload is exactly the one it always was.
+    ...(github && draft.group === "commit"
+      ? { workflow: null, group: "commit" as const, expect: draft.expect.map((e) => e.trim()).filter((e) => e) }
+      : {}),
     account: draft.account.trim(),
     base_url: baseUrlOf(draft),
     token: tokenSourceOf(draft),

@@ -51,9 +51,13 @@ to one unless `--account` names it. `--gh`,
 `--token-env` and the others choose another source, and `--oauth-client-id` names an
 application of your own on GitHub Enterprise.
 
-The wizard writes a `group = "run"` watch: one row per workflow run, of the one workflow
-you named or of every workflow. To get one row per push, set **One row is** to `commit` on
-the watch in Settings, and add `expect` there, or write it by hand as below.
+The wizard asks which form you want. **One row per push** writes `group = "commit"` and
+offers `expect`: the workflow files the newest three pushes on the branch ran, read from
+one page of runs, with the ones every push ran already ticked (leave out any whose `paths`
+or `branches` filters can skip a push). Otherwise it writes a `group = "run"` watch: one
+row per workflow run, of the one workflow you named or of every workflow. A re-run of the
+wizard sets a commit group on an existing watch when you ask for one, and never takes one
+away.
 
 ## A hand-written config for github.com
 

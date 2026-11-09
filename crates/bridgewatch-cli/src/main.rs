@@ -734,6 +734,8 @@ fn init(config_args: &ConfigArgs, args: InitArgs, store: &dyn TokenProvider) -> 
         watch_id,
         ref_name: args.ref_name,
         workflow: args.workflow,
+        group: Default::default(),
+        expect: Vec::new(),
         sources: args.sources,
         deploy_markers: args.deploy_markers,
         schedule_watch: args.schedule,

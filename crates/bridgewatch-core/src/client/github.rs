@@ -222,6 +222,62 @@ impl GitHubClient {
         Ok(groups.into_iter().map(|g| g.pipeline).collect())
     }
 
+    /// The workflow files the newest `commits` commits ran, newest first, from
+    /// one page of runs. A run's `path` is `.github/workflows/ci.yml`; the file
+    /// name is what `expect` matches. A run with no path (none seen) is left out.
+    pub async fn recent_workflow_files(
+        &self,
+        project: &ProjectRef,
+        query: &ListQuery,
+        commits: usize,
+    ) -> Result<Vec<Vec<String>>, ClientError> {
+        let repo = repo_segment(project)?;
+        let (page, _) = self
+            .get_json::<wire::RunsResponse>(&list_path(&repo, query))
+            .await?;
+        // A full page may stop in the middle of its oldest commit's runs.
+        let page_full = page.workflow_runs.len() >= query.per_page.clamp(1, 100) as usize;
+        let last_sha = page.workflow_runs.last().map(|r| r.head_sha.clone());
+        let mut by_commit: Vec<(String, Vec<String>)> = Vec::new();
+        for run in page.workflow_runs {
+            // ⛔ Through `workflow_file`, the one reading of a run's path that
+            // `expect` matching uses too: a path can carry a ref suffix
+            // (`.github/workflows/ci.yml@refs/pull/12/merge`), and splitting it
+            // on `/` alone suggested `merge` (Seer, #84).
+            let Some(file) = run
+                .path
+                .as_deref()
+                .map(crate::config::workflow_file)
+                .filter(|f| !f.is_empty())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let full = by_commit.len() >= commits;
+            match by_commit.iter_mut().find(|(sha, _)| *sha == run.head_sha) {
+                Some((_, files)) => {
+                    if !files.contains(&file) {
+                        files.push(file);
+                    }
+                }
+                None if !full => by_commit.push((run.head_sha, vec![file])),
+                None => {}
+            }
+        }
+        // ⛔ The page_full rule `group::fold` applies: on a full page the
+        // commit the page ends in may have more runs past it, so its list is
+        // not known to be whole and it is dropped (Seer, #84). Kept only when
+        // it is the one commit there is, where a partial list is still all the
+        // page can say.
+        if page_full
+            && by_commit.len() > 1
+            && let Some(last) = last_sha
+        {
+            by_commit.retain(|(sha, _)| *sha != last);
+        }
+        Ok(by_commit.into_iter().map(|(_, files)| files).collect())
+    }
+
     /// `GET /repos/{owner}/{repo}/actions/runs/{id}`.
     pub async fn get_pipeline(
         &self,
@@ -850,6 +906,15 @@ impl CiClient for GitHubClient {
         sha: &str,
     ) -> Result<Option<String>, ClientError> {
         GitHubClient::commit_sha(self, project, sha).await
+    }
+
+    async fn recent_workflow_files(
+        &self,
+        project: &ProjectRef,
+        query: &ListQuery,
+        commits: usize,
+    ) -> Result<Vec<Vec<String>>, ClientError> {
+        GitHubClient::recent_workflow_files(self, project, query, commits).await
     }
 
     async fn list_pipelines(

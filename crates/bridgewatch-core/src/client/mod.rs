@@ -99,6 +99,20 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
         Ok(None)
     }
 
+    /// The workflow FILES (`ci.yml`) each of the newest commits ran on GitHub,
+    /// newest commit first, one list per commit, at most `commits` of them,
+    /// from ONE page of runs (`query` as for [`Self::list_pipelines`]). The
+    /// setup wizard's `expect` suggestions. The default answers empty without
+    /// a request: a GitLab project has no workflows.
+    async fn recent_workflow_files(
+        &self,
+        _project: &ProjectRef,
+        _query: &ListQuery,
+        _commits: usize,
+    ) -> Result<Vec<Vec<String>>, ClientError> {
+        Ok(Vec::new())
+    }
+
     /// The first failure annotation of a failed job: what its first failing
     /// line is made of (F2). The poller asks this for each pipeline's first
     /// BLOCKING failure under the watch's `[watches.jobs]` rules, which only
