@@ -502,6 +502,9 @@ fn reload(app: &AppHandle, force: bool, bound_for: Option<&str>) {
     crate::crash::global().set_consent(crate::crash::consent_of(
         running.as_ref().and_then(|c| c.ui.send_crash_reports),
     ));
+    // The same for `[ui].hotkey`: unchanged is a no-op, so this costs nothing
+    // on a reload that left it alone.
+    crate::hotkey::apply(app, running.as_ref().map_or("", |c| c.ui.hotkey.as_str()));
     // ⛔ The line the startup one cannot be: on a FIRST run there is no file, so
     // no level is applied, so `[log].level = "info"` in the file the wizard is
     // about to write cannot show the startup line: it was filtered before the

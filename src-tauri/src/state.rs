@@ -46,6 +46,9 @@ pub struct Inner {
     pub settings_tab: Option<String>,
     /// When the popover was last hidden. See `windows::BLUR_HIDE_GRACE`.
     pub popover_hidden_at: Option<Instant>,
+    /// When the global shortcut last showed the popover. See
+    /// `windows::SHORTCUT_FOCUS_GRACE`.
+    pub popover_shortcut_at: Option<Instant>,
     /// The file's text as the last reload read it, so a reload of identical
     /// text can be skipped. See `commands::reload_from_disk`.
     pub disk_text: Option<String>,
@@ -168,6 +171,7 @@ impl AppState {
                 seeded: resolved.seeded,
                 settings_tab: None,
                 popover_hidden_at: None,
+                popover_shortcut_at: None,
                 disk_text: resolved.text,
                 clients: BTreeMap::new(),
                 refused: Vec::new(),

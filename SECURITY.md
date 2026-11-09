@@ -168,8 +168,8 @@ instance.
 ### The web views have almost no capabilities
 
 The Tauri capability file grants the popover, Settings and wizard windows
-`core:event:default` and nothing else. The opener, notification, positioner and autostart
-plugins are driven from Rust only. Commands that write the config file validate and gate
+`core:event:default` and nothing else. The opener, notification, positioner, autostart and
+global-shortcut plugins are driven from Rust only. Commands that write the config file validate and gate
 the write in Rust, and the file is written by compare-and-swap. `[ui].theme_css` is read
 by the Rust side only when the path ends in `.css`, up to 256 KiB. The content security
 policy allows scripts from the app itself only.

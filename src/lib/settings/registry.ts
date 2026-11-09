@@ -438,6 +438,13 @@ export const REGISTRY: RegistryEntry[] = [
   },
   { path: "ui.launch_at_login", tab: "ui", control: "boolean", label: "Launch at login" },
   {
+    path: "ui.hotkey",
+    tab: "ui",
+    control: "text",
+    label: "Global shortcut",
+    hint: "Shows or hides the popover from anywhere, e.g. CmdOrCtrl+Shift+B. Empty for none. Not on Wayland: there it fires only while an X11 window has the focus.",
+  },
+  {
     path: "ui.send_crash_reports",
     tab: "ui",
     control: "boolean",

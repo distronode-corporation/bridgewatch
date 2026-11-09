@@ -48,6 +48,9 @@ every capture goes through `harness.sh shot`. See [README.md](README.md) for a w
 8. **One-click setup and token health.** Run the setup wizard against the stand-in, and
    set `token_expires_at` in the state file to a date a few days ahead for the
    token-health strip.
+9. **The global shortcut and the keys** (2.1). Set `[ui].hotkey = "Ctrl+Alt+B"` and
+   press it with `xt.py key ctrl+alt+b`: the popover shows, a second press hides it.
+   With it open, `xt.py key Down` focuses the first commit link and `j` the next row.
 
 ## macOS (by hand)
 
@@ -73,5 +76,8 @@ click the keychain prompts: that is the check, so count them.
    appears, and clicking it opens the job page.
 7. **The popover** grows with many watches and shrinks back when they are removed; find
    its narrowest real width.
+8. **The global shortcut** (2.1). Set `[ui].hotkey = "CmdOrCtrl+Shift+B"`: pressing it
+   shows the popover, a second press hides it, and ↓ then focuses the first commit link.
+   Note any Accessibility or Input Monitoring prompt macOS raises.
 
 Clean up: remove the throwaway keychain or user, both installed apps and the stand-ins.
