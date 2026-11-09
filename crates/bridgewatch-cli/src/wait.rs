@@ -439,8 +439,10 @@ where
     tokio::pin!(expired);
     let mut last: Option<PipelineView> = None;
     let mut said = String::new();
+    let mut wake = bridgewatch_core::poll::WakeWatch::new();
 
     loop {
+        wake.reset();
         let tick = tokio::select! {
             tick = poller.tick() => tick,
             _ = &mut interrupt => return Ended::Interrupted(last),
@@ -505,8 +507,10 @@ where
             last = row;
         }
 
+        // A wake from sleep polls at once (`WakeWatch`).
         tokio::select! {
             _ = tokio::time::sleep(tick.next_interval) => {}
+            _ = wake.woke() => {}
             _ = &mut interrupt => return Ended::Interrupted(last),
             _ = &mut expired => return Ended::TimedOut(last),
         }
