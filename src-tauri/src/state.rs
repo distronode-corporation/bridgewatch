@@ -57,11 +57,14 @@ pub struct Inner {
     /// bound, its request ring and its sign-in with the watches. Empty until a
     /// poller is built, and again while one cannot be.
     pub clients: BTreeMap<String, Arc<dyn CiClient>>,
-    /// "Pause notifications", from the tray menu. In memory: a pause ends
-    /// when the app quits.
     /// The accounts the running poller refuses, by name.
     pub refused: Vec<String>,
+    /// "Pause notifications", from the tray menu. In memory: a pause ends
+    /// when the app quits.
     pub quiet: crate::quiet::Quiet,
+    /// The failures acknowledged in the popover, which the tray draws a level
+    /// lower. In memory, like a pause: nothing about them is written anywhere.
+    pub acks: bridgewatch_core::verdict::Acknowledgements,
 }
 
 /// Shared application state, reachable from every command and from the poller.
@@ -173,6 +176,7 @@ impl AppState {
                 clients: BTreeMap::new(),
                 refused: Vec::new(),
                 quiet: Default::default(),
+                acks: Default::default(),
             }),
             poll_now: Arc::new(Notify::new()),
             reload: Arc::new(Notify::new()),

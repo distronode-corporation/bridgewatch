@@ -10,6 +10,15 @@
   submenu reads **Notifications paused** and offers **Resume**),
   **Reload config**, **Open config file**, **Open log folder**, **Settings…**, **Setup
   wizard…**, **Launch at login** and **Quit bridgewatch**.
+- **Acknowledge a failure** you already know about with **acknowledge** on the watch's
+  header in the popover. The tray then draws that watch a level lower (`failed` as
+  `deployed_with_failure`, `deployed_with_failure` as `deployed`) and, on macOS, the tooltip says
+  "acknowledged"; the popover still shows what the pipeline did. It is local: nothing is
+  sent to GitLab or GitHub and nothing is written, so it ends when the app quits. It
+  ends sooner on its own when that failure stops being the watch's current one: a newer
+  pipeline, the same pipeline failing worse, or the failure going away. **undo** takes it
+  back. Only a primary watch's failure can be acknowledged, since only those colour the
+  tray.
 - **The keyboard.** In the popover, ↓ and ↑ (or `j` and `k`) move between pipeline
   rows, landing on the commit link, where Enter opens the pipeline; Home and End go to
   the first and last row, `r` refreshes, Escape hides it, and Tab still reaches every link

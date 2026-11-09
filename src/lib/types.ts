@@ -211,6 +211,11 @@ export interface Snapshot {
   request_log: RequestLog[];
   /** Absent when every token is healthy: the core skips an empty list. */
   tokens?: TokenHealth[];
+  /**
+   * The watches whose current failure was acknowledged in this app, so the
+   * tray draws them a level lower. Absent when there is none.
+   */
+  acknowledged?: string[];
 }
 
 /** One problem in a configuration file, with its position resolved. */

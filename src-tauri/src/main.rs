@@ -112,6 +112,7 @@ fn main() {
             commands::get_status,
             commands::refresh_now,
             commands::resume_notifications,
+            commands::acknowledge_failure,
             commands::popover_opened,
             commands::read_config_text,
             commands::get_config_json,

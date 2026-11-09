@@ -34,7 +34,15 @@ const snapshot: Snapshot = {
   request_log: [],
 };
 
-const calls = { status: 0, opened: 0, edits: [] as unknown[], resumes: 0, resizes: [] as number[], refreshes: 0 };
+const calls = {
+  status: 0,
+  opened: 0,
+  edits: [] as unknown[],
+  resumes: 0,
+  resizes: [] as number[],
+  acks: [] as [string, boolean][],
+  refreshes: 0,
+};
 
 /** What the shell answers for the two "open" requests; reset per test. */
 const shell = {
@@ -47,6 +55,7 @@ const shell = {
   resumeNotifications: (): Promise<void> => Promise.resolve(),
   resize: (_height: number): void => {},
   snapshot,
+  acknowledgeFailure: (_watch: string, _acknowledged: boolean): Promise<boolean> => Promise.resolve(true),
 };
 
 vi.mock("./lib/ipc", () => ({
@@ -56,6 +65,10 @@ vi.mock("./lib/ipc", () => ({
     return shell.applyConfigEdits(edits);
   },
   getSnapshot: () => Promise.resolve(shell.snapshot),
+  acknowledgeFailure: (watch: string, acknowledged: boolean) => {
+    calls.acks.push([watch, acknowledged]);
+    return shell.acknowledgeFailure(watch, acknowledged);
+  },
   getStatus: () => {
     calls.status++;
     return Promise.resolve(shell.status);
@@ -104,8 +117,10 @@ beforeEach(() => {
   calls.edits = [];
   calls.resumes = 0;
   calls.resizes = [];
+  calls.acks = [];
   calls.refreshes = 0;
   shell.snapshot = snapshot;
+  shell.acknowledgeFailure = () => Promise.resolve(true);
   shell.resize = () => {};
   shell.status = status;
   shell.resumeNotifications = () => Promise.resolve();
@@ -508,6 +523,64 @@ describe("PopoverApp, sizing the window to its content", () => {
     layout.content = 150.6;
     h.seconds(2);
     expect(calls.resizes.length).toBe(settled);
+  });
+});
+
+describe("PopoverApp, acknowledging a failure", () => {
+  async function settle() {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    flushSync();
+  }
+  const failed: Snapshot = {
+    ...snapshot,
+    icon_state: "failed",
+    watches: [{ id: "web", role: "primary", icon_state: "failed", rows: [], error: null }],
+  };
+  const button = () => host.querySelector<HTMLButtonElement>("[data-slot=acknowledge]")!;
+  const notice = () => host.querySelector("[data-slot=popover-notice]")?.textContent?.trim() ?? "";
+
+  it("asks the shell once however fast it is clicked", async () => {
+    shell.snapshot = failed;
+    let answer: (changed: boolean) => void = () => {};
+    shell.acknowledgeFailure = () => new Promise((resolve) => (answer = resolve));
+    await render();
+    await settle();
+    button().click();
+    button().click();
+    answer(true);
+    await settle();
+    expect(calls.acks).toEqual([["web", true]]);
+    expect(notice()).toBe("");
+  });
+
+  it("takes it back from an acknowledged watch", async () => {
+    shell.snapshot = { ...failed, acknowledged: ["web"] };
+    await render();
+    await settle();
+    expect(host.querySelector("[data-slot=acknowledged]")).not.toBeNull();
+    button().click();
+    await settle();
+    expect(calls.acks).toEqual([["web", false]]);
+  });
+
+  it("says so when the failure changed before the click arrived", async () => {
+    shell.snapshot = failed;
+    shell.acknowledgeFailure = () => Promise.resolve(false);
+    await render();
+    await settle();
+    button().click();
+    await settle();
+    expect(notice()).toBe("Nothing to acknowledge on web: its failure has changed.");
+  });
+
+  it("says why when the shell refuses", async () => {
+    shell.snapshot = failed;
+    shell.acknowledgeFailure = () => Promise.reject("the shell is gone");
+    await render();
+    await settle();
+    button().click();
+    await settle();
+    expect(notice()).toBe("Could not acknowledge the failure: the shell is gone");
   });
 });
 
