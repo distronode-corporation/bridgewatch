@@ -23,8 +23,8 @@
 - **Windows is not targeted.** Nothing is tested there, the keyring code least of all.
 - **No merge-request pairing.** `merge_request_event` works as a source like any other,
   but a merged-result pipeline is not paired with its branch pipeline.
-- **The wizard's deploy-marker suggestions look one level deep** (parent and direct
-  children).
+- **The wizard's deploy-marker suggestions read at most 12 child pipelines, three
+  levels down,** nearest first. A marker beyond that is typed by name.
 - **A GitHub commit group is formed by time.** A run that starts more than
   `fan_out_secs` after the rest of its push (a slow `workflow_dispatch`, a re-push of the
   same commit) is a row of its own. See [`expect`](github-actions.md#expect-a-workflow-that-never-started).

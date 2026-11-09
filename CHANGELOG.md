@@ -54,6 +54,12 @@ body line with a bracket.
   and `bridgewatch wait` now read the wall clock against the monotonic clock every 5
   seconds, and a jump of 10 seconds or more between two readings polls at once. No
   logind, D-Bus or other sleep notification is used.
+- **The wizard's deploy-marker suggestions look below the children.** A deploy two
+  levels down (a release pipeline that triggers the per-region deploys) was never
+  offered; the walk now reads child pipelines three levels deep, breadth first, at most
+  12 of them (each a request for its jobs and one for its bridges), labels a deeper job
+  with the path to it (`trigger:release / trigger:eu`), and says when it stopped at the
+  limit. A deeper child it cannot read costs only that branch.
 
 ## [2.0.0] - 2026-11-07
 
