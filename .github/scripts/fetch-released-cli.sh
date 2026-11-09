@@ -30,8 +30,40 @@ name="bridgewatch-cli_${version}_${target}"
 url="https://github.com/distronode-corporation/bridgewatch/releases/download/v${version}/${name}.tar.gz"
 mkdir -p "$out_dir"
 tarball="$out_dir/$name.tar.gz"
-# No token: the release is public, and the download needs none.
-curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$tarball" "$url"
+api="https://api.github.com/repos/distronode-corporation/bridgewatch"
+
+# GH_TOKEN (or GITHUB_TOKEN) as a bearer header when the environment has one, for
+# the API's rate limit only: the release is public. The header goes to curl on
+# stdin (`-H @-`), never on its command line or in the log, and curl drops it on
+# the redirect to the asset host.
+api_curl() {
+  local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  if [ -n "$token" ]; then
+    printf 'Authorization: Bearer %s\n' "$token" \
+      | curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -H @- \
+          -H 'X-GitHub-Api-Version: 2022-11-28' "$@"
+  else
+    curl -fsSL --retry 3 --proto '=https' --tlsv1.2 \
+      -H 'X-GitHub-Api-Version: 2022-11-28' "$@"
+  fi
+}
+
+# The public URL first. github.com's releases/download redirector has answered 504
+# for one asset for hours while the API served the same bytes (2026-11-09), so on
+# failure the asset comes by id from the REST API. The pinned digest below checks
+# whichever path wrote the file.
+if ! curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$tarball" "$url"; then
+  echo "::warning::$url failed; fetching $name.tar.gz through the GitHub REST API instead" >&2
+  rm -f "$tarball"
+  asset_id="$(api_curl -H 'Accept: application/vnd.github+json' "$api/releases/tags/v${version}" \
+    | python3 -I -c 'import json,sys
+want=sys.argv[1]
+ids=[a["id"] for a in json.load(sys.stdin)["assets"] if a["name"]==want]
+print(ids[0] if len(ids)==1 else "")' "$name.tar.gz")"
+  [ -n "$asset_id" ] || { echo "::error::release v$version lists no single asset $name.tar.gz" >&2; exit 1; }
+  api_curl -H 'Accept: application/octet-stream' -o "$tarball" "$api/releases/assets/$asset_id"
+  url="$api/releases/assets/$asset_id"
+fi
 
 if command -v sha256sum >/dev/null 2>&1; then
   got="$(sha256sum "$tarball" | cut -d' ' -f1)"
