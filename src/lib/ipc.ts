@@ -58,6 +58,9 @@ export const getStatus = () => invoke<Status>("get_status");
 export const refreshNow = () => invoke<boolean>("refresh_now");
 export const popoverOpened = () => invoke<boolean>("popover_opened");
 export const resumeNotifications = () => invoke<void>("resume_notifications");
+/** Acknowledge a watch's current failure, or take that back. False when nothing changed. */
+export const acknowledgeFailure = (watch: string, acknowledged: boolean) =>
+  invoke<boolean>("acknowledge_failure", { watch, acknowledged });
 export const readConfigText = () => invoke<string>("read_config_text");
 export const getConfigJson = () =>
   invoke<{ config: unknown; job_order: string[][] } | null>("get_config_json");
