@@ -12,7 +12,11 @@
 # file; these are the subject digests of its provenance attestation
 # (bridgewatch_1.3.0.intoto.jsonl, SLSA v1) and equal GitHub's own asset
 # digests. A digest fetched next to the file it checks proves only that the
-# two downloads agree.
+# two downloads agree. The asset ids are pinned for the API's asset URL, which
+# answered when the release page's URL did not (download-release-asset.sh); an
+# id that ever stopped matching only costs that source, and the digest still
+# decides what is accepted: a stale id still answers, with another version's
+# file, which the download script refuses on the digest and moves on.
 set -euo pipefail
 
 target="${1:?target}"
@@ -20,50 +24,22 @@ out_dir="${2:?out dir}"
 version="1.3.0"
 
 case "$target" in
-  universal-apple-darwin) sha256="936112ed8912a0f62f2b4d87f324a400aafdf9da586c498e2f04208a3d732d15" ;;
-  x86_64-unknown-linux-gnu) sha256="9193d7d780b0d5cbce7aa70e91426ab3f4de3e5390d542f3a54717b7f40e474a" ;;
-  aarch64-unknown-linux-gnu) sha256="37640bdcfec6c4c4698c36cdd7b21f31ba0948de1d7f0f4d719d77e4ea9a806b" ;;
+  universal-apple-darwin) sha256="936112ed8912a0f62f2b4d87f324a400aafdf9da586c498e2f04208a3d732d15"; asset=718830385 ;;
+  x86_64-unknown-linux-gnu) sha256="9193d7d780b0d5cbce7aa70e91426ab3f4de3e5390d542f3a54717b7f40e474a"; asset=718830384 ;;
+  aarch64-unknown-linux-gnu) sha256="37640bdcfec6c4c4698c36cdd7b21f31ba0948de1d7f0f4d719d77e4ea9a806b"; asset=718830386 ;;
   *) echo "::error::no released $version CLI for target $target" >&2; exit 1 ;;
 esac
 
 name="bridgewatch-cli_${version}_${target}"
 url="https://github.com/distronode-corporation/bridgewatch/releases/download/v${version}/${name}.tar.gz"
+api_url="https://api.github.com/repos/distronode-corporation/bridgewatch/releases/assets/${asset}"
 mkdir -p "$out_dir"
 tarball="$out_dir/$name.tar.gz"
-api="https://api.github.com/repos/distronode-corporation/bridgewatch"
-
-# GH_TOKEN (or GITHUB_TOKEN) as a bearer header when the environment has one, for
-# the API's rate limit only: the release is public. The header goes to curl on
-# stdin (`-H @-`), never on its command line or in the log, and curl drops it on
-# the redirect to the asset host.
-api_curl() {
-  local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-  if [ -n "$token" ]; then
-    printf 'Authorization: Bearer %s\n' "$token" \
-      | curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -H @- \
-          -H 'X-GitHub-Api-Version: 2022-11-28' "$@"
-  else
-    curl -fsSL --retry 3 --proto '=https' --tlsv1.2 \
-      -H 'X-GitHub-Api-Version: 2022-11-28' "$@"
-  fi
-}
-
-# The public URL first. github.com's releases/download redirector has answered 504
-# for one asset for hours while the API served the same bytes (2026-11-09), so on
-# failure the asset comes by id from the REST API. The pinned digest below checks
-# whichever path wrote the file.
-if ! curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$tarball" "$url"; then
-  echo "::warning::$url failed; fetching $name.tar.gz through the GitHub REST API instead" >&2
-  rm -f "$tarball"
-  asset_id="$(api_curl -H 'Accept: application/vnd.github+json' "$api/releases/tags/v${version}" \
-    | python3 -I -c 'import json,sys
-want=sys.argv[1]
-ids=[a["id"] for a in json.load(sys.stdin)["assets"] if a["name"]==want]
-print(ids[0] if len(ids)==1 else "")' "$name.tar.gz")"
-  [ -n "$asset_id" ] || { echo "::error::release v$version lists no single asset $name.tar.gz" >&2; exit 1; }
-  api_curl -H 'Accept: application/octet-stream' -o "$tarball" "$api/releases/assets/$asset_id"
-  url="$api/releases/assets/$asset_id"
-fi
+# No token: the release is public, and the download needs none. The API's asset
+# URL first, the release page's second; transient errors are retried within
+# about two minutes in all, and a 404 from both fails with that status.
+DOWNLOAD_SHA256="$sha256" \
+  bash "$(dirname "${BASH_SOURCE[0]}")/download-release-asset.sh" "$tarball" "$api_url" "$url"
 
 if command -v sha256sum >/dev/null 2>&1; then
   got="$(sha256sum "$tarball" | cut -d' ' -f1)"
