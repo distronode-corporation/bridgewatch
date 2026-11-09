@@ -1,6 +1,7 @@
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import fixture from "./lib/__fixtures__/ca41ab28.json" with { type: "json" };
 import type { Snapshot, Status } from "./lib/types";
 
 /**
@@ -33,7 +34,7 @@ const snapshot: Snapshot = {
   request_log: [],
 };
 
-const calls = { status: 0, opened: 0, edits: [] as unknown[], resumes: 0, resizes: [] as number[] };
+const calls = { status: 0, opened: 0, edits: [] as unknown[], resumes: 0, resizes: [] as number[], refreshes: 0 };
 
 /** What the shell answers for the two "open" requests; reset per test. */
 const shell = {
@@ -45,6 +46,7 @@ const shell = {
     Promise.resolve({ ok: true, diagnostics: [] }),
   resumeNotifications: (): Promise<void> => Promise.resolve(),
   resize: (_height: number): void => {},
+  snapshot,
 };
 
 vi.mock("./lib/ipc", () => ({
@@ -53,7 +55,7 @@ vi.mock("./lib/ipc", () => ({
     calls.edits.push(edits);
     return shell.applyConfigEdits(edits);
   },
-  getSnapshot: () => Promise.resolve(snapshot),
+  getSnapshot: () => Promise.resolve(shell.snapshot),
   getStatus: () => {
     calls.status++;
     return Promise.resolve(shell.status);
@@ -69,7 +71,10 @@ vi.mock("./lib/ipc", () => ({
   openWizard: () => shell.openWizard(),
   pipelinesUrl: () => shell.pipelinesUrl(),
   quit: () => Promise.resolve(),
-  refreshNow: () => Promise.resolve(true),
+  refreshNow: () => {
+    calls.refreshes++;
+    return Promise.resolve(true);
+  },
   resizePopover: (height: number) => {
     calls.resizes.push(height);
     shell.resize(height);
@@ -99,6 +104,8 @@ beforeEach(() => {
   calls.edits = [];
   calls.resumes = 0;
   calls.resizes = [];
+  calls.refreshes = 0;
+  shell.snapshot = snapshot;
   shell.resize = () => {};
   shell.status = status;
   shell.resumeNotifications = () => Promise.resolve();
@@ -501,5 +508,48 @@ describe("PopoverApp, sizing the window to its content", () => {
     layout.content = 150.6;
     h.seconds(2);
     expect(calls.resizes.length).toBe(settled);
+  });
+});
+
+describe("PopoverApp, the keyboard", () => {
+  async function settle() {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    flushSync();
+  }
+  const press = (key: string, init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", { key, cancelable: true, ...init });
+    window.dispatchEvent(event);
+    flushSync();
+    return event;
+  };
+  const shas = () => [...host.querySelectorAll<HTMLElement>("[data-scroll] .row")].map((r) => r.querySelector(".sha"));
+
+  it("moves between rows with the arrows and j and k, landing on the commit link", async () => {
+    // The recorded snapshot's primary watch, with a second, older row under it.
+    const recorded = fixture as unknown as Snapshot;
+    const watch = recorded.watches[0];
+    const older = { ...watch.rows[0], id: watch.rows[0].id - 1, sha7: "0000000" };
+    shell.snapshot = { ...recorded, watches: [{ ...watch, rows: [watch.rows[0], older] }] };
+    await render();
+    await settle();
+    const rows = shas();
+    expect(rows.length).toBe(2);
+    expect(press("ArrowDown").defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(rows[0]);
+    press("j");
+    expect(document.activeElement).toBe(rows[1]);
+    press("k");
+    expect(document.activeElement).toBe(rows[0]);
+    press("End");
+    expect(document.activeElement).toBe(rows[rows.length - 1]);
+  });
+
+  it("refreshes on r, and leaves a key with a modifier to the system", async () => {
+    await render();
+    await settle();
+    press("r");
+    expect(calls.refreshes).toBe(1);
+    expect(press("r", { ctrlKey: true }).defaultPrevented).toBe(false);
+    expect(calls.refreshes).toBe(1);
   });
 });

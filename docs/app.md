@@ -10,6 +10,12 @@
   submenu reads **Notifications paused** and offers **Resume**),
   **Reload config**, **Open config file**, **Open log folder**, **Settings…**, **Setup
   wizard…**, **Launch at login** and **Quit bridgewatch**.
+- **The keyboard.** In the popover, ↓ and ↑ (or `j` and `k`) move between pipeline
+  rows, landing on the commit link, where Enter opens the pipeline; Home and End go to
+  the first and last row, `r` refreshes, Escape hides it, and Tab still reaches every link
+  and button. `[ui].hotkey` (for example `CmdOrCtrl+Shift+B`) adds a global shortcut
+  that shows or hides the popover from anywhere. It is off unless set, and on Linux it
+  works under X11 only (see [Limitations](limitations.md)).
 - **Config problems** appear in a strip at the top of the popover, with a button that
   opens Settings. A file that fails validation does not take effect; the last good
   configuration keeps running.

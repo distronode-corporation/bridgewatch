@@ -1269,6 +1269,11 @@ pub struct UiConfig {
     /// A build with no crash-report address (one you compile yourself, or a
     /// fork's) sends nothing either way.
     pub send_crash_reports: Option<bool>,
+    /// A global keyboard shortcut that shows or hides the popover, such as
+    /// `CmdOrCtrl+Shift+B`; empty for none. Off unless set. On Linux it works
+    /// under X11 only: a Wayland session has no global shortcut an app can
+    /// register, so it fires there only while an X11 window has the focus.
+    pub hotkey: String,
 }
 
 /// Popover geometry.

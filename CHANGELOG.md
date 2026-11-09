@@ -15,6 +15,15 @@ body line with a bracket.
 
 ### Added
 
+- **Keyboard navigation in the popover, and an optional global shortcut.** ↓ and ↑ (or
+  `j` and `k`) move between pipeline rows, landing on the commit link, where Enter opens
+  the pipeline; Home and End go to the first and last row and `r` refreshes. The new
+  `[ui].hotkey` (for example `CmdOrCtrl+Shift+B`, empty by default) shows or hides the
+  popover from anywhere. On Linux it works under X11 only: a Wayland session gives apps
+  no global shortcut, so there it fires only while an X11 window has the focus.
+
+### Added
+
 - **The release checks on real devices are in the repository.** `tools/real-device/`
   holds the Linux and macOS check list run before a tag, and a Linux harness that runs the
   real app on a private Xvfb display, under a private D-Bus session, with a throwaway HOME
