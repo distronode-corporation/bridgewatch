@@ -5,13 +5,18 @@
 //! itself, and this shell has to be able to cut that sleep short for a manual
 //! refresh, a popover open or a configuration change — so the loop is driven a
 //! tick at a time and the sleep is a `select!` arm.
+//!
+//! A wake from sleep cuts it short too ([`WakeWatch`]): the sleep runs on the
+//! monotonic clock, which stops while the machine sleeps, so without it a
+//! laptop opened after an hour kept its hour-old view until the rest of the
+//! interval had run.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use bridgewatch_core::eta::EtaHistory;
 use bridgewatch_core::notify::{Notification, NotifyLedger};
-use bridgewatch_core::poll::Poller;
+use bridgewatch_core::poll::{Poller, WakeWatch};
 use bridgewatch_core::verdict::{IconState, Snapshot};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::{ActionPerformed, NotificationExt};
@@ -100,6 +105,7 @@ where
 /// have to be rebuilt anyway when the config changes.
 async fn run_loop(app: AppHandle, state: Arc<AppState>) {
     let mut failed_builds: u32 = 0;
+    let mut wake = WakeWatch::new();
     loop {
         let Some(config) = state.config() else {
             // No usable configuration. Show it in the tray and wait to be told
@@ -150,6 +156,7 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
                     _ = tokio::time::sleep(delay) => {}
                     _ = state.poll_now.notified() => {}
                     _ = state.reload.notified() => {}
+                    jump = wake.woke() => log_wake(jump),
                 }
                 continue;
             }
@@ -166,6 +173,8 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
         let mut next_retry = tokio::time::Instant::now() + build_retry_delay(retries);
 
         loop {
+            // A wake before this tick is answered by it.
+            wake.reset();
             let tick = poller.tick().await;
             // An account read for the first time by this tick (a sign-in) may
             // have just been refused; the popover's strip follows on its own
@@ -190,6 +199,12 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
                     _ = tokio::time::sleep_until(tick_at) => break false,
                     _ = state.poll_now.notified() => break false,
                     _ = state.reload.notified() => break true,
+                    // Woke from sleep (or the clock was set forward): poll at
+                    // once, past the rate gate, as `PollNow::Wake` allows.
+                    jump = wake.woke() => {
+                        log_wake(jump);
+                        break false;
+                    }
                     _ = state.retry_refused.notified() => {
                         // A recovery ticks at once; nothing recovered waits on.
                         if retry_refused(&mut poller, &state) {
@@ -210,6 +225,14 @@ async fn run_loop(app: AppHandle, state: Arc<AppState>) {
             }
         }
     }
+}
+
+/// Say in the log why a poll came early.
+fn log_wake(jump: Duration) {
+    tracing::info!(
+        slept_secs = jump.as_secs(),
+        "the wall clock ran ahead of the monotonic clock (a wake from sleep); polling now"
+    );
 }
 
 /// Whether any refused account is due a timed retry: one refused for any

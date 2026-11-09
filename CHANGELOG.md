@@ -21,6 +21,15 @@ body line with a bracket.
   and gnome-keyring and loopback GitLab stand-ins, so anyone can repeat the checks without
   touching their own desktop, keyring or config.
 
+### Changed
+
+- **A wake from sleep polls at once.** The wait between polls runs on the monotonic
+  clock, which stops while the machine sleeps, so a laptop opened after an hour showed
+  an hour-old view until the rest of the interval had run. The app, `bridgewatch watch`
+  and `bridgewatch wait` now read the wall clock against the monotonic clock every 5
+  seconds, and a jump of 10 seconds or more between two readings polls at once. No
+  logind, D-Bus or other sleep notification is used.
+
 ## [2.0.0] - 2026-11-07
 
 bridgewatch 2.0 signs in instead of asking for a token, keeps every stored token with the

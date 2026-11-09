@@ -11,8 +11,9 @@
   it only while the toast is on screen, not from the Action Center, and a Linux
   notification server without actions reports nothing. The popover row carries the same
   link.
-- **No poll on wake from sleep.** The first data after resume can be up to one interval
-  stale; opening the popover polls at once.
+- **A poll on wake can come before the network.** A wake is noticed within 5 seconds of
+  resume and polls at once; if the network is not back yet, that poll fails and the
+  watch backs off as after any failed poll. Opening the popover or Refresh polls again.
 - **Windows is not targeted.** Nothing is tested there, the keyring code least of all.
 - **No merge-request pairing.** `merge_request_event` works as a source like any other,
   but a merged-result pipeline is not paired with its branch pipeline.

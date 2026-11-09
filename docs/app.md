@@ -73,7 +73,10 @@ bridgewatch therefore means polling: every `poll.live_secs` (default 5 s) while 
 pipeline in any watch is running, and every `poll.idle_secs` (default 60 s) when
 everything has settled. The popover's header shows how long ago the last poll was ("9s
 ago"), and opening it polls at once if the last poll is at
-least 2 s old.
+least 2 s old. Waking the machine from sleep polls at once too: every 5 s bridgewatch
+compares the wall clock with the monotonic clock, which stops during sleep, and a jump of
+10 s or more between two readings means the machine slept (or the clock was set
+forward).
 
 What a live tick costs, per GitLab watch: one pipeline-list request, plus two (`/jobs` and
 `/bridges`) for each pipeline that is live or changed, plus one for each dived child
