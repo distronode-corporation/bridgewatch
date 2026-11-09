@@ -35,6 +35,8 @@ class H(http.server.BaseHTTPRequestHandler):
         count.write_text(str(n + 1))
         if self.headers.get("Accept") != "application/octet-stream":
             (work / "bad-accept").write_text(self.headers.get("Accept", ""))
+        auth = work / f"auth-{src}"
+        auth.write_text(self.headers.get("Authorization", "none"))
         step = statuses[min(n, len(statuses) - 1)]
         if step == "cut":
             # A 200 whose body stops short: headers promise 100 bytes, 7 arrive,
@@ -71,7 +73,9 @@ run() { # run <statuses of a> <statuses of b> <max secs> <sources...>: sets rc, 
   rm -f "$work/count-a" "$work/count-b" "$work/out"
   local start=$SECONDS
   rc=0
+  rm -f "$work/auth-a" "$work/auth-b"
   err="$(DOWNLOAD_PROTO='=http' DOWNLOAD_MAX_SECS="$max" DOWNLOAD_SHA256="${WANT:-}" \
+    DOWNLOAD_GITHUB_TOKEN="${TOKEN:-}" DOWNLOAD_TOKEN_PREFIX="$base/a" \
     bash "$script" "$work/out" "$@" 2>&1)" || rc=$?
   secs=$((SECONDS - start))
   a="$(cat "$work/count-a" 2>/dev/null || echo 0)"
@@ -120,7 +124,7 @@ check "  ...naming it" says "::error::HTTP 404 from $base/b (not retried"
 run "200" "200" 4 "http://127.0.0.1:9/a" "$base/b"
 check "a refused connection is retried, then hands over to the next source" \
   test "$rc" -eq 0 -a "$b" -eq 1 -a "$secs" -le 15
-check "  ...with a warning naming it" says "::warning::no answer from http://127.0.0.1:9/a"
+check "  ...with a warning naming it" says "::warning::no usable answer from http://127.0.0.1:9/a (curl exit 7)"
 
 run "200" "200" 120 "$base/a" "$base/b"
 check "the first source that answers is the only one asked" test "$rc" -eq 0 -a "$a" -eq 1 -a "$b" -eq 0
@@ -145,6 +149,14 @@ check "  ...saying it broke off, with curl's exit" says "::warning::the transfer
 check "  ...and not as a digest mismatch" lacks "delivered a file"
 run "cut" "200" 120 "$base/a"
 check "on the last source it is the error" says "::error::the transfer from $base/a broke off after HTTP 200 (curl exit"
+
+# The token goes to the API's URL (here: /a) and to no other source.
+TOKEN="made-up-token" run "403" "200" 120 "$base/a" "$base/b"
+check "a token is sent to the API source only" \
+  test "$rc" -eq 0 -a "$(cat "$work/auth-a")" = "Bearer made-up-token" -a "$(cat "$work/auth-b")" = none
+check "  ...and never appears in the output" lacks "made-up-token"
+run "200" "200" 120 "$base/a"
+check "no token, no header" test "$(cat "$work/auth-a")" = none
 
 [ "$failures" -eq 0 ] || { echo "$failures failed"; exit 1; }
 echo "all passed"

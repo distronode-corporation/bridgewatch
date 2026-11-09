@@ -283,6 +283,10 @@ jobs:
 
       - name: Install cargo-deny
         uses: $/.github/actions/install-cargo-deny
+        # The job's own token, sent only to api.github.com by the download script:
+        # unauthenticated, a shared runner's address can be out of API requests.
+        env:
+          DOWNLOAD_GITHUB_TOKEN: ${{ github.token }}
 
       - name: cargo deny check
         run: cargo deny --locked check
@@ -437,10 +441,11 @@ jobs:
       # entry 2.0 wrote is part of the claim. Checked against a pinned digest.
       - name: Fetch the released 1.3.0 CLI
         id: released
+        # The job's own token, sent only to api.github.com by the download script:
+        # unauthenticated, a shared runner's address can be out of API requests.
         env:
           TARGET: ${{ matrix.target }}
-          # For the REST API fallback's rate limit only; the job stays contents: read.
-          GH_TOKEN: ${{ github.token }}
+          DOWNLOAD_GITHUB_TOKEN: ${{ github.token }}
         run: |
           bin="$(bash .github/scripts/fetch-released-cli.sh "$TARGET" "$RUNNER_TEMP/released")"
           echo "cli=$bin" >> "$GITHUB_OUTPUT"
