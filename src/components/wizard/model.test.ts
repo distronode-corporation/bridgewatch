@@ -88,6 +88,27 @@ describe("validateStep", () => {
 });
 
 describe("GitHub", () => {
+  it("a commit group sends group and expect and no workflow; run mode and GitLab send neither", () => {
+    expect("group" in answersOf(emptyDraft())).toBe(false);
+    const draft = emptyDraft("github");
+    draft.workflow = "ci.yml";
+    expect("group" in answersOf(draft)).toBe(false);
+    expect("expect" in answersOf(draft)).toBe(false);
+
+    draft.group = "commit";
+    draft.expect = [" ci.yml ", "", "release.yml"];
+    const answers = answersOf(draft);
+    expect(answers.group).toBe("commit");
+    expect(answers.expect).toEqual(["ci.yml", "release.yml"]);
+    expect(answers.workflow).toBeNull();
+
+    // A re-run on a commit group comes back as one, and switching to GitLab drops it.
+    const back = draftFromAnswers(answers);
+    expect(back.group).toBe("commit");
+    expect(back.expect).toEqual(["ci.yml", "release.yml"]);
+    expect(draftFromAnswers({ ...answers, provider: undefined }).group).toBe("run");
+  });
+
   it("answers carry provider and workflow only for GitHub, so a GitLab payload is unchanged", () => {
     const gitlab = answersOf(emptyDraft());
     expect("provider" in gitlab).toBe(false);
