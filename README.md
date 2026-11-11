@@ -24,7 +24,7 @@ Apache-2.0.
 
 *The 2.0 popover in the light theme, rendered from the app's frontend with sample data.*
 
-**Status:** 2.1.0, released 2026-11-09. Download it from the
+**Status:** released. The current version is on the release badge above; download it from the
 [Releases page](https://github.com/distronode-corporation/bridgewatch/releases/latest): a
 signed and notarised universal `.dmg` for macOS, a `.deb`, an `.rpm` and an
 `.AppImage` for Linux on x86_64 and arm64, and the CLI as tarballs, also on npm as
