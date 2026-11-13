@@ -449,6 +449,12 @@ describe("PopoverApp, sizing the window to its content", () => {
       return new DOMRect(0, 0, 0, 0);
     });
     restore.push(() => rect.mockRestore());
+    // jsdom (since 31) computes the user-agent margins, a `<p>`'s `1em 0`
+    // included, but loads no Tailwind. The empty-state paragraph cancels them
+    // with `m-0`, so that one utility is supplied as the webview's sheet does.
+    const utilities = document.head.appendChild(document.createElement("style"));
+    utilities.textContent = ".m-0 { margin: 0; }";
+    restore.push(() => utilities.remove());
     shell.resize = (h) => (layout.win = Math.min(Math.max(h, 80), MAX));
   }
 
