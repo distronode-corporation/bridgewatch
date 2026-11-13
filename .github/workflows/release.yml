@@ -85,7 +85,7 @@ jobs:
       body: ${{ steps.notes.outputs.body }}
       have_notes: ${{ steps.notes.outputs.have_notes }}
     steps:
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -181,7 +181,7 @@ jobs:
       CARGO_ABOUT_SHA256: 9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af
       CARGO_ABOUT_ASSET_ID: "519590057"
     steps:
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -314,7 +314,7 @@ jobs:
       VERSION: ${{ needs.guard.outputs.version }}
       CLI_TARGET: ${{ matrix.cli_target }}
     steps:
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -767,7 +767,7 @@ jobs:
       # Must equal crash::release_name() in the binaries.
       SENTRY_RELEASE: com.distronode.bridgewatch@${{ needs.guard.outputs.version }}+${{ needs.guard.outputs.build }}
     steps:
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       # Full history, for `set-commits --auto`, which reads it from git.
@@ -835,7 +835,7 @@ jobs:
       TAG: ${{ github.ref_name }}
       VERSION: ${{ needs.guard.outputs.version }}
     steps:
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       # v8 of download-artifact and v7 of upload-artifact both depend on
@@ -1016,7 +1016,7 @@ jobs:
       VERSION: ${{ needs.guard.outputs.version }}
       TARGETS: universal-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
     steps:
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
