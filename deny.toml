@@ -54,16 +54,23 @@ ignore = [
   { id = "RUSTSEC-2026-0249", reason = "smartstring 1.0.1 via rhai 1.26.1, the verdict-script engine" },
 
   # zvariant 5.9.2, zbus_names 4.3.1, zvariant_derive 5.9.2: unmaintained notices
-  # (2026-10-16), not vulnerabilities, no fixed version. Upstream merged all three into
-  # zbus 6.0.0 as `zbus::wire`, `zbus::names` and its derive macros, but every zbus 5
-  # release still pulls them. Linux only: zbus 5.13 arrives through keyring 4.2's default
-  # Secret Service store (bridgewatch-core), tauri-plugin-notification's notify-rust and
-  # tauri-plugin-opener; bridgewatch never names zbus, and none of those takes zbus 6
-  # yet. They go when all three move and the tree carries only zbus 6 (issue #25).
-  # Review by 2027-01-21. Decided by Sean on 2026-10-21 (decisions log, GitLab #2).
-  { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained (merged into zbus 6), via zbus 5.13 from keyring, notify-rust, tauri-plugin-opener; not a vulnerability; replacement tracked in #25; review by 2027-01-21" },
-  { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained (merged into zbus 6), via zbus 5.13 from keyring, notify-rust, tauri-plugin-opener; not a vulnerability; replacement tracked in #25; review by 2027-01-21" },
-  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained (merged into zbus 6), via zbus 5.13 from keyring, notify-rust, tauri-plugin-opener; not a vulnerability; replacement tracked in #25; review by 2027-01-21" },
+  # (2026-10-16), not vulnerabilities, and no fixed version: the advisories list none,
+  # because the fix is to stop using the standalone crates. Upstream merged all three
+  # into zbus 6.0.0 as `zbus::wire`, `zbus::names` and its derive macros, but every
+  # zbus 5 release still pulls them. Linux only; bridgewatch never names zbus. zbus 5.13
+  # arrives through secret-service 5 (bridgewatch-core's quiet Secret Service read, and
+  # keyring 4.2's default store, zbus-secret-service-keyring-store),
+  # tauri-plugin-notification (directly and through notify-rust) and
+  # tauri-plugin-opener. Checked 2026-11-14: notify-rust 4.19 takes zbus 6 and
+  # secret-service has a 6.0.0 release candidate on it, but
+  # zbus-secret-service-keyring-store 1.0.1, tauri-plugin-notification 2.8.1 and
+  # tauri-plugin-opener 2.7.3 (the latest of each, and the Tauri 3 alphas of both
+  # plugins) still require zbus 5, so there is no release to upgrade to yet. They go
+  # when those three move and the tree carries only zbus 6 (issue #25). Review by
+  # 2027-01-21.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained (merged into zbus 6), via zbus 5.13 from secret-service, keyring, tauri-plugin-notification, tauri-plugin-opener; not a vulnerability; no zbus 6 release of those yet; replacement tracked in #25; review by 2027-01-21" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained (merged into zbus 6), via zbus 5.13 from secret-service, keyring, tauri-plugin-notification, tauri-plugin-opener; not a vulnerability; no zbus 6 release of those yet; replacement tracked in #25; review by 2027-01-21" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained (merged into zbus 6), via zbus 5.13 from secret-service, keyring, tauri-plugin-notification, tauri-plugin-opener; not a vulnerability; no zbus 6 release of those yet; replacement tracked in #25; review by 2027-01-21" },
 ]
 
 [licenses]
