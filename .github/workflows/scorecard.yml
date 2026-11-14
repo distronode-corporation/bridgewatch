@@ -49,9 +49,10 @@ jobs:
           results_format: sarif
           publish_results: true
           # A read-only token (Administration and Metadata) so the Branch-Protection check
-          # can read the rulesets; the default job token cannot. It must exist: an empty
-          # value is passed through as is, not replaced by the action's default.
-          repo_token: ${{ secrets.SCORECARD_TOKEN }}
+          # can read the rulesets; the default job token cannot. Falls back to the default
+          # job token when the secret is not set, since an explicitly passed empty value
+          # would not be replaced by the action's own default.
+          repo_token: ${{ secrets.SCORECARD_TOKEN || github.token }}
 
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
