@@ -24,12 +24,12 @@ reason = "smartstring 1.0.1 via rhai 1.26.1, the verdict-script engine"
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0370"
-reason = "zvariant unmaintained (merged into zbus 6), via zbus 5.13 from keyring, notify-rust, tauri-plugin-opener; not a vulnerability; replacement tracked in #25; review by 2027-01-21"
+reason = "zvariant unmaintained (merged into zbus 6), via zbus 5.13 from secret-service, keyring, tauri-plugin-notification, tauri-plugin-opener; not a vulnerability; no zbus 6 release of those yet; replacement tracked in #25; review by 2027-01-21"
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0371"
-reason = "zbus_names unmaintained (merged into zbus 6), via zbus 5.13 from keyring, notify-rust, tauri-plugin-opener; not a vulnerability; replacement tracked in #25; review by 2027-01-21"
+reason = "zbus_names unmaintained (merged into zbus 6), via zbus 5.13 from secret-service, keyring, tauri-plugin-notification, tauri-plugin-opener; not a vulnerability; no zbus 6 release of those yet; replacement tracked in #25; review by 2027-01-21"
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0372"
-reason = "zvariant_derive unmaintained (merged into zbus 6), via zbus 5.13 from keyring, notify-rust, tauri-plugin-opener; not a vulnerability; replacement tracked in #25; review by 2027-01-21"
+reason = "zvariant_derive unmaintained (merged into zbus 6), via zbus 5.13 from secret-service, keyring, tauri-plugin-notification, tauri-plugin-opener; not a vulnerability; no zbus 6 release of those yet; replacement tracked in #25; review by 2027-01-21"
