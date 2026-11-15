@@ -7,13 +7,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Release workflow note: `.github/workflows/release.yml` extracts the section for a tag out
 of this file and uses it verbatim as the GitHub Release body. The extraction is
-index-based on the `## [x.y.z]` heading and stops at the next such heading or at the first
-line beginning with `[`, so keep the link definitions at the bottom and do not start a
-body line with a bracket.
+index-based on the `## [x.y.z]` heading and stops at the next such heading or at the
+link definitions (a line beginning `[x.y.z]: `), so keep the link definitions at the
+bottom. A body line that merely starts with a Markdown link does not end a section.
 
 ## [Unreleased]
 
-## [2.1.0] - 2026-11-09
+## [2.1.0] - 2026-11-15
 
 bridgewatch 2.1 is the polish set. The popover can be driven from the keyboard, and an
 optional global shortcut opens it from anywhere (X11 only on Linux). A failure you already
@@ -21,8 +21,8 @@ know about can be acknowledged, so the tray drops a level until the next new fai
 row shows its commit's title, and a wake from sleep polls at once. On GitHub, the setup
 wizard writes a commit group, one row per push with the workflows every push must start,
 and its deploy-marker suggestions look below the child pipelines. The release checks on
-real devices are now in the repository. Nothing in 2.1 changes a stored config, the
-notification ledger or `check --json`.
+real devices are now in the repository, and rustix 1.1.6 clears RUSTSEC-2026-0486.
+Nothing in 2.1 changes a stored config, the notification ledger or `check --json`.
 
 ### Added
 
@@ -41,10 +41,15 @@ notification ledger or `check --json`.
   only while there is one.
 - **Keyboard navigation in the popover, and an optional global shortcut.** ↓ and ↑ (or
   `j` and `k`) move between pipeline rows, landing on the commit link, where Enter opens
-  the pipeline; Home and End go to the first and last row and `r` refreshes. The new
-  `[ui].hotkey` (for example `CmdOrCtrl+Shift+B`, empty by default) shows or hides the
-  popover from anywhere. On Linux it works under X11 only: a Wayland session gives apps
-  no global shortcut, so there it fires only while an X11 window has the focus.
+  the pipeline; Home and End go to the first and last row and `r` refreshes. A held `r`
+  refreshes once, not once per key repeat, so it cannot raise a keychain or keyring
+  prompt over and over; held arrows keep moving. The new `[ui].hotkey` (for example
+  `CmdOrCtrl+Shift+B`, empty by default) shows or hides the popover from anywhere. Only
+  the brief focus flicker of the shortcut's own show is ignored (60 ms at most): a click
+  in another window right after it hides the popover as usual and keeps the focus there.
+  On Linux the shortcut works under X11 only: a Wayland session gives apps no global
+  shortcut, so there it fires only while an X11 window has the focus. The global shortcut
+  is not yet tested on a real macOS or X11 desktop; report problems in an issue.
 - **Commit titles on pipeline rows.** Each row in the popover shows its commit's first
   line on the sha's line. GitHub's runs carry it, so it costs nothing there; on GitLab
   it is one request per new commit (`/repository/commits/:sha`), at most three per watch
@@ -71,6 +76,32 @@ notification ledger or `check --json`.
   12 of them (each a request for its jobs and one for its bridges), labels a deeper job
   with the path to it (`trigger:release / trigger:eu`), and says when it stopped at the
   limit. A deeper child it cannot read costs only that branch.
+- **Dependency updates.** secret-service 5.2.0, the Linux Secret Service client, with
+  its upstream bug fixes; in the frontend, @lucide/svelte 1.70.0, bits-ui 2.20.6,
+  Tailwind CSS 4.3.4, Vite 8.3.6 and other patch and minor updates; for the tests only,
+  jsdom 31 and Vitest 5.1.
+
+### Fixed
+
+- **A GitHub Release carries its whole CHANGELOG section.** The release workflow's
+  notes stopped at the first line that began with a link, so a section with one was cut
+  short. It now stops only at the next version or at the link list at the end of the
+  file.
+
+### Security
+
+- rustix 1.1.6 in Cargo.lock, for RUSTSEC-2026-0486: in 1.1.5 the xattr functions could
+  mark unwritten bytes as initialised when given a zero-length buffer. rustix is not a
+  direct dependency; it arrives through other crates, among them zbus, async-io, x11rb
+  and tempfile.
+- The unmaintained notices for zbus 5's zvariant, zbus_names and zvariant_derive
+  (RUSTSEC-2026-0370, -0371 and -0372) stay accepted in `deny.toml` and
+  `osv-scanner.toml`, which now name every path that brings zbus 5 in: Tauri's
+  notification and opener plugins, notify-rust, secret-service and keyring's Secret
+  Service store. The three crates live on inside zbus 6, so the notices clear only once
+  none of these needs zbus 5; the next review is due by 2027-01-21.
+- Every CI and release job starts with StepSecurity Harden-Runner in audit mode, which
+  records each job's network calls, processes and file writes and blocks nothing.
 
 ## [2.0.0] - 2026-11-07
 
