@@ -7,9 +7,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Release workflow note: `.github/workflows/release.yml` extracts the section for a tag out
 of this file and uses it verbatim as the GitHub Release body. The extraction is
-index-based on the `## [x.y.z]` heading and stops at the next such heading or at the first
-line beginning with `[`, so keep the link definitions at the bottom and do not start a
-body line with a bracket.
+index-based on the `## [x.y.z]` heading and stops at the next such heading or at the
+link definitions (a line beginning `[x.y.z]: `), so keep the link definitions at the
+bottom. A body line that merely starts with a Markdown link does not end a section.
 
 ## [Unreleased]
 
@@ -90,8 +90,9 @@ Nothing in 2.1 changes a stored config, the notification ledger or `check --json
 ### Security
 
 - rustix 1.1.6 in Cargo.lock, for RUSTSEC-2026-0486: in 1.1.5 the xattr functions could
-  mark unwritten bytes as initialised when given a zero-length buffer. rustix arrives
-  only through other crates (async-io under zbus, x11rb and tempfile).
+  mark unwritten bytes as initialised when given a zero-length buffer. rustix is not a
+  direct dependency; it arrives through other crates, among them zbus, async-io, x11rb
+  and tempfile.
 - The unmaintained notices for zbus 5's zvariant, zbus_names and zvariant_derive
   (RUSTSEC-2026-0370, -0371 and -0372) stay accepted in `deny.toml` and
   `osv-scanner.toml`, which now name every path that brings zbus 5 in: Tauri's
