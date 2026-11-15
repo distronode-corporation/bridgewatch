@@ -48,7 +48,8 @@ Nothing in 2.1 changes a stored config, the notification ledger or `check --json
   the brief focus flicker of the shortcut's own show is ignored (60 ms at most): a click
   in another window right after it hides the popover as usual and keeps the focus there.
   On Linux the shortcut works under X11 only: a Wayland session gives apps no global
-  shortcut, so there it fires only while an X11 window has the focus.
+  shortcut, so there it fires only while an X11 window has the focus. The global shortcut
+  is not yet tested on a real macOS or X11 desktop; report problems in an issue.
 - **Commit titles on pipeline rows.** Each row in the popover shows its commit's first
   line on the sha's line. GitHub's runs carry it, so it costs nothing there; on GitLab
   it is one request per new commit (`/repository/commits/:sha`), at most three per watch
