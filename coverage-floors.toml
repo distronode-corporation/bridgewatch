@@ -15,13 +15,13 @@
 # CONTRIBUTING.md.
 
 [crates.bridgewatch-core]
-floor = 90
-reason = "The measured level, 90.46% of lines, rounded down when the gate was added."
+floor = 89
+reason = "The level CI's coverage job measured when the gate was added, 89.98% of lines, rounded down."
 
 [crates.bridgewatch-cli]
 floor = 90
-reason = "The measured level, 90.08% of lines, rounded down when the gate was added."
+reason = "The level CI's coverage job measured when the gate was added, 90.12% of lines, rounded down."
 
 [crates.bridgewatch-app]
-floor = 0
-reason = "Not yet measured: the first CI run of the coverage job sets this floor."
+floor = 61
+reason = "The level CI's coverage job measured when the gate was added, 61.31% of lines, rounded down. Most uncovered lines are in the IPC command handlers (commands.rs), the background poll loop (poller.rs), the tray, sign-in and window code, and main.rs, which need a running app."
