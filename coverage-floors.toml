@@ -1,0 +1,27 @@
+# Line coverage floors, one entry per workspace crate.
+#
+# CI's `coverage` job measures line coverage while it runs the tests, and
+# scripts/check-coverage.py fails the job when a crate is under its floor, when a
+# crate is missing from the report, or when an entry here is incomplete.
+#
+#   floor   The whole-number percentage of the crate's lines under src/ that the
+#           tests must execute. 100 means every line.
+#   reason  One line saying why the floor is where it is.
+#
+# Floors only ratchet up. A change that raises a crate's coverage raises its floor
+# in the same change, and lowering a floor needs a reason stated in review. There
+# is no exclusion list: code that CI cannot exercise stays in the measurement and
+# holds its crate's floor down where everyone can see it. See "Tests" in
+# CONTRIBUTING.md.
+
+[crates.bridgewatch-core]
+floor = 90
+reason = "The measured level, 90.46% of lines, rounded down when the gate was added."
+
+[crates.bridgewatch-cli]
+floor = 90
+reason = "The measured level, 90.08% of lines, rounded down when the gate was added."
+
+[crates.bridgewatch-app]
+floor = 0
+reason = "Not yet measured: the first CI run of the coverage job sets this floor."

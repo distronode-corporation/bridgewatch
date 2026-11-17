@@ -16,6 +16,9 @@ it appeared, not what it was.
 Expect an acknowledgement within a few working days. This is a small project with no paid
 bug bounty; what you get is credit in the changelog entry for the fix, if you want it.
 
+The whole process, from report to advisory, is in the organization's
+[GOVERNANCE.md](https://github.com/distronode-corporation/.github/blob/main/GOVERNANCE.md#vulnerability-response).
+
 ## Supported versions
 
 Only the latest release is supported. Fixes go into a new release rather than being
@@ -33,7 +36,9 @@ backported.
 
 ## Security model
 
-What bridgewatch does to protect you, so a report can say which of these it breaks.
+What bridgewatch does to protect you, so a report can say which of these it breaks. The
+threat model, the trust boundaries, the design principles and the weaknesses each control
+counters are in [SECURITY-MODEL.md](SECURITY-MODEL.md).
 
 ### Tokens are never in the config file
 
@@ -127,7 +132,8 @@ The GUI writes a daily log file, because a tray app started from Finder, the Doc
 login item has nowhere else to log: `~/Library/Logs/bridgewatch/` on macOS, and
 `$XDG_STATE_HOME/bridgewatch/` (by default `~/.local/state/bridgewatch/`) on Linux,
 named `bridgewatch.<date>.log`, seven days kept. The CLI logs to stderr only. The level
-is `warn` unless `[log].level` or `RUST_LOG` asks for more.
+is `[log].level` (by default `info`) for bridgewatch's own crates and `warn` for everything
+else, unless `RUST_LOG` is set; until a configuration has loaded it is `warn`.
 
 Nothing is redacted on the way into the file, because nothing secret is put in a log
 event in the first place: tokens are `Secret` values that print `<redacted>`, requests
