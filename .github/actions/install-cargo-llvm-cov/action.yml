@@ -1,0 +1,33 @@
+name: Install cargo-llvm-cov
+description: The pinned upstream cargo-llvm-cov release, checked against its SHA-256.
+
+# Used by ci.yml's `coverage` job. The upstream release checked against a pinned SHA-256,
+# like install-cargo-deny, so the org's action allow-list stays short. Linux x86_64
+# runners only (the musl asset).
+#
+# ⛔ No `uses:` in here, on purpose: dependabot.yml's github-actions entry scans only
+# `.github/workflows`, so a pinned action inside a local composite action would never
+# be bumped.
+runs:
+  using: composite
+  steps:
+    - name: Download, verify and install
+      shell: bash
+      # The asset id is the API's name for the same file, for the first of the two
+      # sources download-release-asset.sh tries. It changes with the version: bump the
+      # version, the digest and the id together.
+      env:
+        CARGO_LLVM_COV_VERSION: 0.9.1
+        CARGO_LLVM_COV_SHA256: 3fca950394a3c49457657c158b1619cec8dfd2647ae5b48746734c0ab969a522
+        CARGO_LLVM_COV_ASSET_ID: "547403186"
+      run: |
+        set -euo pipefail
+        name="cargo-llvm-cov-x86_64-unknown-linux-musl"
+        DOWNLOAD_SHA256="$CARGO_LLVM_COV_SHA256" \
+          bash "$GITHUB_WORKSPACE/.github/scripts/download-release-asset.sh" "$RUNNER_TEMP/llvm-cov.tgz" \
+          "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/${CARGO_LLVM_COV_ASSET_ID}" \
+          "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${CARGO_LLVM_COV_VERSION}/${name}.tar.gz"
+        echo "${CARGO_LLVM_COV_SHA256}  $RUNNER_TEMP/llvm-cov.tgz" | sha256sum -c -
+        tar xzf "$RUNNER_TEMP/llvm-cov.tgz" -C "$RUNNER_TEMP"
+        install -m 0755 "$RUNNER_TEMP/cargo-llvm-cov" "$HOME/.cargo/bin/cargo-llvm-cov"
+        cargo llvm-cov --version

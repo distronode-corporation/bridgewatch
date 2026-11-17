@@ -72,8 +72,8 @@ cargo check -p bridgewatch-app --locked
 python3 scripts/check-version.py            # Cargo.toml and both package.json agree; tauri.conf.json sets no version
 python3 src-tauri/icons/generate.py --check # tray icons match the generator
 npm run typecheck                           # tsc
-npm run check                               # svelte-check
-npx vitest run                              # frontend tests, including the settings parity test
+npm run check                               # svelte-check, failing on warnings
+npx vitest run --coverage                   # frontend tests and their coverage floors
 npm run build                               # vite build (compiles Tailwind)
 ```
 
@@ -149,21 +149,47 @@ test that reads a fixture in the same commit, and say in the commit message what
 pipeline actually did. A fixture with no stated expected verdict is a snapshot, not a
 test.
 
+## Style
+
+Rust follows the Rust style guide as `rustfmt` implements it (`rustfmt.toml`), plus
+`cargo clippy --all-targets -- -D warnings`, so a clippy lint or a compiler warning is a
+failure. TypeScript and Svelte are checked by `tsc` in `strict` mode with
+`noUnusedLocals`, `noUnusedParameters` and `noFallthroughCasesInSwitch` (`tsconfig.json`),
+and by `svelte-check --fail-on-warnings`. `.editorconfig` sets the indentation and line
+endings. CI's `rust` and `frontend` jobs run all of it, and a pull request that fails it
+does not merge.
+
+## Tests
+
+A pull request that adds or changes functionality adds tests for it to the automated
+suite, and a bug fix adds a test that fails without the fix: `cargo test` for Rust, vitest
+for the frontend. A change in behaviour comes with a test that fails without it.
+
+Coverage is measured in CI and only goes up:
+
+- Rust: line coverage per workspace crate, measured with
+  [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) in the `coverage` job and
+  held to the floors in `coverage-floors.toml` by `scripts/check-coverage.py`.
+- Frontend: `npx vitest run --coverage` fails under the floors in `vitest.config.ts`
+  (statements, branches, functions and lines over every file under `src/`).
+
+There is no exclusion list. A change that raises coverage raises the floor in the same pull
+request; lowering one needs a reason stated in review.
+
 ## Commits and pull requests
 
 Conventional Commits are not required. What is required is that the message says **why**,
 not just what. The diff already says what. A good message names the thing that was
 wrong, the evidence, and what would have caught it.
 
-A change in behaviour comes with a test that fails without it: `cargo test` for Rust, vitest
-for the frontend.
-
-Pull requests run `.github/workflows/ci.yml` and all of it must be green.
-
-## Licence of contributions
+Pull requests run `.github/workflows/ci.yml` and all of it must be green. Docs change in
+the same pull request as the behaviour they describe (see [Docs](#docs)).
 
 By contributing you agree that your contribution is licensed under the Apache License
 2.0, as section 5 of the licence provides. There is no CLA and no sign-off requirement.
+
+How a change is reviewed and accepted, and who holds which role, is in the organization's
+[GOVERNANCE.md](https://github.com/distronode-corporation/.github/blob/main/GOVERNANCE.md).
 
 ## Docs
 

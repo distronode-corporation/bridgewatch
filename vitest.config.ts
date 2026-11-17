@@ -23,5 +23,16 @@ export default defineConfig({
     css: { include: [/src\/lib\/theme\/app\.css/] },
     // Fails a test that makes Svelte warn `derived_inert`; see the file.
     setupFiles: ["./src/vitest.setup.ts"],
+    // `npx vitest run --coverage` (CI's `frontend` job) fails under these floors.
+    // Every file under src/ is measured, loaded by a test or not, the vendored
+    // shadcn-svelte components included; there is no exclusion list. The floors
+    // are the measured level rounded down, and only go up: a change that raises
+    // coverage raises them in the same pull request.
+    coverage: {
+      provider: "v8",
+      include: ["src/**"],
+      reporter: ["text-summary"],
+      thresholds: { statements: 92, branches: 83, functions: 90, lines: 94 },
+    },
   },
 });

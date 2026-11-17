@@ -90,14 +90,59 @@ npm install -g bridgewatch
 npx bridgewatch check        # or run it once without installing
 ```
 
-Every release asset carries a GitHub build provenance attestation:
-
-```
-gh attestation verify bridgewatch_2.1.0_amd64.deb --repo distronode-corporation/bridgewatch
-```
-
 The arm64 file names, the CLI tarballs, the signature checks, the licence files and what
 each package depends on are in [Installing bridgewatch](docs/install.md).
+
+### Verify a release
+
+Every release asset carries a GitHub build provenance attestation, signed through
+Sigstore by this repository's release workflow. With the [GitHub CLI](https://cli.github.com):
+
+```
+gh attestation verify bridgewatch_2.1.0_amd64.deb --repo distronode-corporation/bridgewatch \
+  --signer-workflow distronode-corporation/bridgewatch/.github/workflows/release.yml
+```
+
+Each release also carries the attestation as `bridgewatch_<version>.intoto.jsonl`, so the
+same check works offline with `--bundle bridgewatch_<version>.intoto.jsonl`. On macOS the
+app is signed with the Developer ID **Distronode Corporation (R935BA6767)** and notarised:
+
+```
+codesign --verify --deep --strict /Applications/bridgewatch.app
+spctl --assess --type execute --verbose /Applications/bridgewatch.app   # source=Notarized Developer ID
+```
+
+The npm package is published with npm provenance; `npm audit signatures` after
+`npm install -g bridgewatch` checks the registry signature and the attestation.
+
+### Uninstall
+
+First, in the app, sign out of or forget each account's token (Settings, Accounts), or
+for the CLI run `bridgewatch auth logout --account <name>`, so nothing is left in the
+credential store, and untick **Launch at login** in the tray menu. Then quit it and remove
+the package:
+
+```
+brew uninstall --cask bridgewatch          # macOS; add --zap to remove its data too
+sudo apt remove bridgewatch                # Debian, Ubuntu
+sudo dnf remove bridgewatch                # Fedora (zypper remove on openSUSE)
+rm bridgewatch_*.AppImage                  # AppImage: delete the file
+npm uninstall -g bridgewatch               # the CLI from npm
+```
+
+Removing a package leaves your config and state. To remove them too:
+
+- macOS: `~/Library/Application Support/bridgewatch` (config, ledgers, ETA),
+  `~/Library/Logs/bridgewatch` and `~/Library/LaunchAgents/bridgewatch.plist`.
+- Linux: `~/.config/bridgewatch` (config), `~/.local/state/bridgewatch` (ledgers, ETA, logs)
+  and `~/.config/autostart/bridgewatch.desktop`, or the same under `$XDG_CONFIG_HOME` and
+  `$XDG_STATE_HOME`.
+
+Credential store items are named `bridgewatch:<account>` (your own token) and
+`bridgewatch:oauth:<account>` (a sign-in). A sign-out does not revoke the grant at the
+provider; revoke it there if you want the tokens dead rather than forgotten (see
+[SECURITY.md](SECURITY.md#sign-in-tokens-oauth)). Items that belong to gh or glab are
+theirs and are left alone.
 
 ## Quick start
 
