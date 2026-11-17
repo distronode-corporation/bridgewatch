@@ -132,14 +132,15 @@ jobs:
         run: cargo check -p bridgewatch-app --locked --target x86_64-apple-darwin
 
   # Line coverage of every workspace crate, the Tauri shell included, held to
-  # coverage-floors.toml by scripts/check-coverage.py. One leg only (ubuntu-22.04):
-  # the code measured is the same on every platform, and the `rust` matrix already
-  # proves the tests pass on each. The tests are the same `cargo test` as in `rust`,
+  # coverage-floors.toml by scripts/check-coverage.py. One leg only: the code
+  # measured is the same on every platform, and the `rust` matrix already proves
+  # the tests pass on each, on the release's own images. This one is ubuntu-24.04
+  # because check-coverage.py needs Python 3.11 (tomllib) and 22.04 ships 3.10. The tests are the same `cargo test` as in `rust`,
   # with the environment `show-env` prints (a rustc wrapper that instruments the
   # workspace's own crates, and where to write the profiles). Not plain `cargo
   # llvm-cov`, which on stable Rust leaves out the doctests.
   coverage:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
