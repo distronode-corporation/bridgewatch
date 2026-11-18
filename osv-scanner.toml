@@ -1,14 +1,15 @@
 # OSV-Scanner's ignore list, read by OpenSSF Scorecard's Vulnerabilities check
 # and by `osv-scanner scan source -r .`. It MIRRORS deny.toml's [advisories]
-# `ignore`: the same six advisories, the same reasons, and the reasoning for
+# `ignore`: the same seven advisories, the same reasons, and the reasoning for
 # each (the path it arrives by and what would retire it) is written there, not
 # here. cargo-deny is the gate (CI fails on any advisory not in its list); this
-# file only stops Scorecard counting the six that list already answers.
+# file only stops Scorecard counting the seven that list already answers.
 #
 # ⛔ KEEP THE TWO LISTS IN STEP. Add an advisory here only once deny.toml
 # ignores it, and remove it here the day it leaves deny.toml. cargo-deny has no
-# expiry field, so no `ignoreUntil` is set here either; the zbus entries carry
-# their review date (2027-01-21) in the reason text in both files.
+# expiry field, so no `ignoreUntil` is set here either; the zbus entries (2027-01-21)
+# and the chrono entry (2027-02-18) carry their review date in the reason text in
+# both files.
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0429"
@@ -33,3 +34,7 @@ reason = "zbus_names unmaintained (merged into zbus 6), via zbus 5.13 from secre
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0372"
 reason = "zvariant_derive unmaintained (merged into zbus 6), via zbus 5.13 from secret-service, keyring, tauri-plugin-notification, tauri-plugin-opener; not a vulnerability; no zbus 6 release of those yet; replacement tracked in #25; review by 2027-01-21"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+reason = "chrono unmaintained, all versions, no fixed release; a direct dependency of bridgewatch-core and bridgewatch-app; not a vulnerability, no known security issue; migration to jiff or time tracked in #106; review by 2027-02-18"

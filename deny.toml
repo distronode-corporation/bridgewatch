@@ -14,9 +14,10 @@ all-features = true
 [advisories]
 # Unmaintained notices for the WHOLE tree, same as unsound below. The tree carries five
 # abandoned transitive crates (proc-macro-error, smartstring, zvariant, zbus_names,
-# zvariant_derive) that we cannot replace yet; each is listed by id in `ignore` with the
-# path it arrives by and what would retire it, so a SIXTH abandoned crate anywhere in the
-# tree fails the job and becomes a decision. (Five unic-* crates were here too, through
+# zvariant_derive) that we cannot replace yet, and one direct one, chrono, kept until it is
+# migrated (#106); each is listed by id in `ignore` with the path it arrives by and what
+# would retire it, so a SEVENTH abandoned crate anywhere in the tree fails the job and
+# becomes a decision. (Five unic-* crates were here too, through
 # urlpattern 0.3.0 and tauri-utils 2.9; tauri-utils 2.10 moved to urlpattern 0.6, which
 # has none, and they left.)
 # ⚠️ This was "workspace" until 2026-09-18, which tolerated those seven by scope and
@@ -25,7 +26,7 @@ all-features = true
 # below printed `warning[advisory-not-detected]` on every run, i.e. they were dead lines.
 # Under "all" the same entries are what makes the check pass (exit 0, no warnings).
 # OpenSSF Scorecard reads OSV through OSV-Scanner, not this file, so osv-scanner.toml
-# MIRRORS the six entries below (same ids, same reasons) for its Vulnerabilities check.
+# MIRRORS the seven entries below (same ids, same reasons) for its Vulnerabilities check.
 # ⛔ Keep the two lists in step: an entry added or removed here is added or removed there
 # in the same change.
 unmaintained = "all"
@@ -71,6 +72,12 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained (merged into zbus 6), via zbus 5.13 from secret-service, keyring, tauri-plugin-notification, tauri-plugin-opener; not a vulnerability; no zbus 6 release of those yet; replacement tracked in #25; review by 2027-01-21" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained (merged into zbus 6), via zbus 5.13 from secret-service, keyring, tauri-plugin-notification, tauri-plugin-opener; not a vulnerability; no zbus 6 release of those yet; replacement tracked in #25; review by 2027-01-21" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained (merged into zbus 6), via zbus 5.13 from secret-service, keyring, tauri-plugin-notification, tauri-plugin-opener; not a vulnerability; no zbus 6 release of those yet; replacement tracked in #25; review by 2027-01-21" },
+  # chrono 0.4.45 unmaintained (RUSTSEC-2026-0543, 2026-11-18), all versions, no fixed
+  # release. Unlike the entries above it is a DIRECT dependency, of bridgewatch-core and
+  # bridgewatch-app, for API timestamps, ages and the saved state. An unmaintained notice,
+  # not a vulnerability. Tolerated now, migrated later (to jiff or time, as the advisory
+  # recommends): issue #106. Review by 2027-02-18.
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, all versions, no fixed release; a direct dependency of bridgewatch-core and bridgewatch-app; not a vulnerability, no known security issue; migration to jiff or time tracked in #106; review by 2027-02-18" },
 ]
 
 [licenses]
