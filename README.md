@@ -20,9 +20,9 @@ Actions.**
 *The 2.0 popover in the light theme, rendered from the app's frontend with sample data.*
 
 ```
-brew install --cask distronode-corporation/tap/bridgewatch   # macOS; Linux packages below
-open -a bridgewatch                                          # the setup wizard signs you in
-npx bridgewatch wait                                         # in a watched repo: exit with HEAD's verdict
+brew install --cask distronode-corporation/tap/bridgewatch   # macOS; Linux below
+open -a bridgewatch      # the setup wizard signs you in
+npx bridgewatch wait     # after a push: exit with HEAD's verdict
 ```
 
 Made by [Distronode](https://distronode.com) · more open source at
