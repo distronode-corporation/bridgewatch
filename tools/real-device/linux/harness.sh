@@ -43,7 +43,8 @@ inside() {
   exec env -i PATH="$H/bin:/usr/bin:/bin" HOME="$BWH_RUN/home" XDG_RUNTIME_DIR="$BWH_RUN/run" \
     XDG_CONFIG_HOME="$BWH_RUN/home/.config" XDG_DATA_HOME="$BWH_RUN/home/.local/share" \
     XDG_CACHE_HOME="$BWH_RUN/home/.cache" TMPDIR="$BWH_RUN/tmp" \
-    DISPLAY=":$BWH_DISPLAY" GDK_BACKEND=x11 DBUS_SESSION_BUS_ADDRESS="$BWH_BUS" \
+    DISPLAY=":$BWH_DISPLAY" XAUTHORITY="$BWH_RUN/xauthority" GDK_BACKEND=x11 \
+    DBUS_SESSION_BUS_ADDRESS="$BWH_BUS" \
     BWH_RUN="$BWH_RUN" BWH_LOG="$BWH_RUN/log" LANG=C.UTF-8 WEBKIT_DISABLE_COMPOSITING_MODE=1 "$@"
 }
 
@@ -59,8 +60,8 @@ check_display() {
     die "the session's Xvfb (pid $BWH_XVFB) is not running"
   ss -xlpH 2>/dev/null | awk -v p="/tmp/.X11-unix/X$BWH_DISPLAY" '$5 == p' |
     grep -q "pid=$BWH_XVFB," || die "display :$BWH_DISPLAY is not served by this session's Xvfb"
-  xwininfo -root -tree -display ":$BWH_DISPLAY" >"$tree" || die "display :$BWH_DISPLAY is not reachable"
-  read -r w h < <(xwininfo -root -display ":$BWH_DISPLAY" | awk '/Width:/{w=$2} /Height:/{h=$2} END{print w, h}')
+  XAUTHORITY="$BWH_RUN/xauthority" xwininfo -root -tree -display ":$BWH_DISPLAY" >"$tree" || die "display :$BWH_DISPLAY is not reachable"
+  read -r w h < <(XAUTHORITY="$BWH_RUN/xauthority" xwininfo -root -display ":$BWH_DISPLAY" | awk '/Width:/{w=$2} /Height:/{h=$2} END{print w, h}')
   [ "${w}x${h}" = "$BWH_SCREEN" ] || die "display :$BWH_DISPLAY is ${w}x${h}, not this session's $BWH_SCREEN"
 }
 
@@ -68,7 +69,7 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
 check)
   missing=0
-  for t in Xvfb xwininfo ffmpeg ss gdbus dbus-run-session dbus-monitor gnome-keyring-daemon secret-tool openssl python3; do
+  for t in Xvfb xauth xwininfo ffmpeg ss gdbus dbus-run-session dbus-monitor gnome-keyring-daemon secret-tool openssl python3; do
     if command -v "$t" >/dev/null; then echo "ok       $t"; else echo "MISSING  $t"; missing=1; fi
   done
   if python3 -c 'import gi; gi.require_version("Gio", "2.0"); from gi.repository import Gio' 2>/dev/null; then
@@ -149,9 +150,9 @@ shot)
   check_display "$BWH_RUN/log/tree-$name.txt"
   out="$BWH_RUN/shots/$name.png"
   if [ $# -ge 5 ]; then
-    ffmpeg -loglevel error -y -f x11grab -video_size "$4x$5" -i ":$BWH_DISPLAY+$2,$3" -frames:v 1 "$out"
+    XAUTHORITY="$BWH_RUN/xauthority" ffmpeg -loglevel error -y -f x11grab -video_size "$4x$5" -i ":$BWH_DISPLAY+$2,$3" -frames:v 1 "$out"
   else
-    ffmpeg -loglevel error -y -f x11grab -video_size "$BWH_SCREEN" -i ":$BWH_DISPLAY" -frames:v 1 "$out"
+    XAUTHORITY="$BWH_RUN/xauthority" ffmpeg -loglevel error -y -f x11grab -video_size "$BWH_SCREEN" -i ":$BWH_DISPLAY" -frames:v 1 "$out"
   fi
   echo "$out"
   ;;

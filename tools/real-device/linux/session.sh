@@ -6,22 +6,37 @@ set -u
 R="$BWH_RUN"; L="$R/log"
 pids=()
 
+# Only a client holding this run's random cookie may connect: without an -auth file
+# Xvfb admits any local connection, from any user, through its socket in /tmp. The
+# server takes the cookie from the file whatever display entry it sits under, so the
+# entry for the real display number is added once Xvfb has picked it. The entries go to
+# xauth on stdin from the printf builtin, so the cookie is never in any process's argv.
+umask 077
+X="$R/xauthority"; cookie="$(openssl rand -hex 16)"; : >"$X"
+printf 'add :0 MIT-MAGIC-COOKIE-1 %s\n' "$cookie" | xauth -q -f "$X" source -
 # Xvfb picks a free display number itself (-displayfd) and listens on no TCP port.
-Xvfb -displayfd 3 -screen 0 "${BWH_SCREEN}x24" -nolisten tcp 3>"$R/display" >"$L/xvfb.log" 2>&1 &
+Xvfb -displayfd 3 -auth "$X" -screen 0 "${BWH_SCREEN}x24" -nolisten tcp 3>"$R/display" >"$L/xvfb.log" 2>&1 &
 xvfb=$!; pids+=("$xvfb")
 for _ in $(seq 100); do [ -s "$R/display" ] && break; sleep 0.1; done
 display="$(tr -d '[:space:]' <"$R/display")"
 [ -n "$display" ] || { echo "Xvfb did not report a display" >&2; kill "$xvfb"; exit 1; }
+printf 'add :%s MIT-MAGIC-COOKIE-1 %s\n' "$display" "$cookie" | xauth -q -f "$X" source -
+unset cookie
+# Fail closed: a client without the cookie must be refused, and one with it admitted.
+if XAUTHORITY=/dev/null xwininfo -root -display ":$display" >/dev/null 2>&1; then
+  echo "Xvfb on :$display admits a client without the cookie" >&2; kill "$xvfb"; exit 1
+fi
+XAUTHORITY="$X" xwininfo -root -display ":$display" >/dev/null 2>&1 ||
+  { echo "Xvfb on :$display refuses this run's cookie" >&2; kill "$xvfb"; exit 1; }
 
 # Services this bus activates (the keyring's prompter) start on the private display,
 # never on one inherited from anywhere else.
 gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
   --method org.freedesktop.DBus.UpdateActivationEnvironment \
-  "{'DISPLAY': ':$display', 'GDK_BACKEND': 'x11'}" >/dev/null
+  "{'DISPLAY': ':$display', 'XAUTHORITY': '$X', 'GDK_BACKEND': 'x11'}" >/dev/null
 
 # A throwaway login keyring, created and unlocked with a random password that only this
 # run directory holds (keyring.py unlocks it again after a lock).
-umask 077
 openssl rand -hex 16 | tr -d '\n' >"$R/kcpass"
 gnome-keyring-daemon --foreground --unlock --components=secrets <"$R/kcpass" >"$L/gk.out" 2>"$L/gk.err" &
 pids+=($!)
@@ -33,7 +48,7 @@ done
 
 # Stand-in notification server and StatusNotifierWatcher (desktopd.py), and a log of
 # every keyring prompt on this bus.
-DISPLAY=":$display" python3 -I "$BWH_H/desktopd.py" "$L" >"$L/desktopd.err" 2>&1 & pids+=($!)
+DISPLAY=":$display" XAUTHORITY="$X" python3 -I "$BWH_H/desktopd.py" "$L" >"$L/desktopd.err" 2>&1 & pids+=($!)
 dbus-monitor "interface='org.freedesktop.Secret.Prompt'" \
   "interface='org.freedesktop.Secret.Service',member='Unlock'" \
   "interface='org.gnome.keyring.SystemPrompter'" "interface='org.gnome.keyring.internal.Prompter'" \
