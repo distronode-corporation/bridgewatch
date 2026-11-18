@@ -14,7 +14,8 @@ name: CI
 # hardened-runtime binary still reads the keychain. `npm-rehearsal` then runs the
 # release's own packaging scripts on the three binaries: the tarballs, the staged npm
 # package, the pack checks and `npm publish --dry-run`. `launcher` runs the npm
-# launcher's tests on every Node the package admits.
+# launcher's tests on every Node the package admits. `repeatable` builds the Linux CLI
+# and the frontend twice each and fails if the two builds differ by a byte.
 #
 # `installers` is off unless asked for: a manual run with `build_installers` ticked
 # builds the seven unsigned app bundles a release would ship (not the CLI tarballs,
@@ -579,6 +580,84 @@ jobs:
             exit 1
           fi
           echo "$reported"
+
+  # The build is repeatable: the Linux CLI and the frontend bundle, each built twice
+  # from the same commit, must come out the same bytes. The CLI goes through the same
+  # build-cli action release.yml uses, so this is the binary a release ships, and the
+  # second build starts from `cargo clean` (no rust-cache, and cargo's release profile
+  # is not incremental), so nothing is reused from the first. The frontend's dist/ is
+  # what the app embeds. The app bundles (.dmg, .deb, .rpm, .AppImage) are not
+  # compared: they carry timestamps and, on macOS, a signature and notarisation
+  # ticket, so they are not claimed to be bit-for-bit reproducible.
+  repeatable:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal -c rustfmt -c clippy
+          rustc --version
+
+      - name: Read the CLI version
+        id: version
+        run: |
+          version="$(cargo metadata --locked --no-deps --format-version 1 \
+            | python3 -c 'import json,sys;print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="bridgewatch-cli"))')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build the CLI (first)
+        uses: $/.github/actions/build-cli
+        with:
+          target: x86_64-unknown-linux-gnu
+          version: ${{ steps.version.outputs.version }}
+
+      - name: Keep the first CLI and clean
+        run: |
+          mkdir -p "$RUNNER_TEMP/first"
+          cp cli-out/bridgewatch "$RUNNER_TEMP/first/bridgewatch"
+          cargo clean
+
+      - name: Build the CLI (second)
+        uses: $/.github/actions/build-cli
+        with:
+          target: x86_64-unknown-linux-gnu
+          version: ${{ steps.version.outputs.version }}
+
+      - name: The two CLI builds are the same bytes
+        run: |
+          sha256sum "$RUNNER_TEMP/first/bridgewatch" cli-out/bridgewatch
+          if ! cmp -s "$RUNNER_TEMP/first/bridgewatch" cli-out/bridgewatch; then
+            echo "::error::two builds of the CLI from the same commit differ"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - run: npm ci
+
+      - name: The two frontend builds are the same bytes
+        run: |
+          npm run build
+          (cd dist && find . -type f -print0 | sort -z | xargs -0 sha256sum) > "$RUNNER_TEMP/first.sha256"
+          rm -rf dist
+          npm run build
+          (cd dist && find . -type f -print0 | sort -z | xargs -0 sha256sum) > "$RUNNER_TEMP/second.sha256"
+          echo "$(wc -l < "$RUNNER_TEMP/first.sha256") files in dist/"
+          if ! diff -u "$RUNNER_TEMP/first.sha256" "$RUNNER_TEMP/second.sha256"; then
+            echo "::error::two builds of the frontend from the same commit differ"
+            exit 1
+          fi
 
   # The release's CLI packaging and npm steps, rehearsed on every push and pull
   # request with the SAME scripts release.yml runs (.github/scripts/package-cli.sh,
