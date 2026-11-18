@@ -9,17 +9,18 @@ pids=()
 # Only a client holding this run's random cookie may connect: without an -auth file
 # Xvfb admits any local connection, from any user, through its socket in /tmp. The
 # server takes the cookie from the file whatever display entry it sits under, so the
-# entry for the real display number is added once Xvfb has picked it.
+# entry for the real display number is added once Xvfb has picked it. The entries go to
+# xauth on stdin from the printf builtin, so the cookie is never in any process's argv.
 umask 077
 X="$R/xauthority"; cookie="$(openssl rand -hex 16)"; : >"$X"
-xauth -q -f "$X" add :0 MIT-MAGIC-COOKIE-1 "$cookie"
+printf 'add :0 MIT-MAGIC-COOKIE-1 %s\n' "$cookie" | xauth -q -f "$X" source -
 # Xvfb picks a free display number itself (-displayfd) and listens on no TCP port.
 Xvfb -displayfd 3 -auth "$X" -screen 0 "${BWH_SCREEN}x24" -nolisten tcp 3>"$R/display" >"$L/xvfb.log" 2>&1 &
 xvfb=$!; pids+=("$xvfb")
 for _ in $(seq 100); do [ -s "$R/display" ] && break; sleep 0.1; done
 display="$(tr -d '[:space:]' <"$R/display")"
 [ -n "$display" ] || { echo "Xvfb did not report a display" >&2; kill "$xvfb"; exit 1; }
-xauth -q -f "$X" add ":$display" MIT-MAGIC-COOKIE-1 "$cookie"
+printf 'add :%s MIT-MAGIC-COOKIE-1 %s\n' "$display" "$cookie" | xauth -q -f "$X" source -
 unset cookie
 # Fail closed: a client without the cookie must be refused, and one with it admitted.
 if XAUTHORITY=/dev/null xwininfo -root -display ":$display" >/dev/null 2>&1; then
