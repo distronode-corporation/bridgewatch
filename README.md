@@ -104,7 +104,9 @@ gh attestation verify bridgewatch_2.1.0_amd64.deb --repo distronode-corporation/
 ```
 
 Each release also carries the attestation as `bridgewatch_<version>.intoto.jsonl`, so the
-same check works offline with `--bundle bridgewatch_<version>.intoto.jsonl`. On macOS the
+same check works without GitHub's attestation API with
+`--bundle bridgewatch_<version>.intoto.jsonl` ([Verifying a release](docs/verifying-releases.md)
+covers a machine with no network). On macOS the
 app is signed with the Developer ID **Distronode Corporation (R935BA6767)** and notarised:
 
 ```
@@ -257,6 +259,13 @@ What that adds up to:
 - [CLI](docs/cli.md): every command and the exit codes.
 - [Build from source](docs/building.md).
 - [Limitations](docs/limitations.md).
+- [Verifying a release](docs/verifying-releases.md): what each asset is signed with and
+  how to check it, and what is not signed.
+- [Repeatable builds](docs/reproducible-builds.md): which builds give the same bytes twice,
+  and how to check.
+- [GOVERNANCE.md](GOVERNANCE.md): who decides, how a change and a release get in, and how the
+  project continues without any one person. [ROADMAP.md](ROADMAP.md): what is planned, and
+  what is not.
 
 Sections that used to live on this page keep their links:
 

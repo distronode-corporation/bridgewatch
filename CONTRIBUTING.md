@@ -151,13 +151,25 @@ test.
 
 ## Style
 
-Rust follows the Rust style guide as `rustfmt` implements it (`rustfmt.toml`), plus
-`cargo clippy --all-targets -- -D warnings`, so a clippy lint or a compiler warning is a
-failure. TypeScript and Svelte are checked by `tsc` in `strict` mode with
-`noUnusedLocals`, `noUnusedParameters` and `noFallthroughCasesInSwitch` (`tsconfig.json`),
-and by `svelte-check --fail-on-warnings`. `.editorconfig` sets the indentation and line
-endings. CI's `rust` and `frontend` jobs run all of it, and a pull request that fails it
-does not merge.
+Contributions follow these style guides. CI enforces every check named below, so a pull
+request that fails one does not merge:
+
+- **Rust** follows the [Rust Style Guide](https://doc.rust-lang.org/style-guide/) as `rustfmt`
+  implements it, with the settings in `rustfmt.toml` (edition 2024, lines up to 100 columns,
+  field init shorthand), checked by `cargo fmt --all --check`. On top of that, Clippy's
+  default lints apply with every warning an error (`cargo clippy --workspace --all-targets
+  -- -D warnings`), and so does every compiler warning. An exception is written at the place
+  it applies, as an `#[allow(clippy::...)]` on the one item, never crate-wide; there is one
+  today. Every crate is `#![forbid(unsafe_code)]`.
+- **TypeScript and Svelte** are checked by `tsc` in `strict` mode with `noUnusedLocals`,
+  `noUnusedParameters` and `noFallthroughCasesInSwitch` (`tsconfig.json`), and by
+  `svelte-check --fail-on-warnings`, which includes the Svelte compiler's accessibility
+  warnings. No formatter is enforced for them; follow the layout of the surrounding code.
+- **Every file** follows `.editorconfig`: UTF-8, LF line endings, a final newline, spaces,
+  four for Rust and two for TypeScript, Svelte and the config formats. CI does not check
+  it; editors that read `.editorconfig` apply it as you type.
+
+CI's `rust` and `frontend` jobs run the checks.
 
 ## Tests
 
@@ -188,8 +200,8 @@ the same pull request as the behaviour they describe (see [Docs](#docs)).
 By contributing you agree that your contribution is licensed under the Apache License
 2.0, as section 5 of the licence provides. There is no CLA and no sign-off requirement.
 
-How a change is reviewed and accepted, and who holds which role, is in the organization's
-[GOVERNANCE.md](https://github.com/distronode-corporation/.github/blob/main/GOVERNANCE.md).
+How a change is reviewed and accepted, who holds which role, and how a release is made is
+in [GOVERNANCE.md](GOVERNANCE.md).
 
 ## Docs
 
