@@ -587,6 +587,12 @@ describe("Popover, degraded cases", () => {
       expect([setup, fixed]).toEqual([1, 0]);
       expect(host.textContent).toContain("setup wizard");
       expect(host.textContent).not.toContain("until the problem above is fixed");
+      // The header says so too, without "unknown" and without an age.
+      const headline = host.querySelector("[data-icon-state]")!;
+      expect(headline.getAttribute("data-icon-state")).toBe(snapshot.icon_state);
+      expect(headline.textContent?.trim()).toBe("Not set up yet");
+      expect(host.querySelector("header")?.textContent).not.toContain("·");
+      expect(host.querySelector("header")?.textContent).not.toContain("ago");
     } finally {
       void unmount(component);
       host.remove();

@@ -101,6 +101,10 @@
 
   const tone = $derived(stateTone(snapshot.icon_state));
 
+  // A first launch with nothing watched: "unknown · 7m ago" would read as a
+  // fault. The header says what is true instead, and the age is left out.
+  const unset = $derived(ordered.length === 0 && isFirstRun(status));
+
   /** The Debug pane, opened from the footer and shown just above it. */
   let debugOpen = $state(false);
 </script>
@@ -116,10 +120,12 @@
     <span class={["size-2.5 shrink-0 rounded-full", TONE_DOT[tone]]} aria-hidden="true"></span>
     <span class="flex min-w-0 items-baseline gap-1">
       <span class={["headline truncate font-semibold", TONE_TEXT[tone]]} data-icon-state={snapshot.icon_state}>
-        {stateWord(snapshot.icon_state)}
+        {unset ? "Not set up yet" : stateWord(snapshot.icon_state)}
       </span>
-      <span class="text-muted-foreground text-ui-meta shrink-0" aria-hidden="true">·</span>
-      <UpdatedAgo at={snapshot.last_poll} {now} short class="shrink-0 whitespace-nowrap" />
+      {#if !unset}
+        <span class="text-muted-foreground text-ui-meta shrink-0" aria-hidden="true">·</span>
+        <UpdatedAgo at={snapshot.last_poll} {now} short class="shrink-0 whitespace-nowrap" />
+      {/if}
     </span>
     <span class="flex-1"></span>
     <Button variant="ghost" size="icon-xs" onclick={onrefresh} title="Poll now" aria-label="Refresh" data-action="refresh">
@@ -160,7 +166,7 @@
        debug pane off the bottom of the window instead of scrolling, and the
        height this component reports back is never the one it needs. -->
   <div class="scroll min-h-0 flex-1 overflow-y-auto pb-3" data-scroll>
-    {#if ordered.length === 0 && isFirstRun(status)}
+    {#if unset}
       <p class="empty text-muted-foreground m-0 px-3 py-4">Nothing is watched yet. The setup wizard gets the basics in place.</p>
     {:else if ordered.length === 0 && hasErrors}
       <!-- ⛔ Not "No watches configured". A configuration that fails to load
