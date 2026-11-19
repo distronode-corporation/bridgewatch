@@ -80,10 +80,11 @@ everything from that tag. The release manager's part:
    `package.json` and `packaging/npm/package.json`; `python3 scripts/check-version.py`
    checks they agree) and fills in the version's section of [CHANGELOG.md](CHANGELOG.md),
    which becomes the GitHub Release text.
-2. The release manager runs the checks in
-   [tools/real-device/CHECKS.md](tools/real-device/CHECKS.md) on Linux and macOS against the
-   commit that will be tagged, recording each result as that file asks.
-3. Once that pull request is merged, the release manager pushes the tag on the merged commit.
+2. Once that pull request is merged (as a squash or rebase, so as a new commit on `main`), the
+   release manager runs the checks in
+   [tools/real-device/CHECKS.md](tools/real-device/CHECKS.md) on Linux and macOS against that
+   merged commit, the one that will be tagged, recording each result as that file asks.
+3. The release manager pushes the tag on that commit.
 4. The workflow refuses a tag whose commit is not on `main` or whose version does not match
    the three files, builds every asset, signs and notarises the macOS ones, attaches a build
    provenance attestation over all of them and checks that the attestations verify. Only then
