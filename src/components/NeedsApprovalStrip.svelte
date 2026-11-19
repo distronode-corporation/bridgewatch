@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from "$lib/components/ui/button/index.js";
   interface Props {
     /** `Status.needsApproval`: absent or empty hides the strip. */
     accounts?: string[];
@@ -26,10 +27,12 @@
   >
     <div class="line break-words" data-line>{sentence}</div>
     {#if onretry}
-      <button
-        class="retry mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      <Button
+        size="xs"
+        variant="outline"
+        class="retry mt-1 self-start"
         onclick={onretry}
-        data-action="approval-retry">Retry</button
+        data-action="approval-retry">Retry</Button
       >
     {/if}
   </div>

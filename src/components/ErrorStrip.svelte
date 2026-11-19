@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from "$lib/components/ui/button/index.js";
   import { configErrorLines, errorLines, isFirstRun } from "../lib/format";
   import type { Status } from "../lib/types";
 
@@ -48,14 +49,18 @@
       <div class="line break-words" data-line>{line}</div>
     {/each}
     {#if firstRun && onsetup}
-      <button
-        class="setup mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onclick={onsetup}>Set up bridgewatch…</button
+      <Button
+        size="xs"
+        variant="outline"
+        class="setup mt-1 self-start"
+        onclick={onsetup}>Set up bridgewatch…</Button
       >
     {:else if configBroken && onfix}
-      <button
-        class="fix mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onclick={onfix}>Fix in Settings</button
+      <Button
+        size="xs"
+        variant="outline"
+        class="fix mt-1 self-start"
+        onclick={onfix}>Fix in Settings</Button
       >
     {/if}
   </div>
