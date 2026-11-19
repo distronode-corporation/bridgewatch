@@ -49,12 +49,12 @@
     {/each}
     {#if firstRun && onsetup}
       <button
-        class="setup mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        class="setup mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onclick={onsetup}>Set up bridgewatch…</button
       >
     {:else if configBroken && onfix}
       <button
-        class="fix mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        class="fix mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onclick={onfix}>Fix in Settings</button
       >
     {/if}

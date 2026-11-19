@@ -51,7 +51,7 @@
 				{#if done && onSelect}
 					<button
 						type="button"
-						class="focus-visible:ring-ring/30 flex shrink-0 items-center rounded-full outline-none focus-visible:ring-3"
+						class="focus-visible:ring-ring flex shrink-0 items-center rounded-full outline-none focus-visible:ring-2"
 						onclick={() => onSelect(index)}
 						aria-label={`${step.label}, completed. Go back to this step`}
 					>

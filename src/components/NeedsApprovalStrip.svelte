@@ -27,7 +27,7 @@
     <div class="line break-words" data-line>{sentence}</div>
     {#if onretry}
       <button
-        class="retry mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        class="retry mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onclick={onretry}
         data-action="approval-retry">Retry</button
       >

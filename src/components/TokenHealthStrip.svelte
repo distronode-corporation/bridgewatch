@@ -36,7 +36,7 @@
     {/each}
     {#if onsettings}
       <button
-        class="settings mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        class="settings mt-0.5 self-start text-[11px] font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onclick={onsettings}
         data-action="token-settings">Open Settings…</button
       >

@@ -25,7 +25,7 @@
   <a
     {href}
     {title}
-    class={cn("cursor-pointer rounded-sm underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50", klass)}
+    class={cn("cursor-pointer rounded-sm underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring", klass)}
     onclick={open}>{@render children?.()}</a>
 {:else}
   <span {title} class={klass}>{@render children?.()}</span>

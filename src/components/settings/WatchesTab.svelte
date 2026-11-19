@@ -84,7 +84,7 @@
   <section class="watch mb-4" aria-label={`Watch ${id || "(no id)"}`}>
     <header class="bg-muted/60 flex items-center gap-2 rounded-xl px-2 py-1.5">
       <button
-        class="disclosure text-muted-foreground hover:text-foreground rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        class="disclosure text-muted-foreground hover:text-foreground rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-expanded={open === id}
         aria-label={open === id ? "collapse" : "expand"}
         onclick={() => (openId = open === id ? null : id)}

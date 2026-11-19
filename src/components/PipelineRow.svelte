@@ -112,7 +112,7 @@
 <!-- `tabindex="-1"`: focusable by the popover's ↑ and ↓ (lib/keyboard.ts) when
      the row has no link to land on, never a Tab stop of its own. -->
 <div
-  class="row border-border/60 focus-visible:ring-ring/50 mx-3 flex flex-col gap-2 border-b py-2 outline-none last:border-b-0 focus-visible:ring-2"
+  class="row border-border/60 focus-visible:ring-ring mx-3 flex flex-col gap-2 border-b py-2 outline-none last:border-b-0 focus-visible:ring-2"
   data-state={row.state}
   tabindex="-1"
 >

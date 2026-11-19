@@ -313,7 +313,7 @@
           aria-selected={pane === p.id}
           tabindex={pane === p.id ? 0 : -1}
           class={[
-            "tab text-ui-body rounded-lg px-2.5 py-1.5 text-left font-medium whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+            "tab text-ui-body rounded-lg px-2.5 py-1.5 text-left font-medium whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring",
             pane === p.id
               ? "active bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:bg-muted hover:text-foreground",

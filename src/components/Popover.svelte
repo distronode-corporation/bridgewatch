@@ -191,7 +191,7 @@
   <footer class="border-border text-ui-meta flex items-center gap-2 border-t py-1 pr-2 pl-1.5" data-slot="popover-footer">
     <button
       type="button"
-      class="debug-toggle text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex h-6 items-center gap-0.5 rounded-md px-1.5 outline-none focus-visible:ring-2"
+      class="debug-toggle text-muted-foreground hover:text-foreground focus-visible:ring-ring flex h-6 items-center gap-0.5 rounded-md px-1.5 outline-none focus-visible:ring-2"
       aria-expanded={debugOpen}
       aria-controls="popover-debug"
       onclick={() => (debugOpen = !debugOpen)}
