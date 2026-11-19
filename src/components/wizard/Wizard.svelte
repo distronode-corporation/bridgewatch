@@ -440,6 +440,11 @@
   const shownRecent = $derived(recentKey === connKey ? recent : null);
   const shownRecentLoading = $derived(recentLoading && recentAsked === connKey);
   const shownRecentError = $derived(recentAsked === connKey ? recentError : null);
+  // While the one-click list is offered, its button is the primary action and
+  // Next (the step-by-step path) steps down to outline: one filled button.
+  const quickOffered = $derived(
+    step.id === "account" && shownRecent?.mode === "projects" && shownRecent.projects.length > 0,
+  );
 
   /**
    * The one-click list, once per connection: a sign-in or a passed Test
@@ -978,7 +983,9 @@
           {saving ? "Saving…" : "Finish"}
         </Button>
       {:else}
-        <Button type="submit" size="sm" disabled={busy} data-action="next">Next</Button>
+        <Button type="submit" size="sm" variant={quickOffered ? "outline" : "default"} disabled={busy} data-action="next"
+          >Next</Button
+        >
       {/if}
     </div>
   </form>

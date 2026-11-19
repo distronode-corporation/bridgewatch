@@ -196,6 +196,17 @@ describe("the one-click list", () => {
     expect(text('[data-action="quick-setup"]')).toBe("Watch 3 projects");
   });
 
+  it("leaves one filled button: Next steps down to outline while the list is offered", async () => {
+    const api = fakeApi();
+    await start(api);
+    const filled = (sel: string) => q(sel)!.classList.contains("bg-primary");
+    expect(filled('[data-action="next"]')).toBe(true);
+    await type("#wizard-secret", "pasted-secret-value");
+    await click('[data-action="test-connection"]');
+    expect(filled('[data-action="quick-setup"]')).toBe(true);
+    expect(filled('[data-action="next"]')).toBe(false);
+  });
+
   it("is offered right after a sign-in, with no Test connection", async () => {
     const api = fakeApi();
     await start(api, fakeOAuth());
