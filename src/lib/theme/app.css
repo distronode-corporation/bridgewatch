@@ -184,7 +184,7 @@ html[data-platform="linux"] {
   --card-foreground: #2e2e32;
   --popover: #ffffff; /* popover_bg_color */
   --popover-foreground: #2e2e32;
-  --primary: #3584e4; /* accent_bg_color, Adwaita blue 3 */
+  --primary: #1c71d8; /* Adwaita blue 4: white text on it reaches 4.5:1 */
   --primary-foreground: #ffffff;
   --secondary: #ebebed; /* headerbar / button bg */
   --secondary-foreground: #2e2e32;
@@ -210,7 +210,7 @@ html[data-platform="linux"] {
     --card-foreground: #ffffff;
     --popover: #36363a;
     --popover-foreground: #ffffff;
-    --primary: #3584e4;
+    --primary: #1c71d8;
     --primary-foreground: #ffffff;
     --secondary: #36363a;
     --secondary-foreground: #ffffff;
