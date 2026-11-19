@@ -84,6 +84,10 @@ everything from that tag. The release manager's part:
    release manager runs the checks in
    [tools/real-device/CHECKS.md](tools/real-device/CHECKS.md) on Linux and macOS against that
    merged commit, the one that will be tagged, recording each result as that file asks.
+   Nothing enforces their results: the release workflow does not read them. Whether a FAIL
+   holds the tag back is the release manager's decision, like any other decision here; after
+   a fix, the fix is merged and the checks run again on the new commit, which is the one
+   tagged.
 3. The release manager pushes the tag on that commit.
 4. The workflow refuses a tag whose commit is not on `main` or whose version does not match
    the three files, builds every asset, signs and notarises the macOS ones, attaches a build
