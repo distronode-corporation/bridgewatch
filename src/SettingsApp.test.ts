@@ -804,6 +804,24 @@ describe("SettingsApp, the sidebar (L2)", () => {
     expect(h.diagnostics()).toBe("");
   });
 
+  it("drops that notice when the outside edit lands inside the gap, before it shows", async () => {
+    const h = await render();
+    shell.status = BROKEN;
+    // Reload by hand, so no timer runs until this test says so.
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "Reload")!.click();
+    // The reload's round trips reach say(), which clears the region and waits out the gap.
+    for (let i = 0; i < 3; i++) await microtasks();
+    const notice = host.querySelector(".notice")!;
+    expect(notice.textContent?.trim()).toBe("");
+    expect(h.diagnostics()).toContain("expected `=` after a key");
+    shell.status = HEALTHY;
+    shell.changed!();
+    await settle();
+    await settle();
+    expect(notice.textContent?.trim()).toBe("");
+    expect(h.diagnostics()).toBe("");
+  });
+
   it("keeps that notice when the outside edit still does not load", async () => {
     const h = await render();
     shell.status = BROKEN;
