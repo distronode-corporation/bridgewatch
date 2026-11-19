@@ -26,14 +26,77 @@ runs:
   steps:
     - name: apt-get install
       shell: bash
+      # ⛔ THE RUNNER'S FIRST MIRROR IS NOT ALWAYS A GOOD ONE. GitHub's x64 Ubuntu
+      # runners read the archive through `mirror+file:/etc/apt/apt-mirrors.txt`, and
+      # the first entry depends on where the runner landed: azure.archive.ubuntu.com on
+      # Azure, us-east-2.ec2.archive.ubuntu.com on the ubuntu-24.04 runners GitHub now
+      # also places in AWS us-west-2 and us-east-1. That EC2 mirror either crawls (72 MB
+      # at 70 to 260 kB/s) or fails each file, and apt falls back to archive.ubuntu.com,
+      # which crawled too (36 to 80 kB/s). apt never leaves a mirror that is slow but
+      # answering, so the step took 4 to 35 minutes instead of under one on 26 of the
+      # 34 such runs in 40 CI runs (msrv and coverage), and the same fallback crawl
+      # hit the Azure mirror now and then.
+      #
+      # So: time each mirror on its -updates InRelease and put the fastest first, then
+      # download under a time limit. A crawl is cut short, the first mirror goes to the
+      # back of the list, and the next attempt resumes from the files already in
+      # /var/cache/apt/archives. Only the download runs under `timeout`, never dpkg: the
+      # install that follows reads the local cache and is never killed half way.
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libwebkit2gtk-4.1-dev \
-          libjavascriptcoregtk-4.1-dev \
-          libsoup-3.0-dev \
-          libgtk-3-dev \
-          libayatana-appindicator3-dev \
-          librsvg2-dev \
-          patchelf \
+        set -euo pipefail
+        pkgs=(
+          libwebkit2gtk-4.1-dev
+          libjavascriptcoregtk-4.1-dev
+          libsoup-3.0-dev
+          libgtk-3-dev
+          libayatana-appindicator3-dev
+          librsvg2-dev
+          patchelf
           xdg-utils
+        )
+        # A stalled connection is retried, then the next mirror is tried.
+        apt=(sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+        list=/etc/apt/apt-mirrors.txt
+
+        write_list() { # mirror URLs on stdin, best first
+          awk 'NF && !seen[$1]++ { printf "%s\tpriority:%d\n", $1, ++n }' | sudo tee "$list" > /dev/null
+        }
+
+        # x64 only: azure.archive.ubuntu.com carries no arm64, and the arm runners'
+        # mirror has not been slow.
+        if [ -f "$list" ] && [ "$(dpkg --print-architecture)" = amd64 ]; then
+          codename="$(awk -F= '$1 == "VERSION_CODENAME" { print $2 }' /etc/os-release)"
+          ranked="$(
+            { cut -f1 "$list"; echo http://azure.archive.ubuntu.com/ubuntu/; } | awk 'NF && !seen[$1]++' |
+              while read -r url; do
+                read -r code speed < <(curl -sS -o /dev/null --max-time 8 -w '%{http_code} %{speed_download}\n' \
+                  "${url%/}/dists/$codename-updates/InRelease" 2> /dev/null || echo "000 0")
+                [ "$code" = 200 ] || speed=0
+                echo "$speed $url"
+              done | sort -g -r
+          )"
+          echo "Mirrors by download speed (bytes/s):"
+          echo "$ranked"
+          awk '{ print $2 }' <<< "$ranked" | write_list
+        fi
+
+        # Two timed attempts, then one with no limit but the job's timeout-minutes, so
+        # three slow mirrors in a row still end green rather than red.
+        for attempt in 1 2 3; do
+          limit=(timeout 300)
+          [ "$attempt" -lt 3 ] || limit=()
+          if "${limit[@]}" "${apt[@]}" update &&
+            "${limit[@]}" "${apt[@]}" install -y --download-only "${pkgs[@]}"; then
+            "${apt[@]}" install -y "${pkgs[@]}"
+            exit 0
+          fi
+          echo "::warning::apt download attempt $attempt failed or ran over its time limit"
+          if [ -f "$list" ]; then
+            current="$(cut -f1 "$list")"
+            { tail -n +2 <<< "$current"; head -n 1 <<< "$current"; } | write_list
+            echo "Next mirror order:"
+            cat "$list"
+          fi
+        done
+        echo "::error::apt could not download the Tauri packages in 3 attempts"
+        exit 1
