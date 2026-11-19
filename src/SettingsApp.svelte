@@ -105,18 +105,26 @@
   let validationFrom = $state<"form" | "file">("file");
   let notice = $state("");
   let noticeSeq = 0;
+  /** The text the latest say() asked for, landed or still inside the gap. */
+  let noticeWanted = "";
+
+  /** The gap between clearing the live region and setting its text. */
+  const NOTICE_GAP_MS = 100;
 
   /**
-   * Show a notice. Cleared first and set a tick later, so the same text twice
-   * (a second "Saved.") is still a change the live region announces. Only the
-   * latest call lands.
+   * Show a notice. Cleared first and set in a LATER task, so the same text
+   * twice (a second "Saved.") is still a change the live region announces.
+   * ⚠ Not `tick()`: a microtask lands the clear and the text in one task, and
+   * WebKit can coalesce the two into no announcement at all. Only the latest
+   * call lands.
    */
   function say(text: string) {
     const seq = ++noticeSeq;
+    noticeWanted = text;
     notice = "";
-    void tick().then(() => {
+    setTimeout(() => {
       if (seq === noticeSeq) notice = text;
-    });
+    }, NOTICE_GAP_MS);
   }
 
   /** The text this window's last successful text-tab save wrote, if any. */
@@ -164,11 +172,12 @@
   /**
    * The file moved under this window. A notice that points at "the errors
    * below" goes once the file it was about loads, or it would point at
-   * nothing.
+   * nothing. Read from what was asked for, not the live region, so a notice
+   * still inside say()'s gap is dropped too.
    */
   async function changed() {
     await load("if-ours");
-    if (notice.endsWith("see the errors below.") && !(validation && !validation.ok)) say("");
+    if (noticeWanted.endsWith("see the errors below.") && !(validation && !validation.ok)) say("");
   }
 
   onMount(() => {
