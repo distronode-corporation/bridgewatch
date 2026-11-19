@@ -216,7 +216,7 @@
     }
     validation = result;
     validationFrom = "form";
-    notice = result.ok ? "Saved." : "Not saved — see the errors below.";
+    notice = result.ok ? "Saved." : "Not saved: see the errors below.";
     await load(!result.ok);
   }
 
@@ -247,7 +247,7 @@
     const result = await moveWatch(id, delta);
     validation = result;
     validationFrom = "form";
-    notice = result.ok ? "Moved." : "Not moved — see the errors below.";
+    notice = result.ok ? "Moved." : "Not moved: see the errors below.";
     await load(!result.ok);
   }
 
@@ -391,10 +391,10 @@
              looks configured and 404s on every tick. -->
         <Ask
           title="New watch"
-          message={`It will use the account "${accountNames()[0] ?? ""}", watch "main", and start as a secondary.`}
+          message={`It will use the account "${accountNames()[0] ?? ""}", the branch "main", and start as a secondary.`}
           fields={[
             { name: "id", label: "Watch id", placeholder: "main-push" },
-            { name: "project", label: "Project", placeholder: "numeric id, or group/path" },
+            { name: "project", label: "Project", placeholder: "group/project, owner/repo or a numeric id" },
           ]}
           confirmLabel="Add watch"
           onconfirm={addWatch}
@@ -449,7 +449,7 @@
                 validation = result;
                 validationFrom = "file";
                 if (result.ok) savedText = t;
-                notice = result.ok ? "Saved." : "Not saved — the file was left alone.";
+                notice = result.ok ? "Saved." : "Not saved: the file was left alone.";
                 // ⚠ Kept either way, unlike a form save: this tab RENDERS the
                 // validation, so re-seeding it from the file would replace both
                 // answers the user just asked for — the reason a save was refused,
