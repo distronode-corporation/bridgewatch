@@ -209,6 +209,14 @@ fn run_case(case: &str, ssl_verify: Option<&str>) -> (usize, Vec<String>, usize)
         .env(CASE, case)
         .env_remove("SSL_VERIFY")
         .env_remove("SENTRY_DSN");
+    // Both clients would send through a proxy from the environment (sentry sets
+    // one explicitly from `HTTP(S)_PROXY`, and reqwest reads them too), and the
+    // stand-in is only reachable directly.
+    for proxy in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
+        command
+            .env_remove(proxy)
+            .env_remove(proxy.to_ascii_lowercase());
+    }
     if let Some(value) = ssl_verify {
         command.env("SSL_VERIFY", value);
     }
