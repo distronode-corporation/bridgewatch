@@ -207,9 +207,9 @@ wrong, the evidence, and what would have caught it.
 Pull requests run `.github/workflows/ci.yml`, and every job of it that runs must be green.
 The `main` ruleset requires ten checks to pass before a merge: nine of those jobs (the three
 `rust` legs, `msrv`, `repo`, `frontend`, `cargo-deny`, `zizmor` and `dependency-review`) and
-`review-threads`, from its own workflow. The other `ci.yml` jobs (`coverage`, the three `cli`
-legs, `npm-rehearsal` and the four `launcher` legs) run on every pull request but are not
-required checks yet, so the reviewer checks them. Docs change in the same pull request as
+`review-threads`, from its own workflow. The other `ci.yml` jobs (`coverage`, `repeatable`,
+the three `cli` legs, `npm-rehearsal` and the four `launcher` legs) run on every pull request
+but are not required checks yet, so the reviewer checks them. Docs change in the same pull request as
 the behaviour they describe (see [Docs](#docs)).
 
 By contributing you agree that your contribution is licensed under the Apache License

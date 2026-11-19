@@ -8,7 +8,7 @@ not claim.
 - **The CLI on Linux x86_64.** Two builds of the `bridgewatch` CLI from the same commit, each
   from a clean `target/` directory, on the same machine with the inputs below unchanged, give
   a byte-identical binary. This is the binary a release ships in the x86_64 Linux CLI tarball
-  and the npm package. The arm64 build is expected to behave the same way but has not been
+  and the npm package. The arm64 build is expected to behave the same way but is not
   compared.
 - **The frontend bundle.** Two `npm run build` runs from the same commit, after the same
   `npm ci`, give a byte-identical `dist/` directory, which is what the app embeds.
@@ -32,6 +32,18 @@ the build machine, and they have to match for the bytes to match:
   one build gives different bytes. Leave them unset, apart from the
   `CARGO_PROFILE_RELEASE_STRIP=true` the commands below set, or set them the same for both
   builds.
+
+## What CI checks
+
+The `repeatable` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every
+push to `main` and every pull request, on an Ubuntu 22.04 x86_64 runner. It builds the CLI with
+the same [build-cli action](../.github/actions/build-cli/action.yml) the release uses, runs
+`cargo clean`, builds it again and compares the two binaries byte for byte; then, after one
+`npm ci`, it runs `npm run build` twice, removing `dist/` in between, and compares the SHA-256
+of every file. Either difference fails the job. Both builds of a pair run on the same runner
+with the same toolchain and paths, which is the condition above. The job is not yet a
+required check of the `main` ruleset. It compares nothing on arm64 or macOS, and no app
+bundle.
 
 ## Checking it yourself
 

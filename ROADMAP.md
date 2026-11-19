@@ -25,10 +25,10 @@ item or to propose a new one.
   a required check) and `vitest.config.ts` (inside the required `frontend` job). The Tauri
   shell (`bridgewatch-app`, 61% of lines) is the furthest behind the core and the CLI (both
   about 90%). The plan is to raise it, and to make `coverage` a required check.
-- **Repeatable builds, checked.** Two clean builds of the Linux CLI, and of the frontend
-  bundle, give the same bytes ([Repeatable builds](docs/reproducible-builds.md)). The plan is
-  to have CI compare them on every change, and then to look at the app bundles, which are not
-  compared today.
+- **Repeatable builds beyond the CLI.** CI's `repeatable` job checks on every push and pull
+  request that the Linux x86_64 CLI and the frontend bundle build to the same bytes twice
+  ([Repeatable builds](docs/reproducible-builds.md)). The arm64 CLI and the app bundles are not
+  compared today ([Installing bridgewatch](docs/install.md#what-guards-the-code-and-the-release-path)).
 
 ## Not planned
 
