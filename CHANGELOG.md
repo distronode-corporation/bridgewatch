@@ -13,6 +13,54 @@ bottom. A body line that merely starts with a Markdown link does not end a secti
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-19
+
+bridgewatch 2.2 is an accessibility and polish pass over the popover, Settings and the
+setup wizard. Focus is easier to see and goes where you expect, buttons and links read
+clearly on Linux, and notices are announced to screen readers. Nothing in 2.2 changes a
+stored config, the notification ledger or `check --json`.
+
+### Changed
+
+- **Focus rings you can see.** Every focus ring is drawn in the full ring colour at 2px,
+  so it reaches the 3:1 that WCAG 1.4.11 asks for. Some were at 30 to 50% and fell to
+  about 1.4:1.
+- **Linux buttons and links pass contrast.** The Linux primary is Adwaita blue 4
+  (`#1c71d8`), so white text on a filled button reaches 4.77:1, light and dark. In the
+  Linux dark theme, link text uses the dark accent (`#78aeed`), at 5.2:1 or more on the
+  window, card and popover backgrounds.
+- **The popover strips' actions are buttons.** "Set up bridgewatch...", "Fix in
+  Settings", "Open Settings..." and "Retry" are small outline buttons, like "Resume",
+  instead of 11px underlined text.
+- **Settings questions take focus and give it back.** A question with a field focuses
+  the field, and one without (Remove watch, a confirmation) focuses Cancel. Closing it
+  returns focus to the control that asked. The question is described by its message, and
+  it no longer claims to be modal.
+- **A first launch says so.** With nothing watched yet, the popover header reads "Not set
+  up yet" instead of "unknown" with an age.
+- **Notices are announced.** The popover and Settings notices are live regions that are
+  always present, so a new notice, or the same one again, is read out. In Settings, a
+  refusal or a failed reload reads in red, and a notice pointing at errors is cleared
+  once an outside edit makes the file load. Reload says when the file it read does not
+  load.
+- **Watch header controls.** The disclosure keeps one name ("Show all rows of <watch>")
+  and lets its expanded state speak, and it is a 24px target. Acknowledge is a plain
+  action whose name says what a click does, and the header buttons have a visible hover.
+- **One filled button in the setup wizard.** While the one-click list is offered, Next
+  and "Sign in again" step down to outline buttons, so "Watch N projects" is the primary
+  action. "Sign in again" is an outline button in Settings too.
+- **Copy.** No em dashes in Settings notices, hints or the conflict banner. The new-watch
+  question names the branch "main", and the project placeholder reads "group/project or
+  owner/repo".
+
+### Fixed
+
+- **The one-click list lands in view.** After a sign-in, the wizard scrolled before the
+  list had rendered, so the list ended up below the fold. It now scrolls once the list is
+  on screen.
+- **Quieter sign-in progress.** While waiting for a device sign-in, the "(checked N
+  times)" count is no longer announced on every poll.
+
 ## [2.1.0] - 2026-11-15
 
 bridgewatch 2.1 is the polish set. The popover can be driven from the keyboard, and an
@@ -923,7 +971,8 @@ per-workflow status dot other monitors already show.
   `glab:<host>:token` naming, which has not been checked against a live install.
 - Windows is not targeted.
 
-[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/distronode-corporation/bridgewatch/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/distronode-corporation/bridgewatch/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/distronode-corporation/bridgewatch/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/distronode-corporation/bridgewatch/compare/v1.2.0...v1.3.0

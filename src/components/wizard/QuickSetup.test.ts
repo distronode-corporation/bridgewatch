@@ -196,6 +196,32 @@ describe("the one-click list", () => {
     expect(text('[data-action="quick-setup"]')).toBe("Watch 3 projects");
   });
 
+  it("scrolls to the rendered list, not to its loading line", async () => {
+    // jsdom has no layout, so record what the list held when it was scrolled to.
+    const seen: { rows: number; block: unknown }[] = [];
+    const scroll = vi.fn(function (this: HTMLElement, options?: ScrollIntoViewOptions) {
+      seen.push({ rows: this.querySelectorAll('[data-slot="quick-row"]').length, block: options?.block });
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { value: scroll, configurable: true });
+    try {
+      await pasteAndTest(fakeApi());
+      expect(seen).toEqual([{ rows: 10, block: "end" }]);
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it("leaves one filled button: Next steps down to outline while the list is offered", async () => {
+    const api = fakeApi();
+    await start(api);
+    const filled = (sel: string) => q(sel)!.classList.contains("bg-primary");
+    expect(filled('[data-action="next"]')).toBe(true);
+    await type("#wizard-secret", "pasted-secret-value");
+    await click('[data-action="test-connection"]');
+    expect(filled('[data-action="quick-setup"]')).toBe(true);
+    expect(filled('[data-action="next"]')).toBe(false);
+  });
+
   it("is offered right after a sign-in, with no Test connection", async () => {
     const api = fakeApi();
     await start(api, fakeOAuth());
@@ -204,6 +230,9 @@ describe("the one-click list", () => {
     expect(api.recentProjects).toHaveBeenCalledTimes(1);
     expect(api.recentProjects.mock.calls[0][0]).toMatchObject({ token: { oauth: true }, account: "gitlab" });
     expect(checkedIds()).toEqual([1, 2, 3]);
+    // Sign in again and Next are outline: "Watch 3 projects" is the one filled button.
+    const filled = all("button").filter((b) => b.classList.contains("bg-primary"));
+    expect(filled.map((b) => b.dataset.action)).toEqual(["quick-setup"]);
   });
 
   it("labels a row 'active … ago' from its timestamp, and shows nothing where there is none", async () => {

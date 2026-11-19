@@ -104,6 +104,21 @@
    */
   let validationFrom = $state<"form" | "file">("file");
   let notice = $state("");
+  let noticeSeq = 0;
+
+  /**
+   * Show a notice. Cleared first and set a tick later, so the same text twice
+   * (a second "Saved.") is still a change the live region announces. Only the
+   * latest call lands.
+   */
+  function say(text: string) {
+    const seq = ++noticeSeq;
+    notice = "";
+    void tick().then(() => {
+      if (seq === noticeSeq) notice = text;
+    });
+  }
+
   /** The text this window's last successful text-tab save wrote, if any. */
   let savedText: string | null = null;
 
@@ -146,6 +161,16 @@
         : null;
   }
 
+  /**
+   * The file moved under this window. A notice that points at "the errors
+   * below" goes once the file it was about loads, or it would point at
+   * nothing.
+   */
+  async function changed() {
+    await load("if-ours");
+    if (notice.endsWith("see the errors below.") && !(validation && !validation.ok)) say("");
+  }
+
   onMount(() => {
     if (!inTauri()) return;
     void load();
@@ -155,7 +180,7 @@
     // file; the shell says so, and every copy this window holds follows. The
     // text tab keeps a DIRTY buffer regardless, and the shell's
     // compare-and-swap refuses a save based on the old text.
-    const unlistenChanged = onConfigChanged(() => void load("if-ours"));
+    const unlistenChanged = onConfigChanged(() => void changed());
     return () => {
       void unlisten.then((f) => f());
       void unlistenChanged.then((f) => f());
@@ -211,12 +236,12 @@
       applyConfigEdits(edits, id),
     );
     if (isCancelled(result)) {
-      notice = "Not saved: the change was not confirmed.";
+      say("Not saved: the change was not confirmed.");
       return;
     }
     validation = result;
     validationFrom = "form";
-    notice = result.ok ? "Saved." : "Not saved — see the errors below.";
+    say(result.ok ? "Saved." : "Not saved: see the errors below.");
     await load(!result.ok);
   }
 
@@ -247,14 +272,14 @@
     const result = await moveWatch(id, delta);
     validation = result;
     validationFrom = "form";
-    notice = result.ok ? "Moved." : "Not moved — see the errors below.";
+    say(result.ok ? "Moved." : "Not moved: see the errors below.");
     await load(!result.ok);
   }
 
   function add() {
     const accounts = accountNames();
     if (accounts.length === 0) {
-      notice = "Add an account first: a watch has to name one.";
+      say("Add an account first: a watch has to name one.");
       return;
     }
     asking = "add";
@@ -268,7 +293,7 @@
 
   /** Ask the shell to open something; say why when it could not. */
   function openOrSay(what: string, request: () => Promise<void>) {
-    request().catch((error) => (notice = `Could not open ${what}: ${messageOf(error)}`));
+    request().catch((error) => say(`Could not open ${what}: ${messageOf(error)}`));
   }
 
   async function addWatch(answers: Record<string, string>) {
@@ -313,7 +338,7 @@
           aria-selected={pane === p.id}
           tabindex={pane === p.id ? 0 : -1}
           class={[
-            "tab text-ui-body rounded-lg px-2.5 py-1.5 text-left font-medium whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+            "tab text-ui-body rounded-lg px-2.5 py-1.5 text-left font-medium whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring",
             pane === p.id
               ? "active bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -353,9 +378,16 @@
         </div>
       {/if}
 
-      {#if notice}
-        <p class="notice text-muted-foreground text-ui-meta m-0">{notice}</p>
-      {/if}
+      <!-- Always mounted, so a new notice is announced; a refusal or a failed reload reads in red. -->
+      <p
+        class={[
+          "notice text-ui-meta m-0",
+          notice ? (/^(Not |Could not|Reloaded, but)/.test(notice) ? "text-tone-red" : "text-muted-foreground") : "sr-only",
+        ]}
+        role="status"
+      >
+        {notice}
+      </p>
 
       {#if pendingConfirm}
         <Ask
@@ -384,10 +416,10 @@
              looks configured and 404s on every tick. -->
         <Ask
           title="New watch"
-          message={`It will use the account "${accountNames()[0] ?? ""}", watch "main", and start as a secondary.`}
+          message={`It will use the account "${accountNames()[0] ?? ""}", the branch "main", and start as a secondary.`}
           fields={[
             { name: "id", label: "Watch id", placeholder: "main-push" },
-            { name: "project", label: "Project", placeholder: "numeric id, or group/path" },
+            { name: "project", label: "Project", placeholder: "group/project or owner/repo" },
           ]}
           confirmLabel="Add watch"
           onconfirm={addWatch}
@@ -432,17 +464,17 @@
                   saveConfigText(t, base, id),
                 );
                 if (isCancelled(result)) {
-                  notice = "Not saved: the change was not confirmed.";
+                  say("Not saved: the change was not confirmed.");
                   return result;
                 }
                 if (result.conflict) {
-                  notice = "Not saved: the file changed on disk since this tab read it.";
+                  say("Not saved: the file changed on disk since this tab read it.");
                   return result;
                 }
                 validation = result;
                 validationFrom = "file";
                 if (result.ok) savedText = t;
-                notice = result.ok ? "Saved." : "Not saved — the file was left alone.";
+                say(result.ok ? "Saved." : "Not saved: the file was left alone.");
                 // ⚠ Kept either way, unlike a form save: this tab RENDERS the
                 // validation, so re-seeding it from the file would replace both
                 // answers the user just asked for — the reason a save was refused,
@@ -480,7 +512,12 @@
         onclick={async () => {
           await reloadConfig();
           await load();
-          notice = "Reloaded from disk.";
+          // The file is re-read either way; say when what was read does not load.
+          say(
+            status && !status.configOk && !isFirstRun(status)
+              ? "Reloaded, but the file does not load: see the errors below."
+              : "Reloaded from disk.",
+          );
         }}>Reload</Button
       >
     </footer>

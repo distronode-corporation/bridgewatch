@@ -545,6 +545,7 @@
             return { account, provider, base_url: instance, client_id: signingClientId || null };
           }}
           label={status ? "Sign in again" : undefined}
+          variant={status ? "outline" : "default"}
           onsignedin={() => {
             // Signing in stores the tokens, and pressing Sign in on this option
             // is the choice itself, so the account is switched to it in the same

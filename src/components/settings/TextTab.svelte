@@ -129,7 +129,7 @@
 
 {#if conflict}
   <div class="conflict border-tone-amber bg-tone-amber-bg mb-2 rounded-xl border px-3 py-2 text-xs" role="alert">
-    <strong>The file changed on disk</strong> since this tab read it — another editor, another
+    <strong>The file changed on disk</strong> since this tab read it: another editor, another
     window, or a form tab in this one. Saving now would throw that change away.
     <div class="actions mt-2 flex items-center gap-2">
       <Button variant="destructive" size="sm" class="overwrite" onclick={() => void save(true)} disabled={saving}>

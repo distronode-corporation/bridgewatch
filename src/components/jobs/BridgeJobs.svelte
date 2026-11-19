@@ -94,7 +94,7 @@
   const bodyId = $derived(`bridge-${pipelineId}-${bridge.name.replace(/[^A-Za-z0-9_-]/g, "_")}`);
 
   const LINK =
-    "text-muted-foreground hover:text-foreground hover:bg-background focus-visible:ring-ring/50 flex size-6 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2";
+    "text-muted-foreground hover:text-foreground hover:bg-background focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2";
 
   function openUrl(event: MouseEvent, url: string | null) {
     event.preventDefault();
@@ -115,7 +115,7 @@
        pipeline line up with each other. -->
   <div class="hover:bg-muted text-ui-meta flex h-7 items-center gap-1 rounded-lg pr-1">
     <Collapsible.Trigger
-      class="focus-visible:ring-ring/50 flex min-w-0 flex-1 items-center gap-1.5 rounded-lg py-1 pl-1 text-left outline-none focus-visible:ring-2"
+      class="focus-visible:ring-ring flex min-w-0 flex-1 items-center gap-1.5 rounded-lg py-1 pl-1 text-left outline-none focus-visible:ring-2"
       aria-controls={bodyId}
       aria-label={`${bridge.name}: ${fullWord}. ${open ? "Hide" : "Show"} jobs`}
     >

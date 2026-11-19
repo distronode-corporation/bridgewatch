@@ -49,7 +49,7 @@
     <select
       id="wizard-live-secs"
       name="live_secs"
-      class="border-input bg-input/30 focus-visible:border-ring focus-visible:ring-ring/30 h-8 w-fit max-w-full min-w-48 rounded-2xl border px-3 outline-none focus-visible:ring-3"
+      class="border-input bg-input/30 focus-visible:border-ring focus-visible:ring-ring h-8 w-fit max-w-full min-w-48 rounded-2xl border px-3 outline-none focus-visible:ring-2"
       value={String(draft.liveSecs)}
       onchange={(event) => (draft.liveSecs = Number(event.currentTarget.value))}
       aria-invalid={errors.live_secs ? "true" : undefined}

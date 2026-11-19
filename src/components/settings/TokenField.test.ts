@@ -572,6 +572,8 @@ describe("TokenField, sign in", () => {
     await renderWith(oauth, { oauth: true });
     expect(host.querySelector('[data-slot="oauth-status"]')?.textContent).toContain("@octocat");
     expect(host.querySelector('[data-action="oauth-sign-in"]')?.textContent?.trim()).toBe("Sign in again");
+    // An outline button once signed in: replacing a sign-in is not the next step.
+    expect(host.querySelector('[data-action="oauth-sign-in"]')?.classList.contains("bg-primary")).toBe(false);
     await press('[data-slot="install-app"] button');
     expect(oauth.openInstall).toHaveBeenCalledWith("github", "https://api.github.com");
     await press("button.sign-out");

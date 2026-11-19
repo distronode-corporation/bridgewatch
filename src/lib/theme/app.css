@@ -33,6 +33,9 @@
 
 :root {
   color-scheme: light dark;
+  /* Link text (the link button and badge variants). The primary colour
+     everywhere but Linux dark, where #1c71d8 is too dark to read as text. */
+  --link: var(--primary);
 
   /* Rhea light */
   --background: #ffffff;
@@ -184,7 +187,7 @@ html[data-platform="linux"] {
   --card-foreground: #2e2e32;
   --popover: #ffffff; /* popover_bg_color */
   --popover-foreground: #2e2e32;
-  --primary: #3584e4; /* accent_bg_color, Adwaita blue 3 */
+  --primary: #1c71d8; /* Adwaita blue 4: white text on it reaches 4.5:1 */
   --primary-foreground: #ffffff;
   --secondary: #ebebed; /* headerbar / button bg */
   --secondary-foreground: #2e2e32;
@@ -210,7 +213,7 @@ html[data-platform="linux"] {
     --card-foreground: #ffffff;
     --popover: #36363a;
     --popover-foreground: #ffffff;
-    --primary: #3584e4;
+    --primary: #1c71d8;
     --primary-foreground: #ffffff;
     --secondary: #36363a;
     --secondary-foreground: #ffffff;
@@ -222,6 +225,9 @@ html[data-platform="linux"] {
     --border: #3d3d42;
     --input: #3d3d42;
     --ring: #78aeed; /* accent_color, dark */
+    /* Link text on the dark surfaces: 6.85:1 on #222226, 5.84 on #2e2e32,
+       5.20 on #36363a. The filled #1c71d8 stays for white button text. */
+    --link: #78aeed;
   }
 }
 
@@ -249,6 +255,7 @@ html[data-platform="linux"] {
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-link: var(--link);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);

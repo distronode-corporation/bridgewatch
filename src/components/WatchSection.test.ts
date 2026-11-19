@@ -56,8 +56,13 @@ describe("WatchSection, a secondary watch", () => {
     const h = render(secondary([ROW, { ...ROW, id: ROW.id - 1, sha7: "0000000" }]));
     expect(h.rows().length).toBe(1);
     expect(host.querySelector(".sha")?.textContent?.trim()).toBe("ca41ab2");
+    const disclosure = host.querySelector("button.disclosure")!;
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
     h.disclose();
     expect(h.rows().length).toBe(2);
+    // The name stays put; aria-expanded carries the state.
+    expect(disclosure.getAttribute("aria-label")).toBe("Show all rows of hourly");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("keeps the collapsed row's detail hidden", () => {
@@ -265,7 +270,9 @@ describe("WatchSection, acknowledging a failure", () => {
     const calls: [string, boolean][] = [];
     render(failed, { onacknowledge: (w: string, a: boolean) => calls.push([w, a]) });
     expect(button()?.textContent).toBe("acknowledge");
-    expect(button()?.getAttribute("aria-pressed")).toBe("false");
+    // A plain action, not a toggle: the label says what a click does.
+    expect(button()?.hasAttribute("aria-pressed")).toBe(false);
+    expect(button()?.getAttribute("aria-label")).toBe("Acknowledge the failure of web");
     expect(host.querySelector("[data-slot=acknowledged]")).toBeNull();
     button()!.click();
     expect(calls).toEqual([["web", true]]);
@@ -276,7 +283,8 @@ describe("WatchSection, acknowledging a failure", () => {
     render(failed, { acknowledged: true, onacknowledge: (w: string, a: boolean) => calls.push([w, a]) });
     expect(host.querySelector("[data-slot=acknowledged]")?.textContent).toBe("acknowledged");
     expect(button()?.textContent).toBe("undo");
-    expect(button()?.getAttribute("aria-pressed")).toBe("true");
+    expect(button()?.hasAttribute("aria-pressed")).toBe(false);
+    expect(button()?.getAttribute("aria-label")).toBe("Undo acknowledging the failure of web");
     button()!.click();
     expect(calls).toEqual([["web", false]]);
   });
