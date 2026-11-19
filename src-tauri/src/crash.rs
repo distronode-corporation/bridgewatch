@@ -192,10 +192,18 @@ impl Reporter {
 /// The HTTP client crash reports are sent over: reqwest over rustls, with
 /// certificate verification on. Nothing here, and nothing in the environment,
 /// can turn verification off, unlike the client `sentry` would build itself.
-/// Proxy settings from the environment are still honoured, as reqwest does by
-/// default.
+/// It is set up like the core's transport (`ReqwestTransport::new`): no
+/// redirects followed, the same user agent, and the accounts' default timeout.
+/// Proxies come from the environment as reqwest reads them, the same as for
+/// every other request: `HTTPS_PROXY` or `ALL_PROXY` for https, and `NO_PROXY`
+/// honoured. (`sentry`'s own client used `HTTP_PROXY` for https when
+/// `HTTPS_PROXY` was unset, and ignored `NO_PROXY` and `ALL_PROXY`.)
 pub fn report_client() -> reqwest::Result<reqwest::Client> {
-    reqwest::Client::builder().build()
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(concat!("bridgewatch/", env!("CARGO_PKG_VERSION")))
+        .build()
 }
 
 /// The transport factory handed to `sentry`: its own reqwest transport (queue,

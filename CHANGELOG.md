@@ -13,6 +13,17 @@ bottom. A body line that merely starts with a Markdown link does not end a secti
 
 ## [Unreleased]
 
+### Security
+
+- **Crash reports always verify the server's certificate.** The opt-in crash reports
+  were sent over the Sentry SDK's own HTTP client, which accepts any certificate when
+  the environment variable `SSL_VERIFY` is `false`. They now go over a client
+  bridgewatch builds, with certificate verification that nothing turns off, set up like
+  the client every other request uses (no redirects followed, the same user agent and
+  timeout). Its proxy settings change to match too: `HTTPS_PROXY` or `ALL_PROXY` is
+  used for the report and `NO_PROXY` is honoured, while `HTTP_PROXY` alone, which the
+  SDK's client also used for https, is no longer used for it.
+
 ## [2.1.0] - 2026-11-15
 
 bridgewatch 2.1 is the polish set. The popover can be driven from the keyboard, and an
