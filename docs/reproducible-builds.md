@@ -5,20 +5,24 @@ not claim.
 
 ## What is repeatable
 
-- **The CLI on Linux.** Two builds of the `bridgewatch` CLI from the same commit, each from a
-  clean `target/` directory, with the same Rust toolchain, in the same checkout directory and
-  with the same `CARGO_HOME`, give a byte-identical binary. This is the binary a release ships
-  in the Linux CLI tarballs and the npm package.
+- **The CLI on Linux x86_64.** Two builds of the `bridgewatch` CLI from the same commit, each
+  from a clean `target/` directory, on the same machine with the inputs below unchanged, give
+  a byte-identical binary. This is the binary a release ships in the x86_64 Linux CLI tarball
+  and the npm package. The arm64 build is expected to behave the same way but has not been
+  compared.
 - **The frontend bundle.** Two `npm run build` runs from the same commit, after the same
   `npm ci`, give a byte-identical `dist/` directory, which is what the app embeds.
 
 `Cargo.lock` and `package-lock.json` pin every dependency, and the release builds use
-`--locked`, so both builds compile the same sources. Three things do go into the binary from
+`--locked`, so both builds compile the same sources. Four things do go into the binary from
 the build machine, and they have to match for the bytes to match:
 
 - **The toolchain.** `rust-toolchain.toml` names the stable channel, not a version, so a
   build next month may use a newer `rustc` and give different bytes. Use the same `rustc`
   version for both builds (`rustc --version`).
+- **The C toolchain.** The TLS library's cryptography (`aws-lc-sys`, under rustls) is C,
+  compiled during the build by the machine's C compiler, and the system linker links the
+  binary. A different compiler or linker version can give different bytes.
 - **Paths.** The compiler records source paths in panic messages, including the paths of
   dependencies under `CARGO_HOME`, so a different `CARGO_HOME` (or checkout directory) can
   give different bytes.
@@ -31,9 +35,9 @@ the build machine, and they have to match for the bytes to match:
 
 ## Checking it yourself
 
-On Linux, with Rust, a C linker and Node.js installed (the CLI does not link GTK or
-WebKitGTK, and its keyring backend is pure Rust, so it needs none of the app's system
-packages):
+On Linux x86_64, with Rust, a C compiler and linker (`build-essential` on Debian and Ubuntu)
+and Node.js installed (the CLI does not link GTK or WebKitGTK, and its keyring backend is
+pure Rust, so it needs none of the app's system packages):
 
 ```
 git clone https://github.com/distronode-corporation/bridgewatch

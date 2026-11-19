@@ -91,6 +91,12 @@ counters are in [SECURITY-MODEL.md](SECURITY-MODEL.md).
   validation warns about it unless the host is loopback, because the token would cross
   the network unencrypted. HTTPS uses rustls with certificate verification and no option
   to turn it off. System and environment proxy settings are honoured.
+- The opt-in crash reports (see [What bridgewatch sends where](#what-bridgewatch-sends-where))
+  are the one request that does not go through bridgewatch's own transport: the Sentry SDK
+  sends them. It sends them over an HTTP client that bridgewatch builds and hands it, with the
+  same rustls verification, so the SDK's own `SSL_VERIFY` environment switch, which would turn
+  verification off in the client the SDK builds by default, has no effect. A report carries no
+  token.
 
 ### Sign-in tokens (OAuth)
 

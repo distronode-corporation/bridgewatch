@@ -20,9 +20,11 @@ item or to propose a new one.
   D-Bus, is the route the limitations page names.
 - **Merge-request pairing.** A merged-result pipeline is not yet paired with its branch
   pipeline; `merge_request_event` works only as a source like any other.
-- **Coverage of the tray app.** CI holds each part to the floors in `coverage-floors.toml` and
-  `vitest.config.ts`, and floors only go up. The Tauri shell (`bridgewatch-app`, 61% of lines)
-  is the furthest behind the core and the CLI (both about 90%).
+- **Coverage of the tray app.** CI measures each part against the floors in
+  `coverage-floors.toml` (the `coverage` job, which runs on every pull request but is not yet
+  a required check) and `vitest.config.ts` (inside the required `frontend` job). The Tauri
+  shell (`bridgewatch-app`, 61% of lines) is the furthest behind the core and the CLI (both
+  about 90%). The plan is to raise it, and to make `coverage` a required check.
 - **Repeatable builds, checked.** Two clean builds of the Linux CLI, and of the frontend
   bundle, give the same bytes ([Repeatable builds](docs/reproducible-builds.md)). The plan is
   to have CI compare them on every change, and then to look at the app bundles, which are not

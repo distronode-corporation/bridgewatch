@@ -38,7 +38,8 @@ What the repository enforces today:
   `rust` legs, `msrv`, `repo`, `frontend`, `cargo-deny`, `zizmor`, `dependency-review` and
   `review-threads`, and CodeQL must report no error and no security alert of high severity or
   above. The ruleset refuses force pushes and deletion of `main`, keeps its history linear,
-  and allows squash or rebase merges only. One team in the organization can bypass it.
+  and allows squash or rebase merges only. One team in the organization, whose only member is
+  the maintainer, can bypass it, and GitHub records each bypass in the ruleset's history.
 - **The author never approves their own change.** Pull requests are often written by the
   organization's own account, which cannot approve them, so the approval always comes from a
   different account.
@@ -79,19 +80,21 @@ everything from that tag. The release manager's part:
    `package.json` and `packaging/npm/package.json`; `python3 scripts/check-version.py`
    checks they agree) and fills in the version's section of [CHANGELOG.md](CHANGELOG.md),
    which becomes the GitHub Release text.
-2. The checks in [tools/real-device/CHECKS.md](tools/real-device/CHECKS.md) are run on Linux
-   and macOS against the commit that will be tagged.
+2. The release manager runs the checks in
+   [tools/real-device/CHECKS.md](tools/real-device/CHECKS.md) on Linux and macOS against the
+   commit that will be tagged, recording each result as that file asks.
 3. Once that pull request is merged, the release manager pushes the tag on the merged commit.
 4. The workflow refuses a tag whose commit is not on `main` or whose version does not match
    the three files, builds every asset, signs and notarises the macOS ones, attaches a build
-   provenance attestation over all of them, checks that the attestations verify, and only
-   then publishes the release, which until then is a draft. The `npm` job then publishes the
+   provenance attestation over all of them and checks that the attestations verify. Only then
+   does it create the release, as a draft, check that GitHub holds every asset, and make the
+   release public. The `npm` job then publishes the
    same CLI binaries to npm with provenance. What is signed and how to check it is in
    [Verifying a release](docs/verifying-releases.md).
 
 A ruleset refuses moving or deleting a release tag (repository administrators can bypass
-it), and a bad release is never re-tagged: it gets a new patch version. The tags themselves
-are annotated but not signed.
+it), and the rule is that a bad release is not re-tagged: it gets a new patch version. The
+tags themselves are annotated but not signed.
 
 ## Vulnerability response
 
@@ -106,11 +109,15 @@ versions, what is in scope and how reporters are credited are in
 The project does not depend on one person's account. The `distronode-corporation` GitHub
 organization has more than one owner: besides the maintainer and the organization's own
 account, a second owner account, `distronode-legal`, is held by Distronode Corporation's
-legal function. An owner can give write access, change CODEOWNERS and the rulesets, and run
-the workflows, so if the maintainer is lost or unavailable, Distronode Corporation can, within
-one week, create and close issues, name a new code owner, accept changes and make a release.
+legal function (as the organization's
+[GOVERNANCE.md](https://github.com/distronode-corporation/.github/blob/main/GOVERNANCE.md#continuity)
+also records). An owner can give write access, change CODEOWNERS and the rulesets, push a
+release tag and run the workflows, so if the maintainer is lost or unavailable, Distronode
+Corporation commits to being able, within one week, to create and close issues, name a new
+code owner, accept changes and make a release.
 
-Making a release needs no one's personal credential or device:
+Making a release needs an account with write access to push the tag, and otherwise only what
+the release workflow is given; no one's personal device is involved:
 
 - The GitHub Release, its assets and the build provenance attestation use the workflow's own
   repository token and its OIDC identity. The attestation is signed through Sigstore with a
@@ -121,6 +128,9 @@ Making a release needs no one's personal credential or device:
 - The macOS signing identity and the notarisation key belong to Distronode Corporation and are
   stored as secrets of the repository's `release` environment, which only a `v*` tag can
   reach. The workflow reads them when it runs; no branch and no pull request can.
+- The crash-report address built into the release app, and the token that uploads its debug
+  files for crash reports, are stored as secrets of the repository and of the `release`
+  environment. A release does not build without the address.
 
 ## Changing this document
 

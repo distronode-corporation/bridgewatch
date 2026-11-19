@@ -19,7 +19,8 @@ The release workflow checks its own signatures before anything is public. The ma
 fails unless the app inside the `.dmg` and the CLI carry the Developer ID signature and the
 `.dmg` is assessed as notarised. After the attestation is made, the workflow runs
 `gh attestation verify` on every asset, both against GitHub's attestation store and against
-the bundle file it is about to attach, and the release stays a draft until that passes. The
+the bundle file it is about to attach. Only once that passes does it create the release, as
+a draft, and it makes the draft public after checking that GitHub holds every asset. The
 `npm` job checks each CLI tarball against the digest GitHub recorded and verifies its
 attestation, pinned to `release.yml` at the release's tag and commit, before it publishes the
 package.
@@ -113,5 +114,5 @@ public release and verifies their attestation before it packs them.
 The Sigstore certificate exists only for the length of the workflow run that signs, and the
 npm publish token is minted by npm for one publish. The Apple Developer ID certificate and the
 notarisation key are held as secrets of this repository's `release` environment, which only a
-`v*` tag can reach: no branch, pull request or person's machine holds them, and they are not on
-the release download pages. See [GOVERNANCE.md](../GOVERNANCE.md#continuity).
+`v*` tag can reach, so no branch and no pull request can read them, and they are not on the
+release download pages. See [GOVERNANCE.md](../GOVERNANCE.md#continuity).
