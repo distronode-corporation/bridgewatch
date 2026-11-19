@@ -13,6 +13,13 @@ bottom. A body line that merely starts with a Markdown link does not end a secti
 
 ## [Unreleased]
 
+### Fixed
+
+- **A repeated Settings notice is read out.** Settings cleared its notice and wrote the
+  new text in the same task, and the WebKit web views on macOS and Linux can merge the two
+  into no announcement at all, so the same notice twice in a row could go unread. The text now lands 100 ms
+  after the clear.
+
 ## [2.2.0] - 2026-11-19
 
 bridgewatch 2.2 is an accessibility and polish pass over the popover, Settings and the
