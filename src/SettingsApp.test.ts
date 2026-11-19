@@ -744,7 +744,8 @@ describe("SettingsApp, the sidebar (L2)", () => {
     await settle();
     const notice = host.querySelector(".notice")!;
     expect(notice.textContent?.trim()).toBe("Reloaded, but the file does not load: see the errors below.");
-    expect(notice.classList.contains("text-muted-foreground")).toBe(true);
+    // A failure, so it reads in red like a refusal, not in the colour of "Reloaded from disk.".
+    expect(notice.classList.contains("text-tone-red")).toBe(true);
     expect(h.diagnostics()).toContain("expected `=` after a key");
   });
 

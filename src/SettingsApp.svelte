@@ -353,11 +353,11 @@
         </div>
       {/if}
 
-      <!-- Always mounted, so a new notice is announced; a refusal reads in red. -->
+      <!-- Always mounted, so a new notice is announced; a refusal or a failed reload reads in red. -->
       <p
         class={[
           "notice text-ui-meta m-0",
-          notice ? (/^(Not |Could not)/.test(notice) ? "text-tone-red" : "text-muted-foreground") : "sr-only",
+          notice ? (/^(Not |Could not|Reloaded, but)/.test(notice) ? "text-tone-red" : "text-muted-foreground") : "sr-only",
         ]}
         role="status"
       >
@@ -394,7 +394,7 @@
           message={`It will use the account "${accountNames()[0] ?? ""}", the branch "main", and start as a secondary.`}
           fields={[
             { name: "id", label: "Watch id", placeholder: "main-push" },
-            { name: "project", label: "Project", placeholder: "group/project, owner/repo or a numeric id" },
+            { name: "project", label: "Project", placeholder: "group/project or owner/repo" },
           ]}
           confirmLabel="Add watch"
           onconfirm={addWatch}
