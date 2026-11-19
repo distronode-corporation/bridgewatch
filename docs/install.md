@@ -66,8 +66,10 @@ gh attestation verify bridgewatch_2.2.0_amd64.deb --repo distronode-corporation/
 ```
 
 Every release also carries the attestation as
-`bridgewatch_<version>.intoto.jsonl`, so the same check works offline with
-`--bundle bridgewatch_<version>.intoto.jsonl` added. Every bundle carries `LICENSE`,
+`bridgewatch_<version>.intoto.jsonl`, so the same check works without GitHub's
+attestation API with `--bundle bridgewatch_<version>.intoto.jsonl` added.
+[Verifying a release](verifying-releases.md) has the full check for each kind of asset,
+including on a machine with no network. Every bundle carries `LICENSE`,
 `NOTICE` and the licence texts of the Rust crates and npm packages built into it
 (`THIRD-PARTY-LICENSES-rust.txt`, `THIRD-PARTY-LICENSES-npm.txt`): in
 `/usr/share/doc/bridgewatch/` for the `.deb`, `/usr/share/licenses/bridgewatch/` for
@@ -156,13 +158,14 @@ On every push to `main` unless the item says otherwise:
   built twice from the same commit, from clean, and must be the same bytes. The app
   bundles (`.dmg`, `.deb`, `.rpm`, `.AppImage`) are not compared and are not claimed
   to be bit-for-bit reproducible: they carry build timestamps, and the macOS ones a
-  signature and a notarisation ticket.
+  signature and a notarisation ticket (see [Repeatable builds](reproducible-builds.md)).
 - Dependency review on every pull request, Dependabot for Cargo, npm and the pinned
   action SHAs, and a weekly [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch).
-- Dependabot's patch and minor updates merge themselves, but only once the nine checks
-  the `main` ruleset requires have passed (all three rust legs, including
-  `rust (ubuntu-22.04-arm)`, plus msrv, repo, frontend, cargo-deny, zizmor and
-  dependency-review). A major waits for a person.
+- Dependabot's patch and minor updates are queued to merge themselves, but they merge
+  only once the `main` ruleset is satisfied: the code owner's approval and the ten
+  required checks (all three rust legs, including `rust (ubuntu-22.04-arm)`, plus msrv,
+  repo, frontend, cargo-deny, zizmor, dependency-review and review-threads). A major
+  waits for a person.
 - Release builds run in a `release` environment that only a `v*` tag can reach and that
   holds the macOS signing identity as its own environment secrets, so no branch and no
   pull request can read it. Release tags are protected by a ruleset against moves and
