@@ -90,9 +90,9 @@ Or download `bridgewatch_<version>_universal.dmg` from the
 **Linux** (x86_64 and arm64, glibc 2.35 or newer), from the same Releases page:
 
 ```
-sudo apt install ./bridgewatch_2.1.0_amd64.deb          # Debian, Ubuntu
-sudo dnf install ./bridgewatch-2.1.0-1.x86_64.rpm       # Fedora (zypper on openSUSE)
-chmod +x bridgewatch_2.1.0_amd64.AppImage && ./bridgewatch_2.1.0_amd64.AppImage
+sudo apt install ./bridgewatch_2.2.0_amd64.deb          # Debian, Ubuntu
+sudo dnf install ./bridgewatch-2.2.0-1.x86_64.rpm       # Fedora (zypper on openSUSE)
+chmod +x bridgewatch_2.2.0_amd64.AppImage && ./bridgewatch_2.2.0_amd64.AppImage
 ```
 
 On GNOME the tray icon needs the AppIndicator/KStatusNotifierItem extension.
@@ -113,7 +113,7 @@ Every release asset carries a GitHub build provenance attestation, signed throug
 Sigstore by this repository's release workflow. With the [GitHub CLI](https://cli.github.com):
 
 ```
-gh attestation verify bridgewatch_2.1.0_amd64.deb --repo distronode-corporation/bridgewatch \
+gh attestation verify bridgewatch_2.2.0_amd64.deb --repo distronode-corporation/bridgewatch \
   --signer-workflow distronode-corporation/bridgewatch/.github/workflows/release.yml
 ```
 
