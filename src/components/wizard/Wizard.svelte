@@ -440,6 +440,11 @@
   const shownRecent = $derived(recentKey === connKey ? recent : null);
   const shownRecentLoading = $derived(recentLoading && recentAsked === connKey);
   const shownRecentError = $derived(recentAsked === connKey ? recentError : null);
+  // While the one-click list is offered, its button is the primary action and
+  // Next (the step-by-step path) steps down to outline: one filled button.
+  const quickOffered = $derived(
+    step.id === "account" && shownRecent?.mode === "projects" && shownRecent.projects.length > 0,
+  );
 
   /**
    * The one-click list, once per connection: a sign-in or a passed Test
@@ -464,9 +469,12 @@
         result.mode === "projects" ? result.projects.map((p) => [p.id, p.ticked]) : [],
       );
       // It lands under the sign-in or Test connection result, often below the
-      // fold of the account step: bring it into view.
+      // fold of the account step: bring it into view. ⚠ Loading ends FIRST, so
+      // the scroll measures the rendered list and not the one-line "loading"
+      // state, which left the list below the fold.
+      recentLoading = false;
       await tick();
-      body?.querySelector<HTMLElement>('[data-slot="quick-setup"]')?.scrollIntoView?.({ block: "nearest" });
+      body?.querySelector<HTMLElement>('[data-slot="quick-setup"]')?.scrollIntoView?.({ block: "end" });
     } catch (error) {
       if (seq !== recentSeq) return;
       recent = null;
@@ -978,7 +986,9 @@
           {saving ? "Saving…" : "Finish"}
         </Button>
       {:else}
-        <Button type="submit" size="sm" disabled={busy} data-action="next">Next</Button>
+        <Button type="submit" size="sm" variant={quickOffered ? "outline" : "default"} disabled={busy} data-action="next"
+          >Next</Button
+        >
       {/if}
     </div>
   </form>

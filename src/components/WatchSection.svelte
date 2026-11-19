@@ -36,7 +36,7 @@
     !secondary && (watch.icon_state === "failed" || watch.icon_state === "deployed_with_failure"),
   );
   const TOOL_BUTTON =
-    "text-muted-foreground hover:text-foreground hover:bg-background focus-visible:ring-ring/50 text-ui-meta shrink-0 rounded-sm px-1 outline-none focus-visible:ring-2";
+    "text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring text-ui-meta h-6 shrink-0 rounded-sm px-1.5 outline-none focus-visible:ring-2";
 </script>
 
 <!-- Watches are set apart by 16px of space above each header (`pt-4`), with
@@ -44,10 +44,12 @@
 <section class="watch pt-4" data-watch={watch.id} data-role={watch.role}>
   <header class="flex min-w-0 items-center gap-2 px-3 pb-1">
     {#if secondary}
+      <!-- A constant name; aria-expanded says which way it is. -->
       <button
-        class="disclosure text-muted-foreground hover:text-foreground -ml-1 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        type="button"
+        class="disclosure text-muted-foreground hover:text-foreground -ml-1.5 inline-flex size-6 items-center justify-center rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-expanded={open}
-        aria-label={open ? "collapse" : "expand"}
+        aria-label={`Show all rows of ${watch.id}`}
         onclick={() => (open = !open)}
         title={open ? "collapse" : "expand"}
       >
@@ -75,9 +77,8 @@
         type="button"
         class={TOOL_BUTTON}
         data-slot="acknowledge"
-        aria-pressed={acknowledged}
         aria-label={acknowledged
-          ? `Stop acknowledging the failure of ${watch.id}`
+          ? `Undo acknowledging the failure of ${watch.id}`
           : `Acknowledge the failure of ${watch.id}`}
         title={acknowledged
           ? "Show this failure at full level in the tray again"

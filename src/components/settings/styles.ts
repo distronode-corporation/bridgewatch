@@ -15,7 +15,7 @@
  */
 
 const CONTROL =
-  "bg-input/50 border-transparent focus-visible:border-ring focus-visible:ring-ring/30 rounded-xl border text-ui-body text-foreground outline-none transition-[color,box-shadow] focus-visible:ring-3 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50";
+  "bg-input/50 border-transparent focus-visible:border-ring focus-visible:ring-ring rounded-xl border text-ui-body text-foreground outline-none transition-[color,box-shadow] focus-visible:ring-2 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50";
 
 export const INPUT = `${CONTROL} h-7 w-full min-w-0 px-2.5`;
 

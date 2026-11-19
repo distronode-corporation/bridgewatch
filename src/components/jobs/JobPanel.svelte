@@ -110,14 +110,14 @@
         <div class="flex items-center gap-1.5">
           <button
             type="button"
-            class="bg-primary text-primary-foreground hover:bg-primary/80 focus-visible:ring-ring/50 rounded-md px-2 py-0.5 font-medium outline-none focus-visible:ring-2 disabled:opacity-50"
+            class="bg-primary text-primary-foreground hover:bg-primary/80 focus-visible:ring-ring rounded-md px-2 py-0.5 font-medium outline-none focus-visible:ring-2 disabled:opacity-50"
             data-slot="job-confirm-yes"
             disabled={write.state === "sending"}
             onclick={() => confirm && send(confirm)}>{confirm === "play" ? "Start" : "Retry"}</button
           >
           <button
             type="button"
-            class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 rounded-md px-2 py-0.5 outline-none focus-visible:ring-2"
+            class="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-md px-2 py-0.5 outline-none focus-visible:ring-2"
             data-slot="job-confirm-no"
             onclick={onCancel}>Cancel</button
           >
@@ -159,7 +159,7 @@
       {#if job.web_url}
         <a
           href={job.web_url}
-          class="text-muted-foreground focus-visible:ring-ring/50 self-start rounded-sm outline-none hover:underline focus-visible:ring-2"
+          class="text-muted-foreground focus-visible:ring-ring self-start rounded-sm outline-none hover:underline focus-visible:ring-2"
           data-slot="job-log-open"
           onclick={openJob}>Open the full log</a
         >

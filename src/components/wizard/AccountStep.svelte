@@ -274,6 +274,7 @@
             {/if}
             <DeviceSignIn
               api={oauth}
+              variant={draft.oauthLogin || draft.oauthStored ? "outline" : "default"}
               request={() => {
                 // ⛔ Stored under the name the form shows NOW, never a name an
                 // earlier sign-in was made under: on a re-run, or after signing

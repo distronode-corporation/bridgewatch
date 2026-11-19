@@ -33,9 +33,11 @@
     /** The button's label; defaults to "Sign in with GitHub". */
     label?: string;
     disabled?: boolean;
+    /** The sign-in button's look: "outline" once an account is signed in, so the next step keeps the one filled button. */
+    variant?: "default" | "outline";
   }
 
-  let { api, request, onsignedin, onfailed, label, disabled = false }: Props = $props();
+  let { api, request, onsignedin, onfailed, label, disabled = false, variant = "default" }: Props = $props();
 
   type Phase = "idle" | "starting" | "waiting" | "done" | "failed";
   let phase = $state<Phase>("idle");
@@ -151,12 +153,16 @@
       <Button variant="ghost" size="sm" onclick={() => void stop()} data-action="cancel-sign-in">Cancel</Button>
     </div>
     <p class="text-muted-foreground m-0 text-xs" aria-live="polite" data-slot="sign-in-waiting">
-      Waiting for you to approve it on {started.host}{polls > 0 ? ` (checked ${polls} ${polls === 1 ? "time" : "times"})` : ""}…
+      <!-- The count is for the eye: announced, it would repeat the sentence on every poll. -->
+      Waiting for you to approve it on {started.host}…{#if polls > 0}<span aria-hidden="true">
+          (checked {polls} {polls === 1 ? "time" : "times"})</span
+        >{/if}
     </p>
   {:else}
     <div>
       <Button
         size="sm"
+        {variant}
         onclick={() => void begin()}
         disabled={disabled || phase === "starting"}
         data-action="oauth-sign-in"

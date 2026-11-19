@@ -178,3 +178,38 @@ describe("app.css, the narrow-window word swap", () => {
   });
 });
 
+
+describe("app.css, Linux contrast (WCAG 2.x)", () => {
+  const css = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  /** The custom properties of the first block that opens with `head`. */
+  function block(head: string): Record<string, string> {
+    const start = css.indexOf(head);
+    expect(start, head).toBeGreaterThanOrEqual(0);
+    const body = css.slice(css.indexOf("{", start + head.length - 1) + 1, css.indexOf("}", start));
+    return Object.fromEntries([...body.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+  }
+  function luminance(hex: string): number {
+    const [r, g, b] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+  function ratio(a: string, b: string): number {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  }
+  const light = block('html[data-platform="linux"] {');
+  const dark = block('@media (prefers-color-scheme: dark) {\n  html[data-platform="linux"] {');
+
+  it("puts white button text on the primary at 4.5:1 or more, light and dark", () => {
+    expect(ratio(light["--primary-foreground"], light["--primary"])).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(dark["--primary-foreground"], dark["--primary"])).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("gives dark link text 4.5:1 or more on the window, card and popover", () => {
+    for (const surface of ["--background", "--card", "--popover"]) {
+      expect(ratio(dark["--link"], dark[surface]), surface).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

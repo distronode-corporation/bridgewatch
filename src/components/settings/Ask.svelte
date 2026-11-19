@@ -53,6 +53,17 @@
   // warns about because it silently captures only the first value.
   let values = $state<Record<string, string>>({});
   let first = $state<HTMLInputElement | null>(null);
+  // A question with no field (a destructive confirm) focuses Cancel, the safe
+  // answer, so the keyboard lands inside the question instead of behind it.
+  let cancel = $state<HTMLElement | null>(null);
+  const uid = $props.id();
+  // The control that asked (Remove watch, Add watch, the field whose change
+  // needs confirming), read before the question takes focus, so focus goes
+  // back to it when the question goes away rather than falling to the body.
+  const opener =
+    document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+      ? document.activeElement
+      : null;
 
   // Every field is required: the two questions this asks — a watch id and a
   // project — have no default that would not write a watch that 404s on every
@@ -60,7 +71,16 @@
   const complete = $derived(fields.every((f) => (values[f.name] ?? "").trim() !== ""));
 
   $effect(() => {
-    first?.focus();
+    (first ?? cancel)?.focus();
+  });
+
+  // A microtask after the teardown, once the question's nodes are gone: only
+  // if focus fell to the body with them, and only to an opener still in the
+  // document (a removed watch takes its Remove button with it).
+  $effect(() => () => {
+    queueMicrotask(() => {
+      if (opener?.isConnected && document.activeElement === document.body) opener.focus();
+    });
   });
 
   function confirm() {
@@ -90,12 +110,12 @@
 <div
   class="ask bg-card text-card-foreground border-border mb-3 flex flex-col gap-2 rounded-2xl border px-3.5 py-3 shadow-sm"
   role="dialog"
-  aria-modal="true"
   aria-label={title}
+  aria-describedby={message ? `${uid}-message` : undefined}
 >
   <p class="title m-0 font-semibold">{title}</p>
   {#if message}
-    <p class="message text-muted-foreground m-0 text-xs whitespace-pre-wrap">{message}</p>
+    <p id="{uid}-message" class="message text-muted-foreground m-0 text-xs whitespace-pre-wrap">{message}</p>
   {/if}
   {#each fields as field, index (field.name)}
     <label class="row grid grid-cols-[170px_1fr] items-center gap-x-3">
@@ -114,7 +134,7 @@
     </label>
   {/each}
   <div class="actions mt-1 flex gap-2">
-    <Button variant="outline" size="sm" class="cancel" onclick={oncancel}>Cancel</Button>
+    <Button bind:ref={cancel} variant="outline" size="sm" class="cancel" onclick={oncancel}>Cancel</Button>
     <Button
       variant={danger ? "destructive" : "default"}
       size="sm"

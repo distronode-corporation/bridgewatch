@@ -245,6 +245,21 @@ describe("SettingsApp, the questions it asks", () => {
     expect(h.ask()).toBe(null);
   });
 
+  it("puts the keyboard back on Remove when the question is declined with Escape", async () => {
+    // The question takes focus (Cancel, as it has no field), so closing it
+    // dropped focus on the body, at the top of the window, until it was handed back.
+    const h = await render();
+    await h.tab("Watches");
+    const remove = host.querySelectorAll<HTMLButtonElement>('button[title="remove this watch"]')[0];
+    remove.focus();
+    await h.click('button[title="remove this watch"]', 0);
+    expect(document.activeElement).toBe(host.querySelector('[role="dialog"] .cancel'));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await settle();
+    expect(h.ask()).toBe(null);
+    expect(document.activeElement).toBe(remove);
+  });
+
   it("collects the new watch's id and project in the document", async () => {
     // Two `window.prompt` calls, both of which returned `null` here, so "Add
     // watch" was dead in exactly the same way.
@@ -390,6 +405,8 @@ describe("SettingsApp, moving a watch (H11)", () => {
     await h.click('button[title="move down"]', 0);
     expect(h.diagnostics()).toContain("the file changed on disk");
     expect(host.querySelector(".notice")?.textContent).toContain("Not moved");
+    // A refusal reads in red, not in the muted grey of "Saved.".
+    expect(host.querySelector(".notice")?.classList.contains("text-tone-red")).toBe(true);
   });
 });
 
@@ -698,6 +715,79 @@ describe("SettingsApp, the sidebar (L2)", () => {
     const footer = host.querySelector("footer")!;
     expect(footer.querySelector(".path")?.textContent).toBe("/tmp/bridgewatch.toml");
     expect([...footer.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual(["Open file", "Reload"]);
+  });
+
+  it("keeps an empty, visually hidden live region until there is a notice", async () => {
+    await render();
+    const notice = host.querySelector(".notice")!;
+    expect(notice.getAttribute("role")).toBe("status");
+    expect(notice.textContent?.trim()).toBe("");
+    expect(notice.classList.contains("sr-only")).toBe(true);
+  });
+
+  it("says Reload read the file, in the muted colour, when it loads", async () => {
+    const h = await render();
+    await h.clickText("Reload");
+    // Reload, then load's four round trips, then the notice.
+    await settle();
+    const notice = host.querySelector(".notice")!;
+    expect(notice.textContent?.trim()).toBe("Reloaded from disk.");
+    expect(notice.classList.contains("text-muted-foreground")).toBe(true);
+    expect(notice.classList.contains("sr-only")).toBe(false);
+  });
+
+  it("announces the same notice twice: it is cleared before it is set again", async () => {
+    const h = await render();
+    await h.clickText("Reload");
+    await settle();
+    const notice = host.querySelector(".notice")!;
+    expect(notice.textContent?.trim()).toBe("Reloaded from disk.");
+    const texts: string[] = [];
+    const observer = new MutationObserver(() => texts.push(notice.textContent?.trim() ?? ""));
+    observer.observe(notice, { childList: true, characterData: true, subtree: true });
+    await h.clickText("Reload");
+    await settle();
+    observer.disconnect();
+    expect(texts).toContain("");
+    expect(texts.at(-1)).toBe("Reloaded from disk.");
+  });
+
+  it("drops a notice pointing at the errors once an outside edit makes the file load", async () => {
+    const h = await render();
+    shell.status = BROKEN;
+    await h.clickText("Reload");
+    await settle();
+    expect(host.querySelector(".notice")?.textContent?.trim()).toContain("see the errors below");
+    shell.status = HEALTHY;
+    shell.changed!();
+    await settle();
+    await settle();
+    expect(host.querySelector(".notice")?.textContent?.trim()).toBe("");
+    expect(h.diagnostics()).toBe("");
+  });
+
+  it("keeps that notice when the outside edit still does not load", async () => {
+    const h = await render();
+    shell.status = BROKEN;
+    await h.clickText("Reload");
+    await settle();
+    shell.changed!();
+    await settle();
+    await settle();
+    expect(host.querySelector(".notice")?.textContent?.trim()).toContain("see the errors below");
+  });
+
+  it("says Reload read a file that does not load, rather than only 'Reloaded'", async () => {
+    const h = await render();
+    shell.status = BROKEN;
+    await h.clickText("Reload");
+    // Reload, then load's four round trips, then the notice.
+    await settle();
+    const notice = host.querySelector(".notice")!;
+    expect(notice.textContent?.trim()).toBe("Reloaded, but the file does not load: see the errors below.");
+    // A failure, so it reads in red like a refusal, not in the colour of "Reloaded from disk.".
+    expect(notice.classList.contains("text-tone-red")).toBe(true);
+    expect(h.diagnostics()).toContain("expected `=` after a key");
   });
 
   it("puts Add watch in the Watches pane's header, and only there", async () => {
