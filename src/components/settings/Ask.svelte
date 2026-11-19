@@ -57,6 +57,13 @@
   // answer, so the keyboard lands inside the question instead of behind it.
   let cancel = $state<HTMLElement | null>(null);
   const uid = $props.id();
+  // The control that asked (Remove watch, Add watch, the field whose change
+  // needs confirming), read before the question takes focus, so focus goes
+  // back to it when the question goes away rather than falling to the body.
+  const opener =
+    document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+      ? document.activeElement
+      : null;
 
   // Every field is required: the two questions this asks — a watch id and a
   // project — have no default that would not write a watch that 404s on every
@@ -65,6 +72,15 @@
 
   $effect(() => {
     (first ?? cancel)?.focus();
+  });
+
+  // A microtask after the teardown, once the question's nodes are gone: only
+  // if focus fell to the body with them, and only to an opener still in the
+  // document (a removed watch takes its Remove button with it).
+  $effect(() => () => {
+    queueMicrotask(() => {
+      if (opener?.isConnected && document.activeElement === document.body) opener.focus();
+    });
   });
 
   function confirm() {

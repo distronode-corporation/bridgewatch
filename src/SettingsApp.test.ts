@@ -245,6 +245,21 @@ describe("SettingsApp, the questions it asks", () => {
     expect(h.ask()).toBe(null);
   });
 
+  it("puts the keyboard back on Remove when the question is declined with Escape", async () => {
+    // The question takes focus (Cancel, as it has no field), so closing it
+    // dropped focus on the body, at the top of the window, until it was handed back.
+    const h = await render();
+    await h.tab("Watches");
+    const remove = host.querySelectorAll<HTMLButtonElement>('button[title="remove this watch"]')[0];
+    remove.focus();
+    await h.click('button[title="remove this watch"]', 0);
+    expect(document.activeElement).toBe(host.querySelector('[role="dialog"] .cancel'));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await settle();
+    expect(h.ask()).toBe(null);
+    expect(document.activeElement).toBe(remove);
+  });
+
   it("collects the new watch's id and project in the document", async () => {
     // Two `window.prompt` calls, both of which returned `null` here, so "Add
     // watch" was dead in exactly the same way.
