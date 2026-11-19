@@ -37,11 +37,14 @@ runs:
       # 34 such runs in 40 CI runs (msrv and coverage), and the same fallback crawl
       # hit the Azure mirror now and then.
       #
-      # So: time each mirror on its -updates InRelease and put the fastest first, then
-      # download under a time limit. A crawl is cut short, the first mirror goes to the
-      # back of the list, and the next attempt resumes from the files already in
-      # /var/cache/apt/archives. Only the download runs under `timeout`, never dpkg: the
-      # install that follows reads the local cache and is never killed half way.
+      # So: time each mirror on the same real package, a 1.4 MB .deb, and put the
+      # fastest first (an InRelease is a few hundred kB, too small to tell a crawl from a
+      # good mirror), then download under a watchdog. Each try is cut when it runs over
+      # its time limit, or when fewer than 1 MB arrive in 30 s: the first mirror goes to
+      # the back of the list, and the next try resumes from the files already in
+      # /var/cache/apt/archives, partial ones included. Only the download is watched,
+      # never dpkg: the install that follows reads the local cache and is never killed
+      # half way.
       run: |
         set -euo pipefail
         pkgs=(
@@ -55,8 +58,12 @@ runs:
           xdg-utils
         )
         # A stalled connection is retried, then the next mirror is tried.
-        apt=(sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+        apt=(apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
         list=/etc/apt/apt-mirrors.txt
+        # The timing sample: noble's release coreutils, 1,412,418 bytes. A release
+        # pocket's files stay in the pool for the release's life, at this same path on
+        # every Ubuntu mirror.
+        sample=pool/main/c/coreutils/coreutils_9.4-3ubuntu6_amd64.deb
 
         write_list() { # mirror URLs on stdin, best first
           awk 'NF && !seen[$1]++ { printf "%s\tpriority:%d\n", $1, ++n }' | sudo tee "$list" > /dev/null
@@ -65,32 +72,75 @@ runs:
         # x64 only: azure.archive.ubuntu.com carries no arm64, and the arm runners'
         # mirror has not been slow.
         if [ -f "$list" ] && [ "$(dpkg --print-architecture)" = amd64 ]; then
-          codename="$(awk -F= '$1 == "VERSION_CODENAME" { print $2 }' /etc/os-release)"
           ranked="$(
             { cut -f1 "$list"; echo http://azure.archive.ubuntu.com/ubuntu/; } | awk 'NF && !seen[$1]++' |
               while read -r url; do
-                read -r code speed < <(curl -sS -o /dev/null --max-time 8 -w '%{http_code} %{speed_download}\n' \
-                  "${url%/}/dists/$codename-updates/InRelease" 2> /dev/null || echo "000 0")
+                # 6 s each: a mirror too slow to send 1.4 MB in that time is ranked by
+                # what it did send (curl reports the speed of a cut transfer too).
+                read -r code speed < <(curl -sS -o /dev/null --max-time 6 -w '%{http_code} %{speed_download}\n' \
+                  "${url%/}/$sample" 2> /dev/null || echo "000 0")
                 [ "$code" = 200 ] || speed=0
                 echo "$speed $url"
               done | sort -g -r
           )"
-          echo "Mirrors by download speed (bytes/s):"
+          echo "Mirrors by download speed of a 1.4 MB package (bytes/s):"
           echo "$ranked"
           awk '{ print $2 }' <<< "$ranked" | write_list
         fi
 
-        # Two timed attempts, then one with no limit but the job's timeout-minutes, so
-        # three slow mirrors in a row still end green rather than red.
+        # The bytes apt has fetched so far: package lists and packages, partial files too.
+        fetched() {
+          sudo du -sb /var/lib/apt/lists /var/cache/apt/archives 2> /dev/null | awk '{ s += $1 } END { print s + 0 }'
+        }
+
+        # Runs apt (as root) under a watchdog: killed after `limit` seconds, or when fewer
+        # than 1 MB arrived in the last 30 s. 0 means no limit and no watchdog. apt is
+        # exec'd under a known pid, so the kill reaches apt itself whatever sudo's pty
+        # does, and its http methods end with it.
+        watched() {
+          local limit=$1
+          shift
+          local pidfile="$RUNNER_TEMP/apt-watched.pid"
+          if [ "$limit" -eq 0 ]; then
+            sudo "${apt[@]}" "$@"
+            return
+          fi
+          rm -f "$pidfile"
+          # shellcheck disable=SC2016 # $$ and $0 are the root shell's, on purpose
+          sudo bash -c 'echo "$$" > "$0"; exec "$@"' "$pidfile" "${apt[@]}" "$@" &
+          local job=$! start=$SECONDS
+          local -a samples=()
+          # Not `kill -0`: the job is sudo, a root process this user may not signal.
+          running() { [[ " $(jobs -rp) " == *" $job "* ]]; }
+          while running; do
+            sleep 5
+            samples+=("$(fetched)")
+            local n=${#samples[@]} why=""
+            if [ $((SECONDS - start)) -ge "$limit" ]; then
+              why="ran over ${limit}s"
+            elif [ "$n" -gt 6 ] && [ $((samples[n - 1] - samples[n - 7])) -lt 1048576 ]; then
+              why="fetched under 1 MB in 30 s"
+            fi
+            if [ -n "$why" ] && running; then
+              echo "::warning::apt $1 $why: stopped"
+              [ -s "$pidfile" ] && sudo kill -TERM "$(cat "$pidfile")" 2> /dev/null || true
+              wait "$job" 2> /dev/null || true
+              return 124
+            fi
+          done
+          wait "$job"
+        }
+
+        # Two watched tries (2 minutes, then 5), then one with no limit but the job's
+        # timeout-minutes, so three slow mirrors in a row still end green rather than red.
+        limits=(120 300 0)
         for attempt in 1 2 3; do
-          limit=(timeout 300)
-          [ "$attempt" -lt 3 ] || limit=()
-          if "${limit[@]}" "${apt[@]}" update &&
-            "${limit[@]}" "${apt[@]}" install -y --download-only "${pkgs[@]}"; then
-            "${apt[@]}" install -y "${pkgs[@]}"
+          limit=${limits[attempt - 1]}
+          if watched "$limit" update && watched "$limit" install -y --download-only "${pkgs[@]}"; then
+            sudo "${apt[@]}" install -y "${pkgs[@]}"
             exit 0
           fi
-          echo "::warning::apt download attempt $attempt failed or ran over its time limit"
+          echo "::warning::apt download attempt $attempt failed or was stopped"
           if [ -f "$list" ]; then
             current="$(cut -f1 "$list")"
             { tail -n +2 <<< "$current"; head -n 1 <<< "$current"; } | write_list
