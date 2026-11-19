@@ -94,7 +94,8 @@ counters are in [SECURITY-MODEL.md](SECURITY-MODEL.md).
   to turn it off. System and environment proxy settings are honoured.
 - The opt-in crash reports (see [What bridgewatch sends where](#what-bridgewatch-sends-where))
   are the one request that does not go through bridgewatch's own transport: the Sentry SDK
-  sends them. It sends them over an HTTP client that bridgewatch builds and hands it, with the
+  sends them. From 2.2.1, it sends them over an HTTP client that bridgewatch builds and hands
+  it (2.2.0 and earlier use the SDK's default client, which honours that switch), with the
   same rustls verification, so the SDK's own `SSL_VERIFY` environment switch, which would turn
   verification off in the client the SDK builds by default, has no effect. That client is set
   up like the one every other request uses: no redirects followed, the same user agent and
