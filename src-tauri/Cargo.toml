@@ -73,7 +73,12 @@ toml_edit = "0.25.15"
 # and the reqwest transport on rustls, the same reqwest the core already uses.
 # `regex` is the workspace's, for the home-directory scrub.
 sentry = { version = "0.49.3", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "reqwest", "rustls"] }
+# The client crash reports go over (crash.rs, `report_client`), the same reqwest
+# sentry's transport uses, so the type matches.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 regex = { workspace = true }
 
 [dev-dependencies]
+# A local TLS server with an untrusted certificate (tests/crash_report_tls.rs).
+rustls = { version = "0.23.46", default-features = false, features = ["std", "aws_lc_rs"] }
 schemars = "1.2.2"

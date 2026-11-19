@@ -25,6 +25,15 @@
 //! hostname). `send_default_pii` stays `false`. If the scrub cannot run, the
 //! report is dropped, not sent unscrubbed.
 //!
+//! ⛔ THE HTTP CLIENT IS BRIDGEWATCH'S, NOT SENTRY'S. Left to itself, `sentry`
+//! builds its own reqwest client, and `sentry::init` reads the `SSL_VERIFY`
+//! environment variable: `SSL_VERIFY=false` makes that client accept any
+//! certificate (`danger_accept_invalid_certs`). So `options` hands `sentry` a
+//! transport factory, [`VerifyingTransport`], whose transport sends over
+//! [`report_client`], a client built here with reqwest's certificate
+//! verification, which nothing turns off. `src-tauri/tests/crash_report_tls.rs`
+//! proves it against a local TLS server with an untrusted certificate.
+//!
 //! ⚠ Kept free of `crate::` paths on purpose: the proof test includes this file
 //! with `#[path]`, because the app is a binary crate with no library to link
 //! against. District Core for Rust carries a module of the same shape; keep the
@@ -163,6 +172,8 @@ impl Reporter {
         // No session pings: the `release-health` feature is off, and this
         // says so again in case a dependency turns it on.
         options.auto_session_tracking = false;
+        // Our client, not sentry's: see "THE HTTP CLIENT IS BRIDGEWATCH'S" above.
+        options.transport = Some(Arc::new(VerifyingTransport));
         options.before_send = Some(Arc::new(move |event| {
             if consent.load(Ordering::SeqCst) {
                 scrub_event(event)
@@ -176,6 +187,52 @@ impl Reporter {
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<sentry::ClientInitGuard>> {
         self.guard.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// The HTTP client crash reports are sent over: reqwest over rustls, with
+/// certificate verification on. Nothing here, and nothing in the environment,
+/// can turn verification off, unlike the client `sentry` would build itself.
+/// Proxy settings from the environment are still honoured, as reqwest does by
+/// default.
+pub fn report_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder().build()
+}
+
+/// The transport factory handed to `sentry`: its own reqwest transport (queue,
+/// rate limits, client reports), but sending over [`report_client`] instead of
+/// a client built from `sentry`'s options. `TransportOptions` still carries
+/// `accept_invalid_certs` from `SSL_VERIFY`; with a client supplied, `sentry`
+/// never reads it.
+#[derive(Clone, Copy, Debug)]
+pub struct VerifyingTransport;
+
+impl sentry::TransportFactory for VerifyingTransport {
+    fn create_transport_with_options(
+        &self,
+        options: sentry::TransportOptions,
+    ) -> Arc<dyn sentry::Transport> {
+        match report_client() {
+            Ok(client) => Arc::new(
+                sentry::transports::ReqwestHttpTransportOptions::from(options)
+                    .with_client(client)
+                    .build(),
+            ),
+            // A client that cannot be built sends nothing. There is no
+            // falling back to sentry's own client, which `SSL_VERIFY` can
+            // weaken.
+            Err(e) => {
+                tracing::warn!(error = %e, "no HTTP client for crash reports; none will be sent");
+                Arc::new(SendsNothing)
+            }
+        }
+    }
+}
+
+/// The transport for a build whose HTTP client could not be made.
+struct SendsNothing;
+
+impl sentry::Transport for SendsNothing {
+    fn send_envelope(&self, _envelope: sentry::Envelope) {}
 }
 
 /// What a report may carry, applied to every event before it is sent.

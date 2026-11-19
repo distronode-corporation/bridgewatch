@@ -478,6 +478,8 @@ dependencies = [
  "dirs 7.0.0",
  "notify",
  "regex",
+ "reqwest",
+ "rustls",
  "schemars 1.2.3",
  "sentry",
  "serde",
