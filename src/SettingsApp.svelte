@@ -106,17 +106,22 @@
   let notice = $state("");
   let noticeSeq = 0;
 
+  /** The gap between clearing the live region and setting its text. */
+  const NOTICE_GAP_MS = 100;
+
   /**
-   * Show a notice. Cleared first and set a tick later, so the same text twice
-   * (a second "Saved.") is still a change the live region announces. Only the
-   * latest call lands.
+   * Show a notice. Cleared first and set in a LATER task, so the same text
+   * twice (a second "Saved.") is still a change the live region announces.
+   * ⚠ Not `tick()`: a microtask lands the clear and the text in one task, and
+   * WebKit can coalesce the two into no announcement at all. Only the latest
+   * call lands.
    */
   function say(text: string) {
     const seq = ++noticeSeq;
     notice = "";
-    void tick().then(() => {
+    setTimeout(() => {
       if (seq === noticeSeq) notice = text;
-    });
+    }, NOTICE_GAP_MS);
   }
 
   /** The text this window's last successful text-tab save wrote, if any. */
