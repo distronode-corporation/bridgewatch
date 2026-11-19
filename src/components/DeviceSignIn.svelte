@@ -151,7 +151,10 @@
       <Button variant="ghost" size="sm" onclick={() => void stop()} data-action="cancel-sign-in">Cancel</Button>
     </div>
     <p class="text-muted-foreground m-0 text-xs" aria-live="polite" data-slot="sign-in-waiting">
-      Waiting for you to approve it on {started.host}{polls > 0 ? ` (checked ${polls} ${polls === 1 ? "time" : "times"})` : ""}…
+      <!-- The count is for the eye: announced, it would repeat the sentence on every poll. -->
+      Waiting for you to approve it on {started.host}…{#if polls > 0}<span aria-hidden="true">
+          (checked {polls} {polls === 1 ? "time" : "times"})</span
+        >{/if}
     </p>
   {:else}
     <div>
