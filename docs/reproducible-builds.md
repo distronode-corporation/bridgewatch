@@ -13,8 +13,8 @@ not claim.
   `npm ci`, give a byte-identical `dist/` directory, which is what the app embeds.
 
 `Cargo.lock` and `package-lock.json` pin every dependency, and the release builds use
-`--locked`, so both builds compile the same sources. Two things do go into the binary from the
-build machine, and they have to match for the bytes to match:
+`--locked`, so both builds compile the same sources. Three things do go into the binary from
+the build machine, and they have to match for the bytes to match:
 
 - **The toolchain.** `rust-toolchain.toml` names the stable channel, not a version, so a
   build next month may use a newer `rustc` and give different bytes. Use the same `rustc`
@@ -22,6 +22,12 @@ build machine, and they have to match for the bytes to match:
 - **Paths.** The compiler records source paths in panic messages, including the paths of
   dependencies under `CARGO_HOME`, so a different `CARGO_HOME` (or checkout directory) can
   give different bytes.
+- **Build settings from the environment.** Cargo reads `CARGO_PROFILE_RELEASE_*` variables as
+  overrides of the committed `[profile.release]`, and `RUSTFLAGS` and `CARGO_BUILD_RUSTFLAGS`
+  as extra compiler flags, so a different `CARGO_PROFILE_RELEASE_OPT_LEVEL` or `RUSTFLAGS` on
+  one build gives different bytes. Leave them unset, apart from the
+  `CARGO_PROFILE_RELEASE_STRIP=true` the commands below set, or set them the same for both
+  builds.
 
 ## Checking it yourself
 

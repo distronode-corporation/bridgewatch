@@ -112,10 +112,12 @@ app is signed with the Developer ID **Distronode Corporation (R935BA6767)** and 
 ```
 codesign --verify --deep --strict /Applications/bridgewatch.app
 spctl --assess --type execute --verbose /Applications/bridgewatch.app   # source=Notarized Developer ID
+codesign -dv /Applications/bridgewatch.app 2>&1 | grep TeamIdentifier  # TeamIdentifier=R935BA6767
 ```
 
-The npm package is published with npm provenance; `npm audit signatures` after
-`npm install -g bridgewatch` checks the registry signature and the attestation.
+The npm package is published with npm provenance; `npm audit signatures`, run in a project
+that has `bridgewatch` installed, checks the registry signature and the attestation (see
+[Verifying a release](docs/verifying-releases.md#the-npm-package)).
 
 ### Uninstall
 

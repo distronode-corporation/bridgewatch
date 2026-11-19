@@ -69,23 +69,31 @@ sha256sum bridgewatch_2.1.0_amd64.deb
 codesign --verify --deep --strict /Applications/bridgewatch.app
 spctl --assess --type execute --verbose /Applications/bridgewatch.app
 spctl --assess --type open --context context:primary-signature --verbose bridgewatch_2.1.0_universal.dmg
+codesign -dv --verbose=2 /Applications/bridgewatch.app 2>&1 | grep -E 'Authority|TeamIdentifier'
 codesign --verify --strict --verbose=2 bridgewatch            # the CLI from its tarball
 codesign -dv --verbose=2 bridgewatch 2>&1 | grep -E 'Authority|TeamIdentifier'
 ```
 
-The two `spctl` commands should end with `source=Notarized Developer ID`, and the last one
-should show `TeamIdentifier=R935BA6767`. The signing certificate is issued by Apple, and
+The two `spctl` commands should end with `source=Notarized Developer ID`. A copy signed and
+notarised by any other Apple developer would pass those too, so the two `codesign -dv` lines
+are the check that it is this project's: each should show
+`Authority=Developer ID Application: Distronode Corporation (R935BA6767)` and
+`TeamIdentifier=R935BA6767`. The signing certificate is issued by Apple, and
 macOS checks it against Apple's own roots, so there is no key to obtain from this project.
 
 ## The npm package
 
 ```
-npm install -g bridgewatch
+mkdir bridgewatch-audit && cd bridgewatch-audit
+npm init -y
+npm install --ignore-scripts bridgewatch
 npm audit signatures
 ```
 
-`npm audit signatures` checks the registry signature of every installed package and the
-provenance attestation of those that have one, `bridgewatch` included. The provenance names
+`npm audit signatures` audits the packages of the project it runs in, not global installs,
+hence the throwaway project. It checks the registry signature of every package there and the
+provenance attestation of those that have one; for `bridgewatch` it should report one verified
+registry signature and one verified attestation. The provenance names
 this repository and `release.yml` as the source and the build. The package's three binaries are
 the same bytes as the CLI tarballs on the GitHub Release: the `npm` job downloads them from the
 public release and verifies their attestation before it packs them.

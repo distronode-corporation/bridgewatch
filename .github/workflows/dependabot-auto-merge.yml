@@ -43,11 +43,9 @@ name: Dependabot auto-merge
 # `GITHUB_TOKEN`. So the resulting push to `main` is expected NOT to trigger ci.yml or
 # scorecard.yml for that commit. That is acceptable rather than ideal: the PR's own
 # checks ran against this change, and scorecard.yml's and audit.yml's weekly schedules
-# plus the next ordinary push all cover main again. It is NOT proof of the merged tree:
-# the ruleset sets `strict_required_status_checks_policy: false`, so a Dependabot branch
-# need not be up to date, and a squash can land on a `main` newer than the one its
-# checks ran against. If a lockfile bump ever merges green and leaves main red, turn
-# that policy on (Dependabot rebases its own branches) rather than weakening this file.
+# plus the next ordinary push all cover main again. The ruleset sets
+# `strict_required_status_checks_policy: true`, so a Dependabot branch must be up to
+# date with `main` before it can merge, and its checks ran against the tree that lands.
 #
 # ⚠️ The ruleset also carries `require_extra_approval_for_unattributed_changes: true`.
 # Dependabot's commits are verified and attributed to dependabot[bot], so this is not
