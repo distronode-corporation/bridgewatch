@@ -230,6 +230,9 @@ describe("the one-click list", () => {
     expect(api.recentProjects).toHaveBeenCalledTimes(1);
     expect(api.recentProjects.mock.calls[0][0]).toMatchObject({ token: { oauth: true }, account: "gitlab" });
     expect(checkedIds()).toEqual([1, 2, 3]);
+    // Sign in again and Next are outline: "Watch 3 projects" is the one filled button.
+    const filled = all("button").filter((b) => b.classList.contains("bg-primary"));
+    expect(filled.map((b) => b.dataset.action)).toEqual(["quick-setup"]);
   });
 
   it("labels a row 'active … ago' from its timestamp, and shows nothing where there is none", async () => {

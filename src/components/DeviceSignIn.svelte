@@ -33,9 +33,11 @@
     /** The button's label; defaults to "Sign in with GitHub". */
     label?: string;
     disabled?: boolean;
+    /** The sign-in button's look: "outline" once an account is signed in, so the next step keeps the one filled button. */
+    variant?: "default" | "outline";
   }
 
-  let { api, request, onsignedin, onfailed, label, disabled = false }: Props = $props();
+  let { api, request, onsignedin, onfailed, label, disabled = false, variant = "default" }: Props = $props();
 
   type Phase = "idle" | "starting" | "waiting" | "done" | "failed";
   let phase = $state<Phase>("idle");
@@ -160,6 +162,7 @@
     <div>
       <Button
         size="sm"
+        {variant}
         onclick={() => void begin()}
         disabled={disabled || phase === "starting"}
         data-action="oauth-sign-in"
