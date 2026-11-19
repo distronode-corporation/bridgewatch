@@ -143,11 +143,15 @@
     </Button>
   </header>
 
-  {#if notice}
-    <p class="notice text-tone-amber border-border m-0 border-b px-3 py-1 text-xs" role="status" data-slot="popover-notice">
-      {notice}
-    </p>
-  {/if}
+  <!-- Always mounted, empty when there is nothing to say: a live region that
+       appears together with its text is not announced by most screen readers. -->
+  <p
+    class={["notice m-0 text-xs", notice ? "text-tone-amber border-border border-b px-3 py-1" : "sr-only"]}
+    role="status"
+    data-slot="popover-notice"
+  >
+    {notice}
+  </p>
 
   <ErrorStrip errors={stripErrors} {status} {onfix} {onsetup} />
 

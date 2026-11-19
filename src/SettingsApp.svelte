@@ -353,9 +353,16 @@
         </div>
       {/if}
 
-      {#if notice}
-        <p class="notice text-muted-foreground text-ui-meta m-0">{notice}</p>
-      {/if}
+      <!-- Always mounted, so a new notice is announced; a refusal reads in red. -->
+      <p
+        class={[
+          "notice text-ui-meta m-0",
+          notice ? (/^(Not |Could not)/.test(notice) ? "text-tone-red" : "text-muted-foreground") : "sr-only",
+        ]}
+        role="status"
+      >
+        {notice}
+      </p>
 
       {#if pendingConfirm}
         <Ask
