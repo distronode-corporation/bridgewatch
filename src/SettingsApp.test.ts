@@ -126,6 +126,8 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(() => {
+  // Only setTimeout: a notice is set 100 ms after the region is cleared.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   // The window restores the last pane used: every test starts from none.
   localStorage.clear();
   shell.status = HEALTHY;
@@ -147,6 +149,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   if (component) void unmount(component);
   component = null;
   host?.remove();
@@ -189,9 +192,21 @@ async function render() {
   };
 }
 
-async function settle() {
+async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
   flushSync();
+}
+
+/**
+ * Let the IPC round trips resolve, then the notice's gap (a real setTimeout
+ * in the app, faked here) run out, so a notice is on screen when this returns.
+ */
+async function settle() {
+  for (let i = 0; i < 3; i++) {
+    await microtasks();
+    vi.advanceTimersByTime(100);
+  }
+  await microtasks();
 }
 
 describe("SettingsApp, a configuration that does not load", () => {
@@ -736,21 +751,44 @@ describe("SettingsApp, the sidebar (L2)", () => {
     expect(notice.classList.contains("sr-only")).toBe(false);
   });
 
-  it("announces the same notice twice: it is cleared before it is set again", async () => {
+  it("announces the same notice twice: cleared, then set in a later task", async () => {
     const h = await render();
     await h.clickText("Reload");
-    await settle();
     const notice = host.querySelector(".notice")!;
     expect(notice.textContent?.trim()).toBe("Reloaded from disk.");
-    const texts: string[] = [];
-    const observer = new MutationObserver(() => texts.push(notice.textContent?.trim() ?? ""));
-    observer.observe(notice, { childList: true, characterData: true, subtree: true });
-    await h.clickText("Reload");
-    await settle();
-    observer.disconnect();
-    expect(texts).toContain("");
-    expect(texts.at(-1)).toBe("Reloaded from disk.");
+    // The second Reload by hand, so no timer runs until this test says so.
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "Reload")!.click();
+    // Microtasks only, until the reload's round trips reach say() and clear it.
+    for (let i = 0; i < 10 && notice.textContent?.trim() !== ""; i++) await microtasks();
+    expect(notice.textContent?.trim()).toBe("");
+    // Every microtask has drained and the region is still empty: the text is
+    // NOT in the same task as the clear, which WebKit could coalesce into silence.
+    await microtasks();
+    await microtasks();
+    expect(notice.textContent?.trim()).toBe("");
+    vi.advanceTimersByTime(99);
+    flushSync();
+    expect(notice.textContent?.trim()).toBe("");
+    vi.advanceTimersByTime(1);
+    flushSync();
+    expect(notice.textContent?.trim()).toBe("Reloaded from disk.");
   });
+
+  it("lands only the latest of two notices said within the gap", async () => {
+    await render();
+    shell.openError = "no handler";
+    const button = (label: string) =>
+      [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === label)!;
+    button("Open file").click();
+    await microtasks();
+    button("Reload").click();
+    await microtasks();
+    await microtasks();
+    vi.advanceTimersByTime(100);
+    flushSync();
+    expect(host.querySelector(".notice")?.textContent?.trim()).toBe("Reloaded from disk.");
+  });
+
 
   it("drops a notice pointing at the errors once an outside edit makes the file load", async () => {
     const h = await render();
@@ -763,6 +801,24 @@ describe("SettingsApp, the sidebar (L2)", () => {
     await settle();
     await settle();
     expect(host.querySelector(".notice")?.textContent?.trim()).toBe("");
+    expect(h.diagnostics()).toBe("");
+  });
+
+  it("drops that notice when the outside edit lands inside the gap, before it shows", async () => {
+    const h = await render();
+    shell.status = BROKEN;
+    // Reload by hand, so no timer runs until this test says so.
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "Reload")!.click();
+    // The reload's round trips reach say(), which clears the region and waits out the gap.
+    for (let i = 0; i < 3; i++) await microtasks();
+    const notice = host.querySelector(".notice")!;
+    expect(notice.textContent?.trim()).toBe("");
+    expect(h.diagnostics()).toContain("expected `=` after a key");
+    shell.status = HEALTHY;
+    shell.changed!();
+    await settle();
+    await settle();
+    expect(notice.textContent?.trim()).toBe("");
     expect(h.diagnostics()).toBe("");
   });
 

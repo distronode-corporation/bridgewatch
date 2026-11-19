@@ -14,9 +14,28 @@ but not required. Never include a real token; if a token is part of the problem,
 it appeared, not what it was.
 
 Expect an acknowledgement within a few working days. This is a small project with no paid
-bug bounty; what you get is credit in the changelog entry for the fix, if you want it.
+bug bounty; what you get is credit for the report, if you want it.
 
-The whole process, from report to advisory, is in the organization's
+### How a report is handled
+
+1. **Acknowledgement** within a few working days, in the private advisory or by email.
+2. **Assessment** against this file and [SECURITY-MODEL.md](SECURITY-MODEL.md): whether it
+   is in [scope](#scope), how bad it is, and which versions it affects. You are kept
+   informed in the private advisory or by email, and told if it is not accepted and why.
+3. **Fix**, developed privately while the report is undisclosed, with a test that fails
+   without it, and released as a new version. Only the latest release is supported (see
+   below), so a fix goes into a new release rather than being backported.
+4. **Disclosure**: once the fix is released, a GitHub security advisory for this
+   repository and an entry in [CHANGELOG.md](CHANGELOG.md).
+5. **Credit**: the reporter is named in the advisory and in the changelog entry, unless
+   they ask to stay anonymous. Say in the report how you would like to be named.
+
+A vulnerability in a dependency that bridgewatch does not itself introduce is handled
+through the dependency checks described in
+[Installing bridgewatch](docs/install.md#what-guards-the-code-and-the-release-path): the
+dependency is updated, or, where no fixed version exists or the advisory does not affect
+bridgewatch, it is recorded in `deny.toml` and `osv-scanner.toml` with its reason. The same
+process applies across the organization's projects; see its
 [GOVERNANCE.md](https://github.com/distronode-corporation/.github/blob/main/GOVERNANCE.md#vulnerability-response).
 
 ## Supported versions
@@ -26,7 +45,8 @@ backported.
 
 | Version | Supported |
 | --- | --- |
-| 2.1.x (current release: 2.1.0) | Yes |
+| 2.2.x (current release: 2.2.0) | Yes |
+| 2.1.x | No |
 | 2.0.x | No |
 | 1.3.x | No |
 | 1.2.x | No |
@@ -72,6 +92,15 @@ counters are in [SECURITY-MODEL.md](SECURITY-MODEL.md).
   validation warns about it unless the host is loopback, because the token would cross
   the network unencrypted. HTTPS uses rustls with certificate verification and no option
   to turn it off. System and environment proxy settings are honoured.
+- The opt-in crash reports (see [What bridgewatch sends where](#what-bridgewatch-sends-where))
+  are the one request that does not go through bridgewatch's own transport: the Sentry SDK
+  sends them. From 2.2.1, it sends them over an HTTP client that bridgewatch builds and hands
+  it (2.2.0 and earlier use the SDK's default client, which honours that switch), with the
+  same rustls verification, so the SDK's own `SSL_VERIFY` environment switch, which would turn
+  verification off in the client the SDK builds by default, has no effect. That client is set
+  up like the one every other request uses: no redirects followed, the same user agent and
+  timeout, and proxies from the environment as for every other request (`HTTPS_PROXY` or
+  `ALL_PROXY`, with `NO_PROXY` honoured). A report carries no token.
 
 ### Sign-in tokens (OAuth)
 

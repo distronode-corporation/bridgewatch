@@ -151,13 +151,32 @@ test.
 
 ## Style
 
-Rust follows the Rust style guide as `rustfmt` implements it (`rustfmt.toml`), plus
-`cargo clippy --all-targets -- -D warnings`, so a clippy lint or a compiler warning is a
-failure. TypeScript and Svelte are checked by `tsc` in `strict` mode with
-`noUnusedLocals`, `noUnusedParameters` and `noFallthroughCasesInSwitch` (`tsconfig.json`),
-and by `svelte-check --fail-on-warnings`. `.editorconfig` sets the indentation and line
-endings. CI's `rust` and `frontend` jobs run all of it, and a pull request that fails it
-does not merge.
+Contributions follow these style guides. CI enforces every check named below, so a pull
+request that fails one does not merge:
+
+- **Rust** follows the [Rust Style Guide](https://doc.rust-lang.org/style-guide/) as `rustfmt`
+  implements it, with the settings in `rustfmt.toml` (edition 2024, lines up to 100 columns,
+  field init shorthand), checked by `cargo fmt --all --check`. On top of that, Clippy's
+  default lints apply with every warning an error (`cargo clippy --workspace --all-targets
+  -- -D warnings`), and so does every compiler warning. An exception is an `#[allow(...)]`
+  on the item it covers, so it can be reviewed where it is. Today there is one Clippy
+  exception (`too_many_arguments` in `crates/bridgewatch-cli/src/auth.rs`); the rest are
+  `dead_code` allows on platform-specific items and in test code, one of them module-wide
+  (`crates/bridgewatch-core/tests/support/mod.rs`). The roots of the three
+  crates (core, CLI and app) are `#![forbid(unsafe_code)]`, and there is no `unsafe` code
+  in the repository.
+- **TypeScript and Svelte** are checked by `tsc` in `strict` mode with `noUnusedLocals`,
+  `noUnusedParameters` and `noFallthroughCasesInSwitch` (`tsconfig.json`), and by
+  `svelte-check --fail-on-warnings`, which includes the Svelte compiler's accessibility
+  warnings. No formatter is enforced for them; follow the layout of the surrounding code.
+- **`.editorconfig`** sets UTF-8, LF line endings, a final newline and spaces, four for
+  Rust and two for TypeScript, Svelte and the config formats. CI does not check it, and
+  not every file follows it: the vendored shadcn-svelte components under
+  `src/lib/components/ui/`, `components.json` and `src-tauri/Info.plist` use tabs, as
+  their generators wrote them. New code follows it; editors that read `.editorconfig`
+  apply it as you type.
+
+CI's `rust` and `frontend` jobs run the checks.
 
 ## Tests
 
@@ -165,16 +184,19 @@ A pull request that adds or changes functionality adds tests for it to the autom
 suite, and a bug fix adds a test that fails without the fix: `cargo test` for Rust, vitest
 for the frontend. A change in behaviour comes with a test that fails without it.
 
-Coverage is measured in CI and only goes up:
+Coverage is measured in CI, and floors only go up:
 
 - Rust: line coverage per workspace crate, measured with
   [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) in the `coverage` job and
-  held to the floors in `coverage-floors.toml` by `scripts/check-coverage.py`.
+  held to the floors in `coverage-floors.toml` by `scripts/check-coverage.py`. The
+  `coverage` job runs on every pull request but is not yet a required check, so the
+  reviewer checks that it is green.
 - Frontend: `npx vitest run --coverage` fails under the floors in `vitest.config.ts`
   (statements, branches, functions and lines over every file under `src/`).
 
 There is no exclusion list. A change that raises coverage raises the floor in the same pull
-request; lowering one needs a reason stated in review.
+request; lowering one needs a reason stated in review. That is a review rule: no tool
+compares a floor with its previous value.
 
 ## Commits and pull requests
 
@@ -182,18 +204,25 @@ Conventional Commits are not required. What is required is that the message says
 not just what. The diff already says what. A good message names the thing that was
 wrong, the evidence, and what would have caught it.
 
-Pull requests run `.github/workflows/ci.yml` and all of it must be green. Docs change in
-the same pull request as the behaviour they describe (see [Docs](#docs)).
+Pull requests run `.github/workflows/ci.yml`, and every job of it that runs must be green.
+The `main` ruleset requires ten checks to pass before a merge: nine of those jobs (the three
+`rust` legs, `msrv`, `repo`, `frontend`, `cargo-deny`, `zizmor` and `dependency-review`) and
+`review-threads`, from its own workflow. The other `ci.yml` jobs (`coverage`, `repeatable`,
+the three `cli` legs, `npm-rehearsal` and the four `launcher` legs) run on every pull request
+but are not required checks yet, so the reviewer checks them. Docs change in the same pull request as
+the behaviour they describe (see [Docs](#docs)).
 
 By contributing you agree that your contribution is licensed under the Apache License
 2.0, as section 5 of the licence provides. There is no CLA and no sign-off requirement.
 
-How a change is reviewed and accepted, and who holds which role, is in the organization's
-[GOVERNANCE.md](https://github.com/distronode-corporation/.github/blob/main/GOVERNANCE.md).
+How a change is reviewed and accepted, who holds which role, and how a release is made is
+in [GOVERNANCE.md](GOVERNANCE.md).
 
 ## Docs
 
-Every claim in the README and in `docs/` must be checkable in the code. If you change
+Every claim in the README, in the documents at the repository root (ARCHITECTURE.md,
+SECURITY.md, SECURITY-MODEL.md, GOVERNANCE.md, ROADMAP.md) and in `docs/` must be checkable
+in the code. If you change
 behaviour they describe (a default, a rule, a CLI flag, an exit code), change the page
 that describes it in the same pull request. The README is the project's homepage; the
 reference lives in `docs/`, one page per topic. The exit-code table in

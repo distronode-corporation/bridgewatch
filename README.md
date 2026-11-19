@@ -90,9 +90,9 @@ Or download `bridgewatch_<version>_universal.dmg` from the
 **Linux** (x86_64 and arm64, glibc 2.35 or newer), from the same Releases page:
 
 ```
-sudo apt install ./bridgewatch_2.1.0_amd64.deb          # Debian, Ubuntu
-sudo dnf install ./bridgewatch-2.1.0-1.x86_64.rpm       # Fedora (zypper on openSUSE)
-chmod +x bridgewatch_2.1.0_amd64.AppImage && ./bridgewatch_2.1.0_amd64.AppImage
+sudo apt install ./bridgewatch_2.2.0_amd64.deb          # Debian, Ubuntu
+sudo dnf install ./bridgewatch-2.2.0-1.x86_64.rpm       # Fedora (zypper on openSUSE)
+chmod +x bridgewatch_2.2.0_amd64.AppImage && ./bridgewatch_2.2.0_amd64.AppImage
 ```
 
 On GNOME the tray icon needs the AppIndicator/KStatusNotifierItem extension.
@@ -113,21 +113,25 @@ Every release asset carries a GitHub build provenance attestation, signed throug
 Sigstore by this repository's release workflow. With the [GitHub CLI](https://cli.github.com):
 
 ```
-gh attestation verify bridgewatch_2.1.0_amd64.deb --repo distronode-corporation/bridgewatch \
+gh attestation verify bridgewatch_2.2.0_amd64.deb --repo distronode-corporation/bridgewatch \
   --signer-workflow distronode-corporation/bridgewatch/.github/workflows/release.yml
 ```
 
 Each release also carries the attestation as `bridgewatch_<version>.intoto.jsonl`, so the
-same check works offline with `--bundle bridgewatch_<version>.intoto.jsonl`. On macOS the
+same check works without GitHub's attestation API with
+`--bundle bridgewatch_<version>.intoto.jsonl` ([Verifying a release](docs/verifying-releases.md)
+covers a machine with no network). On macOS the
 app is signed with the Developer ID **Distronode Corporation (R935BA6767)** and notarised:
 
 ```
 codesign --verify --deep --strict /Applications/bridgewatch.app
 spctl --assess --type execute --verbose /Applications/bridgewatch.app   # source=Notarized Developer ID
+codesign -dv /Applications/bridgewatch.app 2>&1 | grep TeamIdentifier  # TeamIdentifier=R935BA6767
 ```
 
-The npm package is published with npm provenance; `npm audit signatures` after
-`npm install -g bridgewatch` checks the registry signature and the attestation.
+The npm package is published with npm provenance; `npm audit signatures`, run in a project
+that has `bridgewatch` installed, checks the registry signature and the attestation (see
+[Verifying a release](docs/verifying-releases.md#the-npm-package)).
 
 ### Uninstall
 
@@ -271,6 +275,10 @@ What that adds up to:
 - [CLI](docs/cli.md): every command and the exit codes.
 - [Build from source](docs/building.md).
 - [Limitations](docs/limitations.md).
+- [Verifying a release](docs/verifying-releases.md): what each asset is signed with and
+  how to check it, and what is not signed.
+- [Repeatable builds](docs/reproducible-builds.md): which builds give the same bytes twice,
+  and how to check.
 
 Sections that used to live on this page keep their links:
 
@@ -294,11 +302,10 @@ Moved to [Retry and play](docs/retry-and-play.md).
 - [ARCHITECTURE.md](ARCHITECTURE.md): the parts, a poll from start to finish, and where
   state lives. [SECURITY-MODEL.md](SECURITY-MODEL.md): the threat model, trust boundaries,
   the secure design principles applied and the weaknesses the code counters.
-- [ROADMAP.md](ROADMAP.md): what is planned next, and what is not planned.
-- The organization's
-  [GOVERNANCE.md](https://github.com/distronode-corporation/.github/blob/main/GOVERNANCE.md):
-  who maintains the project, how a change is accepted, how a vulnerability report is
-  handled, and how the project continues without any one person.
+- [ROADMAP.md](ROADMAP.md): what is planned over the next year, and what is not planned.
+- [GOVERNANCE.md](GOVERNANCE.md): who maintains the project, how a change is accepted, how
+  a release is made, and how the project continues without any one person. How a
+  vulnerability report is handled is in [SECURITY.md](SECURITY.md#how-a-report-is-handled).
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 - [SUPPORT](.github/SUPPORT.md): questions and ideas go to
   [Discussions](https://github.com/distronode-corporation/bridgewatch/discussions), bugs

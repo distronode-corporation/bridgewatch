@@ -2,7 +2,7 @@ name: Dependabot auto-merge
 
 # Dependabot opens grouped minor+patch pull requests every week against three
 # ecosystems (github-actions, cargo, npm), and each one otherwise waits on a human to
-# press the button after the same nine checks have already gone green. This workflow
+# press the button after the same required checks have already gone green. This workflow
 # turns on GitHub's own auto-merge for the routine half of that: a Dependabot PR whose
 # highest semver change is patch or minor is queued to squash-merge itself once the
 # `main` ruleset is satisfied. A major is deliberately left for a person, which is the
@@ -13,11 +13,11 @@ name: Dependabot auto-merge
 # after publication.
 #
 # Auto-merge is a queue, not a merge: GitHub completes it only when the `main` ruleset
-# is satisfied. Read from the ruleset itself, that is 9 required status checks green
+# is satisfied. Read from the ruleset itself, that is 10 required status checks green
 # (rust on all three legs: ubuntu-22.04, ubuntu-22.04-arm and macos-latest; then msrv,
-# repo, frontend, cargo-deny, zizmor, dependency-review) and
-# `required_approving_review_count: 0`, so nothing waits on a review that will never
-# come on a solo repository. ⛔ A rust leg added to ci.yml's matrix is not required until
+# repo, frontend, cargo-deny, zizmor, dependency-review, review-threads) and one
+# approving review from the code owner, so a queued Dependabot PR still merges only
+# after the code owner approves it. ⛔ A rust leg added to ci.yml's matrix is not required until
 # it is also added to the ruleset, and until then a Dependabot PR red only on that leg
 # can still merge itself. The ruleset also sets `required_linear_history` and allows
 # only squash and rebase, which is why `--squash` is the method rather than a merge
@@ -43,11 +43,9 @@ name: Dependabot auto-merge
 # `GITHUB_TOKEN`. So the resulting push to `main` is expected NOT to trigger ci.yml or
 # scorecard.yml for that commit. That is acceptable rather than ideal: the PR's own
 # checks ran against this change, and scorecard.yml's and audit.yml's weekly schedules
-# plus the next ordinary push all cover main again. It is NOT proof of the merged tree:
-# the ruleset sets `strict_required_status_checks_policy: false`, so a Dependabot branch
-# need not be up to date, and a squash can land on a `main` newer than the one its
-# checks ran against. If a lockfile bump ever merges green and leaves main red, turn
-# that policy on (Dependabot rebases its own branches) rather than weakening this file.
+# plus the next ordinary push all cover main again. The ruleset sets
+# `strict_required_status_checks_policy: true`, so a Dependabot branch must be up to
+# date with `main` before it can merge, and its checks ran against the tree that lands.
 #
 # ⚠️ The ruleset also carries `require_extra_approval_for_unattributed_changes: true`.
 # Dependabot's commits are verified and attributed to dependabot[bot], so this is not
@@ -118,7 +116,7 @@ jobs:
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
 
       # `--auto` queues the merge rather than performing it, so this step finishing is
-      # not a merge: the nine required checks still have to pass first, and a red one
+      # not a merge: the required checks and the code owner's approval still come first, and a red check
       # leaves the PR sitting open exactly as it does today.
       #
       # ⚠️ `PR_URL` goes through `env:` rather than being interpolated into the `run:`
