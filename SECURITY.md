@@ -95,8 +95,10 @@ counters are in [SECURITY-MODEL.md](SECURITY-MODEL.md).
   are the one request that does not go through bridgewatch's own transport: the Sentry SDK
   sends them. It sends them over an HTTP client that bridgewatch builds and hands it, with the
   same rustls verification, so the SDK's own `SSL_VERIFY` environment switch, which would turn
-  verification off in the client the SDK builds by default, has no effect. A report carries no
-  token.
+  verification off in the client the SDK builds by default, has no effect. That client is set
+  up like the one every other request uses: no redirects followed, the same user agent and
+  timeout, and proxies from the environment as for every other request (`HTTPS_PROXY` or
+  `ALL_PROXY`, with `NO_PROXY` honoured). A report carries no token.
 
 ### Sign-in tokens (OAuth)
 
