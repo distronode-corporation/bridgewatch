@@ -86,7 +86,7 @@ macOS checks it against Apple's own roots, so there is no key to obtain from thi
 ```
 mkdir bridgewatch-audit && cd bridgewatch-audit
 npm init -y
-npm install --ignore-scripts bridgewatch
+npm install --ignore-scripts bridgewatch@2.1.0     # the version you want to check
 npm audit signatures
 ```
 
