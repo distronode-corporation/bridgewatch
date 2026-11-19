@@ -30,7 +30,7 @@
     bind:open={expanded}
   >
     <summary
-      class="text-foreground hover:bg-muted/60 flex cursor-pointer list-none items-center gap-1.5 rounded-md px-1 py-1 outline-none select-none focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden"
+      class="text-foreground hover:bg-muted/60 flex cursor-pointer list-none items-center gap-1.5 rounded-md px-1 py-1 outline-none select-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
     >
       <ChevronRightIcon class="text-muted-foreground size-3.5 shrink-0 transition-transform group-open/section:rotate-90" aria-hidden="true" />
       <span class={[SECTION_TITLE, "group-hover/section:text-foreground"]}>{title}</span>

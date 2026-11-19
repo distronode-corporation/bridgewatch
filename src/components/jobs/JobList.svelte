@@ -141,7 +141,7 @@
 
   // 12px words, not 10px capitals.
   const TOOL_BUTTON =
-    "text-muted-foreground hover:text-foreground hover:bg-background focus-visible:ring-ring/50 aria-expanded:text-foreground shrink-0 rounded-sm px-1 outline-none focus-visible:ring-2";
+    "text-muted-foreground hover:text-foreground hover:bg-background focus-visible:ring-ring aria-expanded:text-foreground shrink-0 rounded-sm px-1 outline-none focus-visible:ring-2";
 
   /**
    * The tools of a failed job are always shown. Any other job's (retry on a
@@ -211,7 +211,7 @@
               {#if job.web_url}
                 <a
                   href={job.web_url}
-                  class="text-foreground focus-visible:ring-ring/50 min-w-0 truncate rounded-sm font-mono outline-none hover:underline focus-visible:ring-2"
+                  class="text-foreground focus-visible:ring-ring min-w-0 truncate rounded-sm font-mono outline-none hover:underline focus-visible:ring-2"
                   title={`${job.name} (${classWord(job.class)})`}
                   onclick={(event) => open(event, job.web_url as string)}>{job.name}</a
                 >

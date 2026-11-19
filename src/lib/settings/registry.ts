@@ -325,7 +325,7 @@ export const REGISTRY: RegistryEntry[] = [
     tab: "watches",
     control: "jobs",
     label: "Job class overrides",
-    hint: "Matched in file order, first wins — so the rows' order is the rule.",
+    hint: "Matched in file order, first wins, so the rows' order is the rule.",
   },
   // Shown under a "Notifications" heading, so the labels carry no "Notify:" prefix.
   { path: "watches.*.notify.deployed", tab: "watches", control: "boolean", label: "Deployed" },
@@ -362,7 +362,7 @@ export const REGISTRY: RegistryEntry[] = [
     tab: "watches",
     control: "text",
     label: "Body",
-    hint: "default('…', true) — the second argument is load-bearing on an empty list.",
+    hint: "default('…', true): the second argument is load-bearing on an empty list.",
   },
   {
     path: "watches.*.notify.click",
