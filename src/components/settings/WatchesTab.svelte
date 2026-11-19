@@ -86,7 +86,7 @@
       <button
         class="disclosure text-muted-foreground hover:text-foreground rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-expanded={open === id}
-        aria-label={open === id ? "collapse" : "expand"}
+        aria-label={`Settings for the watch ${id || "(no id)"}`}
         onclick={() => (openId = open === id ? null : id)}
       >
         <ChevronRightIcon class={["size-3.5 transition-transform", open === id && "rotate-90"]} aria-hidden="true" />
