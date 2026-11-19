@@ -469,9 +469,12 @@
         result.mode === "projects" ? result.projects.map((p) => [p.id, p.ticked]) : [],
       );
       // It lands under the sign-in or Test connection result, often below the
-      // fold of the account step: bring it into view.
+      // fold of the account step: bring it into view. ⚠ Loading ends FIRST, so
+      // the scroll measures the rendered list and not the one-line "loading"
+      // state, which left the list below the fold.
+      recentLoading = false;
       await tick();
-      body?.querySelector<HTMLElement>('[data-slot="quick-setup"]')?.scrollIntoView?.({ block: "nearest" });
+      body?.querySelector<HTMLElement>('[data-slot="quick-setup"]')?.scrollIntoView?.({ block: "end" });
     } catch (error) {
       if (seq !== recentSeq) return;
       recent = null;

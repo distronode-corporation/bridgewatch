@@ -196,6 +196,21 @@ describe("the one-click list", () => {
     expect(text('[data-action="quick-setup"]')).toBe("Watch 3 projects");
   });
 
+  it("scrolls to the rendered list, not to its loading line", async () => {
+    // jsdom has no layout, so record what the list held when it was scrolled to.
+    const seen: { rows: number; block: unknown }[] = [];
+    const scroll = vi.fn(function (this: HTMLElement, options?: ScrollIntoViewOptions) {
+      seen.push({ rows: this.querySelectorAll('[data-slot="quick-row"]').length, block: options?.block });
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { value: scroll, configurable: true });
+    try {
+      await pasteAndTest(fakeApi());
+      expect(seen).toEqual([{ rows: 10, block: "end" }]);
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
   it("leaves one filled button: Next steps down to outline while the list is offered", async () => {
     const api = fakeApi();
     await start(api);
