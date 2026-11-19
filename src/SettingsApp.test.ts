@@ -736,6 +736,47 @@ describe("SettingsApp, the sidebar (L2)", () => {
     expect(notice.classList.contains("sr-only")).toBe(false);
   });
 
+  it("announces the same notice twice: it is cleared before it is set again", async () => {
+    const h = await render();
+    await h.clickText("Reload");
+    await settle();
+    const notice = host.querySelector(".notice")!;
+    expect(notice.textContent?.trim()).toBe("Reloaded from disk.");
+    const texts: string[] = [];
+    const observer = new MutationObserver(() => texts.push(notice.textContent?.trim() ?? ""));
+    observer.observe(notice, { childList: true, characterData: true, subtree: true });
+    await h.clickText("Reload");
+    await settle();
+    observer.disconnect();
+    expect(texts).toContain("");
+    expect(texts.at(-1)).toBe("Reloaded from disk.");
+  });
+
+  it("drops a notice pointing at the errors once an outside edit makes the file load", async () => {
+    const h = await render();
+    shell.status = BROKEN;
+    await h.clickText("Reload");
+    await settle();
+    expect(host.querySelector(".notice")?.textContent?.trim()).toContain("see the errors below");
+    shell.status = HEALTHY;
+    shell.changed!();
+    await settle();
+    await settle();
+    expect(host.querySelector(".notice")?.textContent?.trim()).toBe("");
+    expect(h.diagnostics()).toBe("");
+  });
+
+  it("keeps that notice when the outside edit still does not load", async () => {
+    const h = await render();
+    shell.status = BROKEN;
+    await h.clickText("Reload");
+    await settle();
+    shell.changed!();
+    await settle();
+    await settle();
+    expect(host.querySelector(".notice")?.textContent?.trim()).toContain("see the errors below");
+  });
+
   it("says Reload read a file that does not load, rather than only 'Reloaded'", async () => {
     const h = await render();
     shell.status = BROKEN;
