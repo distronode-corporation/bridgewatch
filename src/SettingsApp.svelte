@@ -487,7 +487,11 @@
         onclick={async () => {
           await reloadConfig();
           await load();
-          notice = "Reloaded from disk.";
+          // The file is re-read either way; say when what was read does not load.
+          notice =
+            status && !status.configOk && !isFirstRun(status)
+              ? "Reloaded, but the file does not load: see the errors below."
+              : "Reloaded from disk.";
         }}>Reload</Button
       >
     </footer>

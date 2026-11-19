@@ -390,6 +390,8 @@ describe("SettingsApp, moving a watch (H11)", () => {
     await h.click('button[title="move down"]', 0);
     expect(h.diagnostics()).toContain("the file changed on disk");
     expect(host.querySelector(".notice")?.textContent).toContain("Not moved");
+    // A refusal reads in red, not in the muted grey of "Saved.".
+    expect(host.querySelector(".notice")?.classList.contains("text-tone-red")).toBe(true);
   });
 });
 
@@ -698,6 +700,37 @@ describe("SettingsApp, the sidebar (L2)", () => {
     const footer = host.querySelector("footer")!;
     expect(footer.querySelector(".path")?.textContent).toBe("/tmp/bridgewatch.toml");
     expect([...footer.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual(["Open file", "Reload"]);
+  });
+
+  it("keeps an empty, visually hidden live region until there is a notice", async () => {
+    await render();
+    const notice = host.querySelector(".notice")!;
+    expect(notice.getAttribute("role")).toBe("status");
+    expect(notice.textContent?.trim()).toBe("");
+    expect(notice.classList.contains("sr-only")).toBe(true);
+  });
+
+  it("says Reload read the file, in the muted colour, when it loads", async () => {
+    const h = await render();
+    await h.clickText("Reload");
+    // Reload, then load's four round trips, then the notice.
+    await settle();
+    const notice = host.querySelector(".notice")!;
+    expect(notice.textContent?.trim()).toBe("Reloaded from disk.");
+    expect(notice.classList.contains("text-muted-foreground")).toBe(true);
+    expect(notice.classList.contains("sr-only")).toBe(false);
+  });
+
+  it("says Reload read a file that does not load, rather than only 'Reloaded'", async () => {
+    const h = await render();
+    shell.status = BROKEN;
+    await h.clickText("Reload");
+    // Reload, then load's four round trips, then the notice.
+    await settle();
+    const notice = host.querySelector(".notice")!;
+    expect(notice.textContent?.trim()).toBe("Reloaded, but the file does not load: see the errors below.");
+    expect(notice.classList.contains("text-muted-foreground")).toBe(true);
+    expect(h.diagnostics()).toContain("expected `=` after a key");
   });
 
   it("puts Add watch in the Watches pane's header, and only there", async () => {
