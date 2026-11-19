@@ -151,6 +151,12 @@ On every push to `main` unless the item says otherwise:
   advisory lands against code that did not change and so no push is coming to catch it.
   The npm side audits the whole tree, dev dependencies included: this is a Vite app, so
   they are what gets bundled into the shipped frontend.
+- A repeatable build check on every push and pull request: the Linux x86_64 CLI, built
+  with the same step a release uses, and the frontend bundle the app embeds are each
+  built twice from the same commit, from clean, and must be the same bytes. The app
+  bundles (`.dmg`, `.deb`, `.rpm`, `.AppImage`) are not compared and are not claimed
+  to be bit-for-bit reproducible: they carry build timestamps, and the macOS ones a
+  signature and a notarisation ticket.
 - Dependency review on every pull request, Dependabot for Cargo, npm and the pinned
   action SHAs, and a weekly [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch).
 - Dependabot's patch and minor updates merge themselves, but only once the nine checks

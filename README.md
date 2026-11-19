@@ -6,11 +6,31 @@
 
 # bridgewatch
 
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/distronode-corporation/bridgewatch/badge)](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15887/badge)](https://www.bestpractices.dev/projects/15887)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/distronode-corporation/bridgewatch/badge)](https://scorecard.dev/viewer/?uri=github.com/distronode-corporation/bridgewatch)
 [![Latest release](https://img.shields.io/github/v/release/distronode-corporation/bridgewatch?label=release)](https://github.com/distronode-corporation/bridgewatch/releases/latest)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![CI](https://github.com/distronode-corporation/bridgewatch/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/distronode-corporation/bridgewatch/actions/workflows/ci.yml?query=branch%3Amain)
 
-GitHub and GitLab pipelines in one tray app.
+**A tray app that tells you whether your push actually deployed, across GitLab CI and GitHub
+Actions.**
+
+<img alt="The bridgewatch popover: one watch deployed with its child pipelines listed, two more green with no deploy, each row with its branch, age, commit and what started it" src="docs/images/popover.png" width="440">
+
+*The 2.0 popover in the light theme, rendered from the app's frontend with sample data.*
+
+```
+brew install --cask distronode-corporation/tap/bridgewatch   # macOS; Linux below
+open -a bridgewatch      # the setup wizard signs you in
+npx bridgewatch wait     # after a push: exit with HEAD's verdict
+```
+
+Made by [Distronode](https://distronode.com) · more open source at
+[github.com/distronode-corporation](https://github.com/distronode-corporation) ·
+[project page](https://www.distronode.com/open-source/bridgewatch) ·
+[CHANGELOG](CHANGELOG.md) · [Roadmap](ROADMAP.md)
+
+## What it is
 
 bridgewatch is a tray monitor for GitLab CI and GitHub Actions. It shows one row per push
 with every downstream pipeline as a bridge, tells a scheduled pipeline apart from a push,
@@ -20,19 +40,13 @@ pipeline status.
 A Rust core crate, a `bridgewatch` CLI and a Tauri 2 GUI (Svelte 5). macOS and Linux.
 Apache-2.0.
 
-<img alt="The bridgewatch popover: one watch deployed with its child pipelines listed, two more green with no deploy, each row with its branch, age, commit and what started it" src="docs/images/popover.png" width="440">
-
-*The 2.0 popover in the light theme, rendered from the app's frontend with sample data.*
-
 **Status:** released. The current version is on the release badge above; download it from the
 [Releases page](https://github.com/distronode-corporation/bridgewatch/releases/latest): a
 signed and notarised universal `.dmg` for macOS, a `.deb`, an `.rpm` and an
 `.AppImage` for Linux on x86_64 and arm64, and the CLI as tarballs, also on npm as
-`bridgewatch`. See [Install](#install).
-
-**Links:** [project page](https://www.distronode.com/open-source/bridgewatch) ·
-[GitLab mirror](https://gitlab.com/distronode-corporation/bridgewatch) (read-only mirror;
-issues and pull requests live on GitHub) · [CHANGELOG](CHANGELOG.md)
+`bridgewatch`. See [Install](#install). A read-only
+[GitLab mirror](https://gitlab.com/distronode-corporation/bridgewatch) exists; issues and
+pull requests live on GitHub.
 
 ## What's new in 2.0
 
@@ -277,6 +291,14 @@ Moved to [Retry and play](docs/retry-and-play.md).
   privately through
   [GitHub's private vulnerability reporting](https://github.com/distronode-corporation/bridgewatch/security/advisories/new),
   not in a public issue.
+- [ARCHITECTURE.md](ARCHITECTURE.md): the parts, a poll from start to finish, and where
+  state lives. [SECURITY-MODEL.md](SECURITY-MODEL.md): the threat model, trust boundaries,
+  the secure design principles applied and the weaknesses the code counters.
+- [ROADMAP.md](ROADMAP.md): what is planned next, and what is not planned.
+- The organization's
+  [GOVERNANCE.md](https://github.com/distronode-corporation/.github/blob/main/GOVERNANCE.md):
+  who maintains the project, how a change is accepted, how a vulnerability report is
+  handled, and how the project continues without any one person.
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 - [SUPPORT](.github/SUPPORT.md): questions and ideas go to
   [Discussions](https://github.com/distronode-corporation/bridgewatch/discussions), bugs
