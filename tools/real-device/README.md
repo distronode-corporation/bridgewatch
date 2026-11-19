@@ -21,6 +21,9 @@ so `CHECKS.md` gives the setup (a throwaway keychain) and the steps instead.
   and `harness.sh shot` refuses to capture unless that display is served by the
   session's own Xvfb and its root window is the size Xvfb was given. Look at every
   capture before you trust a check.
+- **Only this run's clients on its display.** Xvfb starts with a random cookie that only
+  the run directory holds (`xauthority`), and the session refuses to start if a client
+  without it can connect.
 - **No real keyring and no real config.** The session's HOME, XDG directories, D-Bus
   bus and keyring live in the run directory. The keyring is created with a random
   password that only the run directory holds.
@@ -32,12 +35,12 @@ so `CHECKS.md` gives the setup (a throwaway keychain) and the steps instead.
 
 ## Linux: requirements
 
-`harness.sh check` lists what is missing. On Ubuntu the packages are `xvfb`,
-`x11-utils` (xwininfo), `ffmpeg`, `dbus-daemon` (`dbus-run-session`) and `dbus-bin`
+`harness.sh check` lists what is missing. On Ubuntu the packages are `xvfb`, `x11-utils`
+(xwininfo), `xauth`, `ffmpeg`, `dbus-daemon` (`dbus-run-session`) and `dbus-bin`
 (`dbus-monitor`), `gnome-keyring` (and `gcr`, whose prompter the locked-keyring checks
 need), `libsecret-tools` (secret-tool), `python3-gi`, `libxtst6` and `iproute2` (ss). No
-notification daemon, tray host or window manager is needed: `desktopd.py` stands in
-for the notification server and the StatusNotifierWatcher on the private bus.
+notification daemon, tray host or window manager is needed: `desktopd.py` stands in for
+the notification server and the StatusNotifierWatcher on the private bus.
 
 Build the app with its frontend embedded, the way a release does, but in debug:
 
@@ -94,7 +97,7 @@ To change what the stand-in serves, rewrite its state file: it is read on every 
 | File | What it does |
 |---|---|
 | `harness.sh` | Every command above; `harness.sh` with no argument prints the list. |
-| `session.sh` | Runs inside `dbus-run-session`: starts Xvfb (it picks a free display), the keyring, `desktopd.py` and a `dbus-monitor` log of keyring prompts. |
+| `session.sh` | Runs inside `dbus-run-session`: starts Xvfb (it picks a free display, and admits only a client with the run's cookie), the keyring, `desktopd.py` and a `dbus-monitor` log of keyring prompts. |
 | `desktopd.py` | Stand-in notification server (records each notification in `log/notifications.jsonl`; `harness.sh click-notification <id>` invokes its action) and StatusNotifierWatcher (records the tray item in `log/sni.jsonl`). |
 | `gitlab_standin.py` | Loopback GitLab v4 stand-in; records every request with its headers. |
 | `tray.py` | Reads and clicks the app's tray menu over dbusmenu, as a tray host would. |
