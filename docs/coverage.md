@@ -25,11 +25,20 @@ machine had no WebKitGTK development files. Its floor of 61% is the 61.31% CI's 
 job measured when the floor was set (`coverage-floors.toml`). CI's `coverage` job measures it
 on every pull request.
 
-Command (CI's `coverage` job runs the same with `--workspace` instead of `-p`):
+Command for the two crates measured here:
 
 ```
 cargo llvm-cov --locked -p bridgewatch-core -p bridgewatch-cli \
   --json --summary-only --output-path coverage.json
+```
+
+The figures above are read from that report's per-crate totals. `scripts/check-coverage.py`
+checks every crate in `coverage-floors.toml`, so on this partial report it reports
+bridgewatch-app missing and exits 1. It needs a whole-workspace report, which is what CI's
+`coverage` job makes, with WebKitGTK installed:
+
+```
+cargo llvm-cov --locked --workspace --json --summary-only --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 ```
 
