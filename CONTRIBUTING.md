@@ -194,6 +194,9 @@ Coverage is measured in CI, and floors only go up:
 - Frontend: `npx vitest run --coverage` fails under the floors in `vitest.config.ts`
   (statements, branches, functions and lines over every file under `src/`).
 
+The last measured numbers, per crate and in total, with the command and the date, are in
+[docs/coverage.md](docs/coverage.md).
+
 There is no exclusion list. A change that raises coverage raises the floor in the same pull
 request; lowering one needs a reason stated in review. That is a review rule: no tool
 compares a floor with its previous value.
