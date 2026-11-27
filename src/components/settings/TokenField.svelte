@@ -71,10 +71,12 @@
     ["own", "bridgewatch's own entry"],
   ]);
 
-  /** Fill the keyring pair with the CLI's item. Nothing is written until "Use this source". */
-  function usePreset() {
-    if (!preset) return;
-    service = preset;
+  /**
+   * Fill the keyring pair with the CLI's item, which the button (drawn only when
+   * there is one) passes. Nothing is written until "Use this source".
+   */
+  function usePreset(item: string) {
+    service = item;
     user = "";
   }
 
@@ -333,9 +335,8 @@
     void TOKEN_WRITES.run(`token:${account}`, task);
   }
 
-  function signOut() {
-    const api = oauth;
-    if (!api) return;
+  // Drawn only while signed in, which needs the sign-in commands; the button passes them.
+  function signOut(api: OAuthApi) {
     storeWrite(async () => {
       message = "";
       try {
@@ -563,12 +564,13 @@
             void loadStatus();
           }}
         />
-        {#if status}
-          <Button variant="ghost" size="sm" class="sign-out" onclick={signOut}>Sign out</Button>
+        {#if status && oauth}
+          {@const api = oauth}
+          <Button variant="ghost" size="sm" class="sign-out" onclick={() => signOut(api)}>Sign out</Button>
         {/if}
       {:else if kind === "keyring"}
         {#if preset}
-          <Button variant="outline" size="sm" class="preset" onclick={usePreset}>
+          <Button variant="outline" size="sm" class="preset" onclick={() => usePreset(preset)}>
             Fill in {cli}'s item ({preset})
           </Button>
         {/if}
