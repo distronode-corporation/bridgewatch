@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyPlatformTheme,
@@ -75,6 +75,22 @@ describe("setPlatform", () => {
     expect(root.classList.contains(VIBRANCY_CLASS)).toBe(true);
     setPlatform("linux", root);
     expect(root.classList.contains(VIBRANCY_CLASS)).toBe(false);
+  });
+
+  it("defaults to the document root and the user agent's platform, vibrancy off", () => {
+    // jsdom's user agent names neither macOS nor Linux.
+    expect(applyPlatformTheme()).toEqual({ platform: "other", vibrancy: false });
+    expect(document.documentElement.dataset.platform).toBe("other");
+    expect(document.documentElement.classList.contains(VIBRANCY_CLASS)).toBe(false);
+  });
+});
+
+describe("detectPlatform without a navigator", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reads no user agent as another platform rather than throwing", () => {
+    vi.stubGlobal("navigator", undefined);
+    expect(detectPlatform()).toBe("other");
   });
 });
 

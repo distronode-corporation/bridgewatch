@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getAt, linesToList, splitPath, tableEdits } from "./values";
+import { editValue, getAt, linesToList, splitPath, tableEdits } from "./values";
 
 describe("splitPath and getAt", () => {
   it("treats a quoted segment as one key, dots and all", () => {
@@ -18,6 +18,12 @@ describe("splitPath and getAt", () => {
 
   it("returns undefined rather than throwing on a path that is not there", () => {
     expect(getAt({}, "watches.0.dive.bridges")).toBe(undefined);
+  });
+
+  it("returns undefined for a non-numeric index into an array, or a path through a scalar", () => {
+    expect(getAt({ watches: [{ id: "a" }] }, "watches.first.id")).toBe(undefined);
+    expect(getAt({ watches: [{ id: "a" }] }, "watches.0.5")).toBe(undefined);
+    expect(getAt({ watches: [{ id: "a" }] }, "watches.0.id.length")).toBe(undefined);
   });
 });
 
@@ -102,5 +108,15 @@ describe("tableEdits", () => {
     expect(tableEdits("icon.states", [], [["deployed.with.failure", "triangle"]])).toEqual([
       { op: "set", path: 'icon.states."deployed.with.failure"', value: { string: "triangle" } },
     ]);
+  });
+});
+
+describe("editValue", () => {
+  it("keeps TOML's integer and float apart, which JavaScript's number does not", () => {
+    expect(editValue(15)).toEqual({ integer: 15 });
+    expect(editValue(15.5)).toEqual({ float: 15.5 });
+    expect(editValue(true)).toEqual({ boolean: true });
+    expect(editValue("main")).toEqual({ string: "main" });
+    expect(editValue([{ string: "push" }])).toEqual({ array: [{ string: "push" }] });
   });
 });
