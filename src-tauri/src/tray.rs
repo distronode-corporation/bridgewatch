@@ -290,7 +290,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     }
 
     builder.build(app)?;
-    *LIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(live);
+    *LIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(live);
     Ok(())
 }
 
@@ -305,7 +307,9 @@ pub fn sync_pause(app: &AppHandle) {
 }
 
 fn apply_pause(app: &AppHandle, paused: bool) {
-    let mut live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut live = LIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(items) = live.as_mut() else { return };
     if items.paused == paused {
         return;
@@ -347,7 +351,11 @@ pub fn sync_autostart_check(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         let enabled = handle.autolaunch().is_enabled().unwrap_or(false);
-        if let Some(items) = LIVE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(items) = LIVE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
             let _ = items.autostart.set_checked(enabled);
         }
     });

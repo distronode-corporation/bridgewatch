@@ -192,7 +192,10 @@ impl Confirmations {
     /// Park `text` and return the request that will release it.
     pub fn issue(&self, text: &str, changes: Vec<String>) -> ConfirmRequest {
         let id = fresh_id();
-        *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(Pending {
+        *self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Pending {
             id: id.clone(),
             text: text.to_string(),
             issued: Instant::now(),
@@ -207,7 +210,7 @@ impl Confirmations {
         let taken = self
             .pending
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         taken.is_some_and(|p| p.id == id && p.text == text && p.issued.elapsed() < CONFIRM_TTL)
     }
@@ -329,6 +332,7 @@ mod tests {
         // question asked.
         for source in [
             "{ keyring = { service = \"glab:gitlab.com\" } }",
+            "{ keyring = { service = \"glab:gitlab.com\", user = \"me\" } }",
             "{ env = \"GITLAB_TOKEN\" }",
         ] {
             let added = format!(
