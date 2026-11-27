@@ -72,7 +72,9 @@ fn wayland_session() -> bool {
 pub fn apply(app: &AppHandle, value: &str) {
     let value = value.trim().to_string();
     {
-        let mut applied = APPLIED.lock().unwrap_or_else(|e| e.into_inner());
+        let mut applied = APPLIED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if applied.as_deref() == Some(value.as_str()) {
             return;
         }
@@ -92,7 +94,9 @@ fn apply_on_main(app: &AppHandle, value: &str) {
             None
         }
     };
-    let mut plugin = PLUGIN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut plugin = PLUGIN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if *plugin == PluginState::Absent && shortcut.is_some() {
         let built = tauri_plugin_global_shortcut::Builder::new()
             // ⛔ Acted on at RELEASE, decided at PRESS. While the keys are down
@@ -102,10 +106,10 @@ fn apply_on_main(app: &AppHandle, value: &str) {
             .with_handler(|app, _shortcut, event| match event.state() {
                 ShortcutState::Pressed => {
                     let open = crate::windows::popover_open_for_shortcut(app);
-                    *FOUND_OPEN.lock().unwrap_or_else(|e| e.into_inner()) = Some(open);
+                    *FOUND_OPEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(open);
                 }
                 ShortcutState::Released => {
-                    let open = FOUND_OPEN.lock().unwrap_or_else(|e| e.into_inner()).take();
+                    let open = FOUND_OPEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
                     tracing::debug!(was_open = ?open, "global shortcut released; toggling the popover");
                     crate::windows::toggle_popover_from_shortcut(app, open.unwrap_or(false));
                 }

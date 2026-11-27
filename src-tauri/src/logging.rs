@@ -174,7 +174,9 @@ pub fn init() {
             // UI thread on a log line. The guard flushes the writer's queue
             // when dropped, and it is dropped by [`flush`] on the way out.
             let (writer, guard) = tracing_appender::non_blocking(appender);
-            *GUARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(guard);
+            *GUARD
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard);
             let _ = FILE_DIR.set(dir);
             (Some(writer), None)
         }
@@ -185,7 +187,9 @@ pub fn init() {
         .try_init()
         .is_ok();
     if installed && !from_env {
-        *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = initial;
+        *CURRENT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = initial;
         let _ = HANDLE.set(handle);
     }
     if let Some(error) = file_error {
@@ -203,14 +207,21 @@ pub fn init() {
 /// the guard in [`GUARD`] would otherwise never be dropped and the last lines
 /// before a quit (the ones that say why somebody quit) could be lost.
 pub fn flush() {
-    drop(GUARD.lock().unwrap_or_else(|e| e.into_inner()).take());
+    drop(
+        GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take(),
+    );
 }
 
 /// Apply `[log].level`, unless `RUST_LOG` decided at startup.
 pub fn apply_config_level(level: &str) {
     let Some(handle) = HANDLE.get() else { return };
     let wanted = directive(None, Some(level));
-    let mut current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
+    let mut current = CURRENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if *current == wanted {
         return;
     }
@@ -226,7 +237,10 @@ pub fn apply_config_level(level: &str) {
 /// case the variable itself is the honest answer: [`HANDLE`] was never set, so
 /// nothing this program does can change the level for the rest of the run.
 pub fn current_directive() -> String {
-    let current = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let current = CURRENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     if !current.is_empty() {
         return current;
     }
@@ -426,5 +440,140 @@ mod tests {
     fn nothing_or_nonsense_means_warn() {
         assert_eq!(directive(None, None), "warn");
         assert_eq!(directive(None, Some("loud")), "warn");
+    }
+
+    /// Run the test `name` again in a child process with `env`, so what it
+    /// does to the process (the global subscriber, the log file) is its own.
+    fn in_child(name: &str, env: &[(&str, &std::ffi::OsStr)]) {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", &format!("logging::tests::{name}"), "--nocapture"])
+            .env("BW_LOGGING_CHILD", "1")
+            .env_remove("RUST_LOG");
+        for (key, value) in env {
+            child.env(key, value);
+        }
+        let out = child.output().unwrap();
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{said}");
+    }
+
+    fn child() -> bool {
+        std::env::var_os("BW_LOGGING_CHILD").is_some()
+    }
+
+    /// A start with a home to log under: a file is written there, the level
+    /// follows the configuration (once per change), and the folder is the
+    /// one being written to.
+    #[test]
+    fn init_logs_to_a_file_and_takes_the_configurations_level() {
+        if !child() {
+            let home = scratch("init-home");
+            in_child(
+                "init_logs_to_a_file_and_takes_the_configurations_level",
+                &[
+                    ("HOME", home.as_os_str()),
+                    ("XDG_STATE_HOME", home.join("state").as_os_str()),
+                ],
+            );
+            let wrote = walk(&home).into_iter().any(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with(super::FILE_PREFIX))
+            });
+            let _ = std::fs::remove_dir_all(&home);
+            assert!(wrote, "no log file was written");
+            return;
+        }
+        super::init();
+        tracing::warn!("a line for the file");
+        super::apply_config_level("debug");
+        super::apply_config_level("debug");
+        assert_eq!(super::current_directive(), directive(None, Some("debug")));
+        assert_eq!(super::folder(), super::log_dir());
+        super::flush();
+    }
+
+    /// With `RUST_LOG` set, it decides, and the configuration cannot change
+    /// the level for the rest of the run.
+    #[test]
+    fn rust_log_decides_and_the_configuration_does_not() {
+        if !child() {
+            let home = scratch("init-env");
+            in_child(
+                "rust_log_decides_and_the_configuration_does_not",
+                &[
+                    ("HOME", home.as_os_str()),
+                    ("XDG_STATE_HOME", home.join("state").as_os_str()),
+                    ("RUST_LOG", std::ffi::OsStr::new("warn")),
+                ],
+            );
+            let _ = std::fs::remove_dir_all(&home);
+            return;
+        }
+        super::init();
+        super::apply_config_level("debug");
+        assert_eq!(super::current_directive(), "warn");
+    }
+
+    /// A home that cannot hold a log folder costs the file and nothing else.
+    #[test]
+    fn no_writable_log_folder_is_stderr_only() {
+        if !child() {
+            let home = scratch("init-blocked");
+            std::fs::create_dir_all(&home).unwrap();
+            let blocker = home.join("a-file");
+            std::fs::write(&blocker, "not a directory").unwrap();
+            in_child(
+                "no_writable_log_folder_is_stderr_only",
+                &[
+                    ("HOME", blocker.as_os_str()),
+                    ("XDG_STATE_HOME", blocker.as_os_str()),
+                ],
+            );
+            let _ = std::fs::remove_dir_all(&home);
+            return;
+        }
+        super::init();
+        tracing::warn!("stderr only");
+        super::flush();
+    }
+
+    /// Before any start, with no `RUST_LOG`, the directive in force is the
+    /// default one.
+    #[test]
+    fn the_directive_before_any_start_is_the_default() {
+        if !child() {
+            in_child("the_directive_before_any_start_is_the_default", &[]);
+            return;
+        }
+        assert_eq!(super::current_directive(), directive(None, None));
+    }
+
+    /// A file seeded from the example says so on the startup line.
+    #[test]
+    fn a_seeded_file_says_so_at_startup() {
+        let line = startup_line(&crate::config::Resolved {
+            path: PathBuf::from("/x/config.toml"),
+            seeded: true,
+            first_run: false,
+            loaded: None,
+            validation: crate::config::Validation::default(),
+            text: None,
+        });
+        assert!(line.contains("(seeded from the example)"), "{line}");
+    }
+
+    /// Every file under `dir`.
+    fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(walk(&path));
+            } else {
+                out.push(path);
+            }
+        }
+        out
     }
 }

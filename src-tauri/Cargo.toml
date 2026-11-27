@@ -82,3 +82,6 @@ regex = { workspace = true }
 # A local TLS server with an untrusted certificate (tests/crash_report_tls.rs).
 rustls = { version = "0.23.46", default-features = false, features = ["std", "aws_lc_rs"] }
 schemars = "1.2.2"
+# Tauri's own mock runtime, so the commands that take only the managed state
+# run in a test against a real `State`. No new crates: the feature is empty.
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api", "test"] }

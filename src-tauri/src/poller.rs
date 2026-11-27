@@ -324,7 +324,9 @@ fn publish(app: &AppHandle, state: &AppState, snapshot: Snapshot) {
 /// re-checked against every new snapshot and forgotten as soon as its failure
 /// is no longer the watch's current one (`verdict::ack`).
 fn show(app: &AppHandle, state: &AppState, snapshot: Snapshot) {
-    let _drawing = DRAWING.lock().unwrap_or_else(|e| e.into_inner());
+    let _drawing = DRAWING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     draw(app, state, snapshot);
 }
 
@@ -335,7 +337,9 @@ fn show(app: &AppHandle, state: &AppState, snapshot: Snapshot) {
 /// read outside it, a tick finishing in between was overwritten by the older
 /// snapshot read here, in the tray and the popover, until the next tick.
 pub fn redraw(app: &AppHandle, state: &AppState) {
-    let _drawing = DRAWING.lock().unwrap_or_else(|e| e.into_inner());
+    let _drawing = DRAWING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let snapshot = state.lock().snapshot.clone();
     draw(app, state, snapshot);
 }
@@ -422,7 +426,11 @@ static LAST_TOOLTIP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(No
 /// `TRAY_LABEL` in tray.rs says why.
 #[cfg(not(target_os = "linux"))]
 fn set_tooltip(tray: &tauri::tray::TrayIcon, text: &str) {
-    let last = || LAST_TOOLTIP.lock().unwrap_or_else(|e| e.into_inner());
+    let last = || {
+        LAST_TOOLTIP
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
     let unchanged = last().as_deref() == Some(text);
     if unchanged {
         return;
@@ -520,18 +528,27 @@ impl IconMemo {
     /// True when `key` is the image set, and it was set within
     /// [`ICON_REASSERT`] of `now`.
     pub fn is_current(&self, key: (u64, bool), now: std::time::Instant) -> bool {
-        let last = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let last = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         matches!(*last, Some((k, at)) if k == key && now.saturating_duration_since(at) < ICON_REASSERT)
     }
 
     /// Record a successful set.
     pub fn remember(&self, key: (u64, bool), now: std::time::Instant) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, now));
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((key, now));
     }
 
     /// Forget, so the next image is set whatever it is.
     pub fn forget(&self) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
