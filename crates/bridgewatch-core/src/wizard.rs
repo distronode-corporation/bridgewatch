@@ -409,56 +409,89 @@ pub trait KeyringProbe: Send + Sync {
 /// `secret-tool lookup` with stdout discarded, so the value never reaches this
 /// process. Both are bounded to [`KEYRING_PROBE_TIMEOUT`].
 ///
-/// ⚠️ Not exercised by the test suite, deliberately: the tests never touch a
-/// real credential store. The Linux path is unverified on a real desktop.
+/// The tests never touch a real credential store: they check the command each
+/// platform runs ([`probe_command`]) and run [`probe`] on stand-in programs.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemKeyringProbe;
 
 /// How long a keyring probe may take before it counts as "could not ask".
 pub const KEYRING_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl KeyringProbe for SystemKeyringProbe {
     fn exists(&self, service: &str, user: &str) -> Result<bool, String> {
-        use std::process::{Command, Stdio};
+        let (argv, missing_code) = probe_command(service, user);
+        probe(&argv, missing_code, KEYRING_PROBE_TIMEOUT)
+    }
+}
 
-        let (mut command, missing_code) = if cfg!(target_os = "macos") {
-            let mut c = Command::new("security");
-            c.args(["find-generic-password", "-s", service]);
-            if !user.is_empty() {
-                c.args(["-a", user]);
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+impl KeyringProbe for SystemKeyringProbe {
+    fn exists(&self, _service: &str, _user: &str) -> Result<bool, String> {
+        Err("no keyring probe for this platform".to_string())
+    }
+}
+
+/// The program that asks whether an item exists, and the exit code that means
+/// it does not: `security` exits 44 for no such item.
+#[cfg(target_os = "macos")]
+fn probe_command(service: &str, user: &str) -> (Vec<String>, i32) {
+    let mut argv: Vec<String> = ["security", "find-generic-password", "-s", service]
+        .map(String::from)
+        .into();
+    if !user.is_empty() {
+        argv.extend(["-a".to_string(), user.to_string()]);
+    }
+    (argv, 44)
+}
+
+/// The program that asks whether an item exists, and the exit code that means
+/// it does not: `secret-tool lookup` exits 1 when nothing matches.
+#[cfg(target_os = "linux")]
+fn probe_command(service: &str, user: &str) -> (Vec<String>, i32) {
+    let argv = [
+        "secret-tool",
+        "lookup",
+        "service",
+        service,
+        "username",
+        user,
+    ]
+    .map(String::from);
+    (argv.into(), 1)
+}
+
+/// Run a probe with no input or output, bounded to `timeout`: exit 0 is "there",
+/// `missing_code` is "not there", anything else says what it was.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn probe(argv: &[String], missing_code: i32, timeout: std::time::Duration) -> Result<bool, String> {
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not run the keyring tool: {e}"))?;
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return match status.code() {
+                    Some(0) => Ok(true),
+                    Some(c) if c == missing_code => Ok(false),
+                    other => Err(format!("the keyring tool exited with {other:?}")),
+                };
             }
-            (c, 44)
-        } else if cfg!(target_os = "linux") {
-            let mut c = Command::new("secret-tool");
-            c.args(["lookup", "service", service, "username", user]);
-            (c, 1)
-        } else {
-            return Err("no keyring probe for this platform".to_string());
-        };
-        let mut child = command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("could not run the keyring tool: {e}"))?;
-        let started = std::time::Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    return match status.code() {
-                        Some(0) => Ok(true),
-                        Some(c) if c == missing_code => Ok(false),
-                        other => Err(format!("the keyring tool exited with {other:?}")),
-                    };
-                }
-                Ok(None) if started.elapsed() > KEYRING_PROBE_TIMEOUT => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("the keyring tool did not answer in time".to_string());
-                }
-                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
-                Err(e) => return Err(e.to_string()),
+            // `try_wait` fails only if the OS cannot wait on our own child; that
+            // counts as still running, and the timeout kills it.
+            _ if started.elapsed() > timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("the keyring tool did not answer in time".to_string());
             }
+            _ => std::thread::sleep(std::time::Duration::from_millis(20)),
         }
     }
 }
@@ -2528,4 +2561,77 @@ fn add_quick_watches(
         new_watches.push(watch);
     }
     Ok(secondary_because)
+}
+
+#[cfg(test)]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod probe_tests {
+    use super::{probe, probe_command};
+    use std::time::Duration;
+
+    fn sh(script: &str) -> Vec<String> {
+        ["sh", "-c", script].map(String::from).into()
+    }
+
+    #[test]
+    fn a_probe_reads_its_exit_code_as_there_not_there_or_what_it_was() {
+        let t = Duration::from_secs(5);
+        assert_eq!(probe(&sh("exit 0"), 44, t), Ok(true));
+        assert_eq!(probe(&sh("exit 44"), 44, t), Ok(false));
+        assert_eq!(
+            probe(&sh("exit 7"), 44, t),
+            Err("the keyring tool exited with Some(7)".into())
+        );
+        let missing = probe(&["bridgewatch-no-such-program-anywhere".into()], 44, t).unwrap_err();
+        assert!(
+            missing.starts_with("could not run the keyring tool"),
+            "{missing}"
+        );
+    }
+
+    #[test]
+    fn a_probe_that_does_not_answer_is_killed_at_its_timeout() {
+        let started = std::time::Instant::now();
+        assert_eq!(
+            probe(&sh("sleep 30"), 44, Duration::from_millis(150)),
+            Err("the keyring tool did not answer in time".into())
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn on_macos_the_probe_asks_security_and_names_the_account_only_when_there_is_one() {
+        assert_eq!(
+            probe_command("gh:github.com", ""),
+            (
+                ["security", "find-generic-password", "-s", "gh:github.com"]
+                    .map(String::from)
+                    .into(),
+                44
+            )
+        );
+        assert_eq!(probe_command("gh:github.com", "me").0[4..], ["-a", "me"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn on_linux_the_probe_asks_secret_tool_by_service_and_username() {
+        assert_eq!(
+            probe_command("glab:gitlab.com:token", ""),
+            (
+                [
+                    "secret-tool",
+                    "lookup",
+                    "service",
+                    "glab:gitlab.com:token",
+                    "username",
+                    ""
+                ]
+                .map(String::from)
+                .into(),
+                1
+            )
+        );
+    }
 }
