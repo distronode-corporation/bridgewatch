@@ -560,7 +560,8 @@ mod tests {
             validation: crate::config::Validation::default(),
             text: None,
         });
-        assert!(line.contains("(seeded from the example)"), "{line}");
+        // No `{line}` in the message: it carries the account count.
+        assert!(line.contains("(seeded from the example)"));
     }
 
     /// Every file under `dir`.

@@ -23,5 +23,5 @@ floor = 90
 reason = "The level CI's coverage job measured when the gate was added, 90.12% of lines, rounded down."
 
 [crates.bridgewatch-app]
-floor = 61
-reason = "The level CI's coverage job measured when the gate was added, 61.31% of lines, rounded down. Most uncovered lines are in the IPC command handlers (commands.rs), the background poll loop (poller.rs), the tray, sign-in and window code, and main.rs, which need a running app."
+floor = 70
+reason = "The level CI's coverage job measured on the app coverage pull request (#141), 70.87% of lines (4253 of 6001), rounded down. What is left needs a running desktop app (a window, the tray, a global shortcut, the run loop, OS services): docs/coverage.md lists it per file, and #143 tracks it."
