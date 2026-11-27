@@ -1090,3 +1090,15 @@ describe("GitHub", () => {
     expect(api.suggestDeployMarkers.mock.calls[0].slice(1)).toEqual(["platform/api", "main"]);
   });
 });
+
+describe("Finish, clicked twice before a render (#128)", () => {
+  it("saves once", async () => {
+    const api = fakeApi({ save: vi.fn(() => new Promise<WizardSaveResult>(() => {})) });
+    await start(api);
+    await toReview();
+    q<HTMLButtonElement>('[data-action="finish"]')!.click();
+    q<HTMLButtonElement>('[data-action="finish"]')!.click();
+    await settle();
+    expect(api.save).toHaveBeenCalledTimes(1);
+  });
+});

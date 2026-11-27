@@ -494,15 +494,17 @@
   async function quickSetup() {
     const listing = shownRecent;
     if (quickBusy || !listing || listing.mode !== "projects") return;
-    await settleInstance();
-    const stepErrors = validateStep("account", draft);
-    errors = stepErrors;
-    if (Object.keys(stepErrors).length > 0) return void focusInvalid();
-    if (!(await ensureCommandAck())) return;
-    const rows = listing.projects.filter((p) => p.default_branch && ticks[p.id]);
-    if (rows.length === 0) return;
+    // ⛔ Taken before the first await: a second click that lands while
+    // settleInstance or the command question is pending finds it and sends nothing.
     quickBusy = true;
     try {
+      await settleInstance();
+      const stepErrors = validateStep("account", draft);
+      errors = stepErrors;
+      if (Object.keys(stepErrors).length > 0) return void focusInvalid();
+      if (!(await ensureCommandAck())) return;
+      const rows = listing.projects.filter((p) => p.default_branch && ticks[p.id]);
+      if (rows.length === 0) return;
       const watches: QuickWatch[] = [];
       for (const row of rows) {
         const project = projectRefFor(draft.provider, row);
@@ -726,10 +728,15 @@
 
   async function finish() {
     if (saving) return;
+    // ⛔ Taken before the first await: a second click that lands while the
+    // command question is pending finds it and sends nothing.
+    saving = true;
     saveError = null;
     saveDiagnostics = [];
-    if (!(await ensureCommandAck())) return;
-    saving = true;
+    if (!(await ensureCommandAck())) {
+      saving = false;
+      return;
+    }
     const answers = answersOf(draft);
     const secret = draft.tokenMode === "paste" && draft.secret.trim() ? draft.secret.trim() : undefined;
     // Only a sign-in made under another name is reported, so every other save

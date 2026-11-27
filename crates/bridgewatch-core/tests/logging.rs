@@ -208,3 +208,34 @@ fn a_corrupt_deploy_time_history_warns_once_and_a_missing_one_says_nothing() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Binding a 1.x own entry to its server is a one-time change to what the
+/// store holds, so it is said at `info`, with the account and the origin.
+#[test]
+fn binding_a_1x_token_to_its_server_is_logged_at_info() {
+    use bridgewatch_core::token::{self, TokenProvider};
+    support::start_capture();
+    let memory = support::MemoryStore::new();
+    memory
+        .keyring_set("bridgewatch:gl", "token", "glpat-legacy")
+        .unwrap();
+    let account = bridgewatch_core::config::Account {
+        base_url: "https://gitlab.example.com".into(),
+        token: bridgewatch_core::config::TokenSource::Own(true),
+        ..Default::default()
+    };
+    let (resolved, log) = with_log(|| token::resolve("gl", &account, memory.as_ref()));
+    assert_eq!(resolved.unwrap().expose(), "glpat-legacy");
+    assert!(
+        log.contains("bound a token stored by bridgewatch 1.x to its server"),
+        "{log}"
+    );
+    assert!(
+        log.contains("account=gl") && log.contains("origin=https://gitlab.example.com"),
+        "{log}"
+    );
+    assert!(
+        !log.contains("glpat-legacy"),
+        "the token itself is never logged: {log}"
+    );
+}
