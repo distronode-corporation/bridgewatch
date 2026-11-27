@@ -1603,3 +1603,171 @@ async fn a_runs_display_title_is_the_rows_title_only_when_titles_are_on() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The edges: the provider-neutral surface, a commit lookup, pagination's two
+// limits, annotations that cost nothing, and the statuses no other test sends
+// ---------------------------------------------------------------------------
+
+const FULL_SHA: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f00fedcba9";
+
+/// Through `dyn CiClient`, which is how the poller and the CLI hold a client.
+#[tokio::test]
+async fn the_provider_neutral_surface_answers_as_the_github_methods_do() {
+    let transport = Scripted::new(vec![
+        Reply::ok(&format!(r#"{{"sha":"{}"}}"#, FULL_SHA.to_ascii_uppercase())),
+        Reply::status(404),
+        Reply::status(422),
+        Reply::status(500),
+        Reply::ok(&run_body("completed", "success")),
+        Reply::ok(&runs_body("completed", "success")),
+    ]);
+    let (github, ring) = github_client(transport.clone());
+    let client: &dyn CiClient = &github;
+    assert_eq!(
+        client
+            .commit_sha(&repo(), "0F1E2D")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(FULL_SHA)
+    );
+    assert_eq!(client.commit_sha(&repo(), "0f1e2d").await.unwrap(), None);
+    assert_eq!(client.commit_sha(&repo(), "0").await.unwrap(), None);
+    assert!(matches!(
+        client.commit_sha(&repo(), "0f1e2d").await,
+        Err(ClientError::Server { status: 500 })
+    ));
+    assert_eq!(client.get_pipeline(&repo(), 4001).await.unwrap().id, 4001);
+    // A run whose workflow file is not named counts for nothing.
+    let files = client
+        .recent_workflow_files(&repo(), &ListQuery::exact("main", None, 5), 3)
+        .await
+        .unwrap();
+    assert!(files.is_empty(), "{files:?}");
+    assert_eq!(client.ring().entries().len(), ring.entries().len());
+    assert_eq!(
+        transport.paths()[0],
+        "/repos/acme-corp/monorepo/commits/0F1E2D"
+    );
+}
+
+/// A lookup of one commit asks for that commit's runs only.
+#[tokio::test]
+async fn a_list_for_one_commit_asks_by_head_sha() {
+    let transport = Scripted::new(vec![Reply::ok(&runs_body("completed", "success"))]);
+    let (client, _) = github_client(transport.clone());
+    client
+        .list_pipelines(
+            &repo(),
+            &ListQuery::exact("main", None, 5).for_sha(FULL_SHA),
+        )
+        .await
+        .unwrap();
+    assert!(
+        transport.paths()[0].contains(&format!("head_sha={FULL_SHA}")),
+        "{:?}",
+        transport.paths()
+    );
+}
+
+/// A redirect is refused and an unlisted status is reported as it is.
+#[tokio::test]
+async fn a_redirect_and_an_unlisted_status_are_errors_of_their_own() {
+    let transport = Scripted::new(vec![Reply::status(302), Reply::status(418)]);
+    let (client, _) = github_client(transport);
+    assert!(matches!(
+        client.get_pipeline(&repo(), 1).await,
+        Err(ClientError::Redirect { status: 302, .. })
+    ));
+    assert!(matches!(
+        client.get_pipeline(&repo(), 1).await,
+        Err(ClientError::Unexpected { status: 418, .. })
+    ));
+}
+
+/// The jobs pagination stops at its cap and says so, rather than reading
+/// forever; and a next link naming only the origin is the API root.
+#[tokio::test]
+async fn jobs_pagination_stops_at_its_cap_and_follows_a_bare_origin() {
+    // A listening subscriber, so the warning's fields are evaluated.
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_test_writer()
+            .finish(),
+    );
+    let next =
+        "<https://api.github.com/repositories/1/actions/runs/4001/jobs?page=2>; rel=\"next\"";
+    let page = jobs_body(&[job_body(
+        1,
+        "build",
+        "success",
+        "2026-09-18T09:00:30Z",
+        "2026-09-18T09:01:00Z",
+    )]);
+    let pages = bridgewatch_core::client::github::JOB_PAGES as usize;
+    let transport = Scripted::new((0..pages).map(|_| Reply::ok(&page).link(next)).collect());
+    let (client, _) = github_client(transport.clone());
+    let jobs = client.pipeline_jobs(&repo(), 4001).await.unwrap();
+    assert_eq!(jobs.len(), pages);
+    assert_eq!(transport.paths().len(), pages, "no page past the cap");
+
+    let transport = Scripted::new(vec![
+        Reply::ok(&page).link("<https://api.github.com>; rel=\"next\""),
+        Reply::ok(&jobs_body(&[])),
+    ]);
+    let (client, _) = github_client(transport.clone());
+    assert_eq!(client.pipeline_jobs(&repo(), 4001).await.unwrap().len(), 1);
+    assert_eq!(transport.paths()[1], "");
+}
+
+/// A job that did not fail, or a project that is not `owner/repo`, costs no
+/// request; and the memo of answers is bounded.
+#[tokio::test]
+async fn annotations_cost_nothing_when_there_is_nothing_to_ask_and_the_memo_is_bounded() {
+    let memo = bridgewatch_core::client::github::ANNOTATION_MEMO;
+    let failed: Vec<String> = (1..=memo as u64 + 1)
+        .map(|id| {
+            job_body(
+                id,
+                "test",
+                "failure",
+                "2026-09-18T09:00:30Z",
+                "2026-09-18T09:01:00Z",
+            )
+        })
+        .collect();
+    let mut replies = vec![
+        Reply::ok(&jobs_body(&failed)),
+        Reply::ok(&jobs_body(&[job_body(
+            9,
+            "lint",
+            "success",
+            "2026-09-18T09:00:30Z",
+            "2026-09-18T09:01:00Z",
+        )])),
+    ];
+    replies.extend((0..=memo).map(|_| Reply::ok("[]")));
+    let transport = Scripted::new(replies);
+    let (client, _) = github_client(transport.clone());
+    let failed = client.pipeline_jobs(&repo(), 4001).await.unwrap();
+    let passed = client.pipeline_jobs(&repo(), 4002).await.unwrap();
+
+    let known_none = |a: bridgewatch_core::client::AnnotationAnswer| {
+        matches!(a, bridgewatch_core::client::AnnotationAnswer::Known(None))
+    };
+    assert!(known_none(
+        client.failure_annotation(&repo(), &passed[0]).await
+    ));
+    assert!(known_none(
+        client
+            .failure_annotation(&ProjectRef::Id(1), &failed[0])
+            .await
+    ));
+    assert_eq!(transport.paths().len(), 2, "neither asked anything");
+    for job in &failed {
+        assert!(known_none(client.failure_annotation(&repo(), job).await));
+    }
+    assert_eq!(transport.paths().len(), 2 + failed.len());
+}

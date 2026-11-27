@@ -1471,3 +1471,18 @@ fn ask_once_remembers_nothing_from_a_read_that_worked_or_a_write_or_delete_that_
     assert!(once.keyring_delete("bridgewatch:gl", "token").is_err());
     assert!(once.refused().is_empty());
 }
+
+/// A store that refuses the read is that refusal, not "no token", whichever
+/// read asked.
+#[test]
+fn an_own_token_status_over_a_store_that_refuses_the_read_is_the_refusal() {
+    let fake = Fake {
+        refuse_reads: true,
+        ..Fake::default()
+    };
+    let account = own_on("https://gitlab.example.com");
+    assert!(matches!(
+        token::own_token_status_asking("gl", &account, &fake),
+        Err(TokenError::Store { .. })
+    ));
+}

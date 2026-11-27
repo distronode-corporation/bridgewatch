@@ -407,7 +407,9 @@ impl GitHubClient {
     /// The annotation memo, whatever a panicking holder left in it: it is a
     /// cache, and the worst a half-written entry does is cost a request.
     fn annotation_memo(&self) -> std::sync::MutexGuard<'_, AnnotationMemo> {
-        self.annotations.lock().unwrap_or_else(|e| e.into_inner())
+        self.annotations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// `GET /user`: who the token authenticates as.
@@ -672,7 +674,9 @@ impl GitHubClient {
     /// The group memo, whatever a panicking holder left in it: it is a cache,
     /// and the worst a half-written slot does is cost a re-list.
     fn memo(&self) -> std::sync::MutexGuard<'_, group::Memo> {
-        self.groups.lock().unwrap_or_else(|e| e.into_inner())
+        self.groups
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Follow `Link: rel="next"` from `first`, which already carries its query,

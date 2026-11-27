@@ -445,7 +445,7 @@ async fn run(cli: Cli) -> Outcome {
         Command::Wait(args) => wait::run(&config, args).await,
         Command::Fixture { action } => fixture(&config, action).await,
         Command::Init(args) => init(&config, *args, &SystemTokenProvider),
-        Command::Auth { action } => auth_command(&config, action).await,
+        Command::Auth { action } => auth_command(&config, action, &SystemTokenProvider).await,
         Command::Log(args) => job_log(&config, args).await,
         Command::Retry(args) => job_action(&config, args, JobAction::Retry).await,
         Command::Play(args) => job_action(&config, args, JobAction::Play).await,
@@ -469,12 +469,8 @@ fn job_client(
     config: &Config,
     target: &JobTarget,
 ) -> std::result::Result<Arc<dyn CiClient>, Failure> {
-    let account = config.accounts.get(&target.account).ok_or_else(|| {
-        Failure::new(
-            exit::USAGE,
-            anyhow::anyhow!("no account {:?}", target.account),
-        )
-    })?;
+    // `locate` names only accounts it found in this configuration.
+    let account = &config.accounts[&target.account];
     bridgewatch_core::poll::client_for_account(
         &target.account,
         account,
@@ -552,21 +548,15 @@ async fn job_action(config_args: &ConfigArgs, args: JobActionArgs, action: JobAc
         target.account
     );
     if !args.yes {
-        if !std::io::stdin().is_terminal() {
-            return Err(Failure::new(
-                exit::USAGE,
-                anyhow::anyhow!(
-                    "not sending a {} without a confirmation: there is no terminal to ask on, \
-                     so pass --yes",
-                    action.as_str()
-                ),
-            ));
-        }
-        eprint!("{question} [y/N] ");
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer)?;
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            eprintln!("nothing sent");
+        let stdin = std::io::stdin();
+        let terminal = stdin.is_terminal();
+        if !confirmed(
+            &question,
+            action,
+            terminal,
+            &mut stdin.lock(),
+            &mut std::io::stderr(),
+        )? {
             return Ok(exit::FAILED);
         }
     }
@@ -584,6 +574,36 @@ async fn job_action(config_args: &ConfigArgs, args: JobActionArgs, action: JobAc
         (None, None) => println!("{done} job {}", target.job_id),
     }
     Ok(exit::OK)
+}
+
+/// Ask `question` on `err` and read the answer from `input`: only "y" or
+/// "yes" sends. With no terminal there is nobody to ask, which is a usage
+/// error rather than a no. `main` passes the process's stdin and stderr.
+fn confirmed(
+    question: &str,
+    action: JobAction,
+    terminal: bool,
+    input: &mut dyn std::io::BufRead,
+    err: &mut dyn std::io::Write,
+) -> std::result::Result<bool, Failure> {
+    if !terminal {
+        return Err(Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!(
+                "not sending a {} without a confirmation: there is no terminal to ask on, \
+                 so pass --yes",
+                action.as_str()
+            ),
+        ));
+    }
+    write!(err, "{question} [y/N] ")?;
+    let mut answer = String::new();
+    input.read_line(&mut answer)?;
+    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        return Ok(true);
+    }
+    writeln!(err, "nothing sent")?;
+    Ok(false)
 }
 
 /// `bridgewatch init`: the wizard's `build_config`, answered from flags.
@@ -754,9 +774,7 @@ fn init(config_args: &ConfigArgs, args: InitArgs, store: &dyn TokenProvider) -> 
     };
     match built {
         Ok(built) => {
-            if let Some(old) = moved_own {
-                bind_before_repoint(&answers.account, old, store)?;
-            }
+            prepare_move(&answers.account, moved_own, store)?;
             for w in &built.warnings {
                 eprintln!("warning: {}: {}", w.path, w.message);
             }
@@ -794,13 +812,11 @@ fn init(config_args: &ConfigArgs, args: InitArgs, store: &dyn TokenProvider) -> 
             }
             Ok(exit::OK)
         }
-        Err(e @ WizardError::Answers(_)) => {
-            if let WizardError::Answers(issues) = &e {
-                for i in issues {
-                    eprintln!("error: {:?} {}: {}", i.step, i.field, i.message);
-                }
+        Err(WizardError::Answers(issues)) => {
+            for i in &issues {
+                eprintln!("error: {:?} {}: {}", i.step, i.field, i.message);
             }
-            Err(usage(e))
+            Err(usage(WizardError::Answers(issues)))
         }
         Err(e @ (WizardError::Edit(_) | WizardError::Invalid(_))) => Err(Failure::new(
             exit::CONFIG,
@@ -867,6 +883,19 @@ fn next_step(
             shell_word(&answers.account)
         )
     })
+}
+
+/// When `init` moves an account that reads its own entry (`moved_own`, the
+/// account as it was), [`bind_before_repoint`]; otherwise nothing.
+fn prepare_move(
+    account: &str,
+    moved_own: Option<&config::Account>,
+    store: &dyn TokenProvider,
+) -> Result<(), Failure> {
+    match moved_own {
+        Some(old) => bind_before_repoint(account, old, store),
+        None => Ok(()),
+    }
 }
 
 /// Before `init` prints a file that moves an account which reads its own entry
@@ -1071,12 +1100,16 @@ fn load(args: &ConfigArgs) -> std::result::Result<config::Loaded, Failure> {
     }
 }
 
-/// `bridgewatch auth`, against the network and the OS credential store.
-async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
+/// `bridgewatch auth`, against the network and `store`: the OS credential
+/// store, from `main`.
+async fn auth_command(
+    args: &ConfigArgs,
+    action: auth::AuthAction,
+    store: &dyn TokenProvider,
+) -> Outcome {
     let loaded = load(args)?;
     start_logging(&loaded);
     let config = loaded.config;
-    let store = SystemTokenProvider;
     let now = bridgewatch_core::oauth::now();
     match action {
         auth::AuthAction::Login { account } => {
@@ -1094,14 +1127,13 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
             // the process group. The first completes this future and cancels
             // the sign-in; the rest find tokio's handler installed and do
             // nothing. See `watch`.
-            let cancel = async {
-                let _ = tokio::signal::ctrl_c().await;
-            };
+            let mut ctrl_c = std::pin::pin!(tokio::signal::ctrl_c());
+            let cancel = std::future::poll_fn(move |cx| ctrl_c.as_mut().poll(cx).map(drop));
             auth::login(
                 &config,
                 &account,
                 transport,
-                &store,
+                store,
                 &bridgewatch_core::oauth::BuiltinClients::shipped(),
                 tokio::time::sleep,
                 cancel,
@@ -1111,7 +1143,7 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
             .await
         }
         auth::AuthAction::Logout { account } => {
-            auth::logout(&config, &account, &store, &mut std::io::stdout())
+            auth::logout(&config, &account, store, &mut std::io::stdout())
         }
         auth::AuthAction::Status { account } => {
             // One request per bound own token, for its expiry (F3).
@@ -1120,7 +1152,7 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
                     .map(|t| Arc::new(t) as Arc<dyn bridgewatch_core::client::Transport>)
             };
             // One read per keyring item for the whole run: each can prompt.
-            let once = auth::ReadOnce::new(&store);
+            let once = auth::ReadOnce::new(store);
             let expiries =
                 auth::own_expiries(&config, account.as_deref(), &once, &transport_for).await;
             // Read the clock after the lookups, which can take a while each.
@@ -1207,13 +1239,14 @@ fn build_poller(config: &Config, fixture: Option<&PathBuf>) -> Result<Poller> {
                 // anywhere, and resolving a real one would prompt for a
                 // keychain unlock to answer a question from a file. The
                 // provider still decides which client reads them.
+                // Every provider has a client; `client_for` is where one without fails.
                 let client = client_for(
                     account,
                     &Secret::new("fixture"),
                     transport.clone(),
                     ring.clone(),
                 )
-                .with_context(|| format!("cannot build a client for account {name:?}"))?;
+                .expect("a client for every provider");
                 clients.insert(name.clone(), client);
             }
             Poller::with_clients(config, clients, ring).context("cannot build poller")
@@ -1288,6 +1321,24 @@ fn code_for(state: IconState) -> i32 {
 }
 
 async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
+    watch_until(
+        config_args,
+        args,
+        tokio::signal::ctrl_c(),
+        NotifyLedger::cli_path(),
+    )
+    .await
+}
+
+/// [`watch`], stopped by `interrupt` and keeping its notification ledger at
+/// `ledger` (unless a fixture is played): Ctrl-C and the CLI's ledger, from
+/// `watch`.
+async fn watch_until<F: Future>(
+    config_args: &ConfigArgs,
+    args: WatchArgs,
+    interrupt: F,
+    ledger: std::path::PathBuf,
+) -> Outcome {
     let loaded = load(config_args)?;
     start_logging(&loaded);
     let mut config = loaded.config;
@@ -1300,7 +1351,7 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
     let mut poller = if args.fixture.is_some() {
         poller
     } else {
-        poller.with_ledger(NotifyLedger::cli_path())
+        poller.with_ledger(ledger)
     };
 
     let mut previous: Option<String> = None;
@@ -1323,7 +1374,6 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
     // group, so one keypress is two signals here. The first completes this
     // listener and `watch` returns its verdict; the rest find tokio's handler
     // still installed and do nothing. Never turn a second SIGINT into "force quit".
-    let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
     // `ctrl_c()` is an async fn: it installs the handler on its FIRST poll, not when
     // called (tokio 1.54.1, signal/ctrl_c.rs). Polled once here, so the handler is in
@@ -1422,7 +1472,8 @@ async fn fixture(config_args: &ConfigArgs, action: FixtureAction) -> Outcome {
             .first()
             .map(|w| w.account.clone())
             .or_else(|| config.accounts.keys().next().cloned())
-            .ok_or_else(|| Failure::new(exit::CONFIG, anyhow::anyhow!("no accounts configured")))?,
+            // `load` refuses a configuration with no accounts.
+            .expect("a loaded configuration has an account"),
     };
     let account_def = config.accounts.get(&account_name).ok_or_else(|| {
         Failure::new(
@@ -1676,7 +1727,7 @@ mod tests {
                 t.clone() as Arc<dyn Transport>,
                 RequestRing::new(4),
             )
-            .unwrap_or_else(|f| panic!("{}", f.error));
+            .unwrap();
             client
                 .get_pipeline(&ProjectRef::Id(1), 7)
                 .await
@@ -1704,7 +1755,7 @@ mod tests {
                 t.clone() as Arc<dyn Transport>,
                 RequestRing::new(4),
             )
-            .unwrap_or_else(|f| panic!("{}", f.error));
+            .unwrap();
             let err = client
                 .get_pipeline(&ProjectRef::Id(1), 7)
                 .await
@@ -1725,7 +1776,7 @@ mod tests {
                 l.split_whitespace()
                     .next()
                     .and_then(|c| c.parse().ok())
-                    .unwrap_or_else(|| panic!("a row that does not start with a code: {l:?}"))
+                    .expect("a row that starts with a code")
             })
             .collect();
         documented.sort_unstable();
@@ -1799,39 +1850,120 @@ mod tests {
         use bridgewatch_core::token::{TokenError, TokenProvider};
         use clap::Parser;
 
-        use super::super::{Cli, Command, init};
+        use super::super::{Cli, Command, ConfigArgs, InitArgs, init, repoint_note};
         use crate::auth::tests::Memory;
 
         const OWN_ON_OLD: &str = "[accounts.lab]\nbase_url = \"https://gitlab.example.com\"\n\
                                   token = { own = true }\n";
 
-        /// Run `init --account lab` against a file holding [`OWN_ON_OLD`],
-        /// moving it to `https://gitlab.other.example`.
-        fn repoint(name: &str, store: &dyn TokenProvider) -> Result<i32, i32> {
+        /// The `init` arguments of a command line, if it is an `init`.
+        fn init_of(argv: &[&str]) -> Option<(ConfigArgs, Box<InitArgs>)> {
+            let cli = Cli::try_parse_from(argv).expect("parses");
+            match cli.command {
+                Command::Init(args) => Some((cli.config, args)),
+                _ => None,
+            }
+        }
+
+        #[test]
+        fn only_an_init_command_line_has_init_arguments() {
+            assert!(init_of(&["bridgewatch", "config", "path"]).is_none());
+        }
+
+        /// Two spellings of one instance served under a path are the same
+        /// instance; another path on the same host is not.
+        #[test]
+        fn an_instance_under_a_path_is_the_same_instance_only_at_that_path() {
+            let at = |base: &str| bridgewatch_core::config::Account {
+                base_url: base.into(),
+                ..Default::default()
+            };
+            let gitlab = bridgewatch_core::config::Provider::Gitlab;
+            let same = super::super::same_instance;
+            assert!(same(
+                &at("https://Git.Example.com/gitlab/"),
+                gitlab,
+                "https://git.example.com/gitlab"
+            ));
+            assert!(!same(
+                &at("https://git.example.com/other"),
+                gitlab,
+                "https://git.example.com/gitlab"
+            ));
+        }
+
+        /// An `init` that moves nothing reads no credential at all.
+        #[test]
+        fn an_init_that_moves_nothing_reads_no_credential() {
+            struct Untouchable;
+            impl TokenProvider for Untouchable {
+                fn keyring_get(&self, _: &str, _: &str) -> Result<String, TokenError> {
+                    Err(TokenError::Empty)
+                }
+                fn keyring_set(&self, _: &str, _: &str, _: &str) -> Result<(), TokenError> {
+                    Err(TokenError::Empty)
+                }
+                fn keyring_delete(&self, _: &str, _: &str) -> Result<(), TokenError> {
+                    Err(TokenError::Empty)
+                }
+                fn env(&self, _: &str) -> Option<String> {
+                    None
+                }
+                fn run(&self, _: &[String]) -> Result<String, TokenError> {
+                    Err(TokenError::Empty)
+                }
+            }
+            let got = run_init(
+                "fresh",
+                "",
+                &["--project", "1", "--token-env", "GL"],
+                &Untouchable,
+            );
+            assert_eq!(got, Ok(super::exit::OK));
+            assert!(Untouchable.keyring_get("s", "u").is_err());
+            assert!(Untouchable.keyring_set("s", "u", "v").is_err());
+            assert!(Untouchable.keyring_delete("s", "u").is_err());
+            assert_eq!(Untouchable.env("x"), None);
+            assert!(Untouchable.run(&[]).is_err());
+        }
+
+        /// Run `init` with `args` against a file holding `file`, through
+        /// `store`.
+        fn run_init(
+            name: &str,
+            file: &str,
+            args: &[&str],
+            store: &dyn TokenProvider,
+        ) -> Result<i32, i32> {
             let dir = std::env::temp_dir().join(format!("bw-init-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join("config.toml");
-            std::fs::write(&path, OWN_ON_OLD).unwrap();
-            let cli = Cli::try_parse_from([
-                "bridgewatch",
-                "--config",
-                path.to_str().unwrap(),
-                "init",
-                "--base-url",
-                "https://gitlab.other.example",
-                "--account",
-                "lab",
-                "--project",
-                "team/app",
-            ])
-            .expect("parses");
-            let Command::Init(args) = cli.command else {
-                unreachable!()
-            };
-            let out = init(&cli.config, *args, store).map_err(|f| f.code);
+            std::fs::write(&path, file).unwrap();
+            let mut argv = vec!["bridgewatch", "--config", path.to_str().unwrap(), "init"];
+            argv.extend_from_slice(args);
+            let (config, args) = init_of(&argv).expect("an init command line");
+            let out = init(&config, *args, store).map_err(|f| f.code);
             let _ = std::fs::remove_dir_all(&dir);
             out
+        }
+
+        /// Run `init --account lab` against a file holding [`OWN_ON_OLD`],
+        /// moving it to `https://gitlab.other.example`.
+        fn repoint(name: &str, store: &dyn TokenProvider) -> Result<i32, i32> {
+            run_init(
+                name,
+                OWN_ON_OLD,
+                &[
+                    "--base-url",
+                    "https://gitlab.other.example",
+                    "--account",
+                    "lab",
+                    "--project",
+                    "team/app",
+                ],
+                store,
+            )
         }
 
         fn entry(store: &Memory) -> Option<String> {
@@ -1891,6 +2023,85 @@ mod tests {
                 .unwrap();
             assert_eq!(repoint("locked", &store), Err(super::exit::ERROR));
             assert_eq!(entry(&store.0).as_deref(), Some("glpat-legacy"));
+            // The fake's other halves.
+            assert!(store.keyring_set("s", "u", "v").is_err());
+            store.keyring_delete("s", "u").unwrap();
+            assert_eq!(store.env("x"), None);
+            assert!(store.run(&[]).is_err());
+        }
+
+        /// A prompt that was cancelled is not a store error, and its words
+        /// are not the store's; an old base that is not a URL is named as
+        /// the old server.
+        #[test]
+        fn a_repoint_whose_prompt_was_cancelled_is_refused_in_plain_words() {
+            struct Cancelled;
+            impl TokenProvider for Cancelled {
+                fn keyring_get(&self, service: &str, _: &str) -> Result<String, TokenError> {
+                    Err(TokenError::NeedsApproval {
+                        service: service.into(),
+                        refused: true,
+                    })
+                }
+                fn keyring_set(&self, _: &str, _: &str, _: &str) -> Result<(), TokenError> {
+                    Ok(())
+                }
+                fn keyring_delete(&self, _: &str, _: &str) -> Result<(), TokenError> {
+                    Ok(())
+                }
+                fn env(&self, _: &str) -> Option<String> {
+                    None
+                }
+                fn run(&self, _: &[String]) -> Result<String, TokenError> {
+                    Err(TokenError::Empty)
+                }
+            }
+            assert_eq!(repoint("cancelled", &Cancelled), Err(super::exit::ERROR));
+            let odd = OWN_ON_OLD.replace("https://gitlab.example.com", "gitlab.example.com");
+            let moved = run_init(
+                "odd-base",
+                &odd,
+                &[
+                    "--base-url",
+                    "https://gitlab.other.example",
+                    "--account",
+                    "lab",
+                    "--project",
+                    "team/app",
+                ],
+                &Cancelled,
+            );
+            assert!(moved.is_err());
+            assert!(Cancelled.keyring_set("s", "u", "v").is_ok());
+            assert!(Cancelled.keyring_delete("s", "u").is_ok());
+            assert_eq!(Cancelled.env("x"), None);
+            assert!(Cancelled.run(&[]).is_err());
+        }
+
+        /// The note a move prints: none unless the account reads its own
+        /// entry, whether a stored token stays behind, and a base that is not
+        /// a URL named in words.
+        #[test]
+        fn a_repoint_note_says_what_stays_behind() {
+            assert_eq!(
+                repoint_note("https://a.example", "https://b.example", true, false),
+                None
+            );
+            let kept = repoint_note("https://a.example", "https://b.example", true, true).unwrap();
+            assert!(
+                kept.contains("stays with a.example and is not sent to b.example"),
+                "{kept}"
+            );
+            let fresh = repoint_note("a", "b", false, true).unwrap();
+            assert!(
+                fresh.contains("It reads its own stored token from now on"),
+                "{fresh}"
+            );
+            let words = repoint_note("not a url", "nor this", true, true).unwrap();
+            assert!(
+                words.contains("the old server") && words.contains("the new one"),
+                "{words}"
+            );
         }
 
         /// Nothing stored, or a token already bound: nothing to do, and init
@@ -1898,6 +2109,281 @@ mod tests {
         #[test]
         fn a_repoint_with_nothing_to_bind_goes_ahead() {
             assert_eq!(repoint("empty", &Memory::default()), Ok(super::exit::OK));
+        }
+    }
+
+    mod seams {
+        use std::io::{BufRead as _, Read as _, Write as _};
+
+        use super::super::{
+            ConfigArgs, JobAction, WatchArgs, auth_command, confirmed, exit, watch_until,
+        };
+        use crate::auth::{AuthAction, tests::Memory};
+
+        /// The write confirmation: only "y" or "yes" sends; no terminal is a
+        /// usage error, not a no.
+        #[test]
+        fn a_write_is_confirmed_by_y_or_yes_and_refused_without_a_terminal() {
+            for (answer, sends) in [("y\n", true), ("YES\n", true), ("n\n", false), ("", false)] {
+                let mut err = Vec::new();
+                let got = confirmed(
+                    "Retry job 7?",
+                    JobAction::Retry,
+                    true,
+                    &mut answer.as_bytes(),
+                    &mut err,
+                )
+                .ok();
+                assert_eq!(got, Some(sends), "{answer:?}");
+                let said = String::from_utf8(err).unwrap();
+                assert!(said.starts_with("Retry job 7? [y/N] "), "{said}");
+                assert_eq!(said.ends_with("nothing sent\n"), !sends, "{said}");
+            }
+            let refused = confirmed(
+                "?",
+                JobAction::Play,
+                false,
+                &mut "y\n".as_bytes(),
+                &mut Vec::new(),
+            );
+            assert!(matches!(refused, Err(f) if f.code == exit::USAGE));
+        }
+
+        fn temp_config(name: &str, raw: &str) -> ConfigArgs {
+            let dir = std::env::temp_dir().join(format!("bw-cli-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("config.toml");
+            std::fs::write(&path, raw).unwrap();
+            ConfigArgs { config: Some(path) }
+        }
+
+        /// A Ctrl-C already pending when `watch` starts ends it with the
+        /// unknown verdict, before the first tick.
+        #[tokio::test]
+        async fn a_watch_interrupted_before_its_first_tick_is_unknown() {
+            let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../bridgewatch-core/tests/fixtures/4cfaced9-deployed");
+            let config = temp_config(
+                "watch-int",
+                "[accounts.gl]\ntoken = { env = \"BW_NEVER\" }\n[[watches]]\nid = \"w\"\naccount = \"gl\"\nproject = 1\n",
+            );
+            let args = WatchArgs {
+                watches: Vec::new(),
+                json: false,
+                ticks: None,
+                fixture: Some(fixture),
+            };
+            let code = watch_until(&config, args, interrupt(true), ledger("int")).await;
+            assert_eq!(code.ok(), Some(exit::UNKNOWN));
+        }
+
+        /// The one interrupt type the `watch` tests share, already fired or
+        /// never, so one copy of the generic `watch_until` takes every path.
+        async fn interrupt(now: bool) {
+            if !now {
+                std::future::pending::<()>().await;
+            }
+        }
+
+        /// Two ticks of a recorded fixture, in both output forms, end with
+        /// the last tick's verdict.
+        #[tokio::test(start_paused = true)]
+        async fn a_watch_of_a_fixture_runs_its_ticks_and_exits_with_the_verdict() {
+            let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../bridgewatch-core/tests/fixtures/4cfaced9-deployed");
+            let config = temp_config(
+                "watch-ticks",
+                "[accounts.gl]\ntoken = { env = \"BW_NEVER\" }\n[[watches]]\nid = \"w\"\naccount = \"gl\"\nproject = 12345678\nref = \"main\"\ndeploy_markers = [\"deploy:origins\"]\n",
+            );
+            for json in [false, true] {
+                let args = WatchArgs {
+                    watches: Vec::new(),
+                    json,
+                    ticks: Some(2),
+                    fixture: Some(fixture.clone()),
+                };
+                let code = watch_until(&config, args, interrupt(false), ledger("ticks")).await;
+                assert_eq!(code.ok(), Some(exit::OK), "json: {json}");
+            }
+        }
+
+        /// A ledger file of this test's own, never the CLI's.
+        fn ledger(name: &str) -> std::path::PathBuf {
+            std::env::temp_dir().join(format!("bw-cli-ledger-{name}-{}.json", std::process::id()))
+        }
+
+        /// Against a GitLab on loopback, a pipeline that fails between two
+        /// ticks is one notification, in both output forms, and the ledger
+        /// remembers it.
+        #[tokio::test]
+        async fn a_watch_of_a_live_gitlab_notifies_once_in_either_form() {
+            let row = |status: &str| {
+                format!(
+                    r#"[{{"id":7,"iid":7,"project_id":1,"sha":"0123456789abcdef0123456789abcdef01234567","ref":"main","status":"{status}","source":"push","created_at":"2026-11-01T10:00:00Z","updated_at":"2026-11-01T10:05:00Z"}}]"#
+                )
+            };
+            let failed_job = r#"[{"id":70,"name":"test","stage":"test","status":"failed","allow_failure":false}]"#;
+            for json in [false, true] {
+                let base = serve(|_| {
+                    vec![
+                        (200, r#"{"id":9,"name":"bw","scopes":["read_api"],"expires_at":null,"active":true}"#.to_string()),
+                        (200, row("running")),
+                        (200, "[]".into()),
+                        (200, "[]".into()),
+                        (200, row("failed")),
+                        (200, failed_job.into()),
+                        (200, "[]".into()),
+                    ]
+                });
+                let config = temp_config(
+                    &format!("watch-live-{json}"),
+                    &format!(
+                        "[accounts.gl]\nbase_url = \"{base}\"\ntoken = {{ command = [\"echo\", \"glpat-LOOPBACK\"] }}\n\
+                         [[watches]]\nid = \"w\"\naccount = \"gl\"\nproject = 1\nref = \"main\"\n\
+                         poll = {{ live_secs = 1, idle_secs = 1 }}\n"
+                    ),
+                );
+                let args = WatchArgs {
+                    watches: Vec::new(),
+                    json,
+                    ticks: Some(2),
+                    fixture: None,
+                };
+                let path = ledger(&format!("live-{json}"));
+                let _ = std::fs::remove_file(&path);
+                let code = watch_until(&config, args, interrupt(false), path.clone()).await;
+                assert_eq!(code.ok(), Some(exit::FAILED), "json: {json}");
+                assert!(path.exists(), "the ledger was written");
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+
+        /// A loopback server answering each connection with the next of the
+        /// answers `make` gives for its address, after reading the request.
+        fn serve(make: impl FnOnce(&str) -> Vec<(u16, String)>) -> String {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let answers = make(&base);
+            std::thread::spawn(move || {
+                for ((status, body), stream) in answers.into_iter().zip(listener.incoming()) {
+                    let mut stream = stream.unwrap();
+                    let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        reader.read_line(&mut line).unwrap();
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some(n) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                            length = n.trim().parse().unwrap();
+                        }
+                    }
+                    reader.read_exact(&mut vec![0; length]).unwrap();
+                    write!(
+                        stream,
+                        "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n\
+                         content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .unwrap();
+                }
+            });
+            base
+        }
+
+        /// ⛔ On Linux, a machine with no CA roots cannot build the sign-in's
+        /// transport, and `auth login` says so rather than panicking. Run in a
+        /// child process, because the roots are read from the environment.
+        #[cfg(target_os = "linux")]
+        #[tokio::test]
+        async fn a_login_with_no_ca_roots_is_an_error() {
+            if std::env::var_os("BW_CLI_NO_ROOTS_CHILD").is_some() {
+                let config = temp_config(
+                    "no-roots",
+                    "[accounts.gh]\nprovider = \"github\"\ntoken = { oauth = true }\n",
+                );
+                let action = AuthAction::Login {
+                    account: "gh".into(),
+                };
+                let got = auth_command(&config, action, &Memory::default()).await;
+                assert_eq!(got.err().map(|f| f.code), Some(exit::ERROR));
+                return;
+            }
+            let dir = std::env::temp_dir().join(format!("bw-cli-no-roots-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let empty = dir.join("empty.pem");
+            std::fs::write(&empty, "").unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::seams::a_login_with_no_ca_roots_is_an_error",
+                ])
+                .env("BW_CLI_NO_ROOTS_CHILD", "1")
+                .env("SSL_CERT_FILE", &empty)
+                .env("SSL_CERT_DIR", &dir)
+                .status()
+                .unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(status.success());
+        }
+
+        /// `auth login`, `status` and `logout` as `main` runs them, over a
+        /// store in memory and a self-managed GitLab on loopback.
+        #[tokio::test]
+        async fn auth_signs_in_reports_and_signs_out_through_the_store_it_is_given() {
+            let base = serve(|base| {
+                vec![
+                    (
+                        200,
+                        format!(
+                            r#"{{"device_code":"d","user_code":"U-1","verification_uri":"{base}/oauth/device","expires_in":60,"interval":1}}"#
+                        ),
+                    ),
+                    (
+                        200,
+                        r#"{"access_token":"gl-A","token_type":"Bearer","expires_in":7200,"scope":"read_api","created_at":1}"#
+                            .into(),
+                    ),
+                    (200, r#"{"id":1,"username":"ada"}"#.into()),
+                    // `status`: the own token's expiry, one request.
+                    (
+                        200,
+                        r#"{"id":9,"name":"bw","scopes":["read_api"],"expires_at":null,"active":true}"#
+                            .into(),
+                    ),
+                ]
+            });
+            let config = temp_config(
+                "auth",
+                &format!(
+                    "[accounts.lab]\nbase_url = \"{base}\"\ntoken = {{ oauth = {{ client_id = \"app\" }} }}\n\
+                     [accounts.mine]\nbase_url = \"{base}\"\ntoken = {{ own = true }}\n"
+                ),
+            );
+            let store = Memory::default();
+            bridgewatch_core::token::set_own_token(
+                "mine",
+                &base,
+                &bridgewatch_core::token::Secret::new("glpat-OWN"),
+                &store,
+            )
+            .unwrap();
+            let lab = || "lab".to_string();
+            for (action, code) in [
+                (AuthAction::Login { account: lab() }, exit::OK),
+                (AuthAction::Status { account: None }, exit::OK),
+                (AuthAction::Logout { account: lab() }, exit::OK),
+                (
+                    AuthAction::Status {
+                        account: Some(lab()),
+                    },
+                    exit::ERROR,
+                ),
+            ] {
+                let got = auth_command(&config, action, &store).await;
+                assert_eq!(got.ok(), Some(code));
+            }
         }
     }
 }

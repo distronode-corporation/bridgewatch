@@ -81,9 +81,10 @@ impl FixtureTransport {
 
     /// Forget the recorded request paths.
     pub fn clear_seen(&self) {
-        if let Ok(mut s) = self.seen.lock() {
-            s.clear();
-        }
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// The pipelines in `list.json`, newest first, as the API would return them.
@@ -313,18 +314,15 @@ pub fn kind_for_file(name: &str) -> Option<RecordKind> {
 pub fn scrub(value: &mut serde_json::Value, kind: RecordKind) {
     match value {
         serde_json::Value::Array(items) => items.iter_mut().for_each(|i| scrub(i, kind)),
-        serde_json::Value::Object(_) => scrub_object(value, kind),
+        serde_json::Value::Object(map) => scrub_object(map, kind),
         _ => {}
     }
 }
 
-fn scrub_object(value: &mut serde_json::Value, kind: RecordKind) {
+fn scrub_object(map: &mut serde_json::Map<String, serde_json::Value>, kind: RecordKind) {
     let allowed = match kind {
         RecordKind::Pipeline => PIPELINE_KEYS,
         RecordKind::Job => JOB_KEYS,
-    };
-    let Some(map) = value.as_object_mut() else {
-        return;
     };
     map.retain(|key, _| allowed.contains(&key.as_str()));
 
@@ -380,10 +378,10 @@ pub fn scrub_dir_with(dir: &Path, mode: ScrubMode) -> std::io::Result<Scrubbed> 
     entries.sort();
 
     for path in entries {
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        let Some(kind) = kind_for_file(name) else {
+        // A name that is not UTF-8 is read lossily: it is judged by the same
+        // prefixes, and a name no prefix matches is skipped like any other.
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let Some(kind) = kind_for_file(&name) else {
             continue;
         };
         out.examined += 1;
@@ -391,10 +389,10 @@ pub fn scrub_dir_with(dir: &Path, mode: ScrubMode) -> std::io::Result<Scrubbed> 
         let mut value: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         scrub(&mut value, kind);
+        // A `Value` always renders: its keys are strings.
         let rendered = format!(
             "{}\n",
-            serde_json::to_string_pretty(&value)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+            serde_json::to_string_pretty(&value).expect("a JSON value renders")
         );
         if rendered != raw {
             if mode == ScrubMode::Write {
@@ -512,9 +510,6 @@ pub enum RecordError {
     /// A file could not be written.
     #[error("{0}: {1}")]
     Io(PathBuf, #[source] std::io::Error),
-    /// A response could not be re-serialised.
-    #[error("cannot serialise {0}: {1}")]
-    Serialize(String, #[source] serde_json::Error),
 }
 
 fn write_json<T: Serialize>(
@@ -527,13 +522,23 @@ fn write_json<T: Serialize>(
     // typed model drops the personal fields anyway, by construction — but that
     // is an accident of which fields the engine happens to need, and the day
     // somebody adds `commit` to `Job` it would stop being true silently.
-    let mut json =
-        serde_json::to_value(value).map_err(|e| RecordError::Serialize(name.to_string(), e))?;
+    // Every recorded type is plain data, keyed by strings.
+    let json = serde_json::to_value(value).expect("a recorded value serialises");
+    write_value(dir, name, json, files)
+}
+
+/// [`write_json`]'s body, outside the generic, so one copy takes every path.
+fn write_value(
+    dir: &Path,
+    name: &str,
+    mut json: serde_json::Value,
+    files: &mut Vec<String>,
+) -> Result<(), RecordError> {
     if let Some(kind) = kind_for_file(name) {
         scrub(&mut json, kind);
     }
-    let body = serde_json::to_string_pretty(&json)
-        .map_err(|e| RecordError::Serialize(name.to_string(), e))?;
+    // A `Value` always renders: its keys are strings.
+    let body = serde_json::to_string_pretty(&json).expect("a JSON value renders");
     let path = dir.join(name);
     std::fs::write(&path, format!("{body}\n")).map_err(|e| RecordError::Io(path, e))?;
     files.push(name.to_string());

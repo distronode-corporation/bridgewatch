@@ -109,6 +109,41 @@ line is the IPC glue the macro writes, which runs only when a webview invokes th
 | `logging.rs` | 3 | A rolling file appender that cannot be built in a folder that exists, no home directory at all, and a level reload the subscriber refuses. |
 | `crash.rs`, `guard.rs`, `reorder.rs` | 1 each | The summary counts one uncovered line in each, but the job's list of missing lines names none in these files, so the line is not identified. The summary counts each function by one compiled copy, and `crash.rs` is compiled into three test binaries, so the two counts can differ. |
 
+## CI, the whole workspace: 2026-11-27, pull request #138
+
+The `coverage` and `branches` jobs on pull request #138 at `7687dbf`
+([run 45988083481](https://github.com/distronode-corporation/bridgewatch/actions/runs/45988083481))
+printed, from `scripts/check-coverage.py`:
+
+| Crate | Files | Lines | Covered | Coverage | Branches | Covered | Coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| bridgewatch-core | 40 | 11100 | 11099 | 99.99% | 1740 | 1654 | 95.05% |
+| bridgewatch-cli | 4 | 4129 | 4129 | 100.00% | 316 | 297 | 93.98% |
+| bridgewatch-app | 18 | 5477 | 3345 | 61.07% | 545 | 231 | 42.38% |
+
+The one core line left there is covered by the next commit, which sets core's line floor to
+100. Branches are measured by the `branches` job on a pinned nightly (stable Rust cannot
+measure them) and held to each crate's `branch_floor`.
+
+### Why a line the missing-lines list shows as run can count as missed
+
+The `coverage` job prints two things: `--show-missing-lines`, and the per-file summary that
+`check-coverage.py` holds the floors to. They count differently. The summary credits each
+function with the line coverage of its single best compiled copy, not the union of every
+copy, and copies share counters only when their mangled names match. Separate copies of one
+function come from:
+
+- the crate's unit-test build and the rlib its integration tests link;
+- each test binary's copy of an `async fn`, and each instantiation of a generic;
+- the CLI's test binary and the real binary its subprocess tests run.
+
+A closure that never runs is a function of its own, with nothing covered. So a function whose
+paths are split between unit tests and integration tests, or between two test binaries,
+shows no missing line in the list and still counts lines as missed in the summary. The rule
+the tests follow: each function's paths meet in one place, so that one copy covers it all.
+The coverage job uploads its whole export (`coverage-json`, every function's every copy with
+its counts), which is how such a line is found.
+
 ## CI, the whole workspace: 2026-11-27, pull request #136
 
 The `coverage` job on pull request #136 at `90ebebd`
