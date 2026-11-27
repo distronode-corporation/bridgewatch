@@ -152,12 +152,6 @@ impl ConfigEditor {
         self.doc.to_string()
     }
 
-    /// The underlying document, for a caller that needs something this API does
-    /// not cover.
-    pub fn document(&self) -> &DocumentMut {
-        &self.doc
-    }
-
     /// Apply a batch of edits in order. The first failure aborts, leaving the
     /// editor holding the partially applied document; callers that need
     /// all-or-nothing should clone first, which is cheap relative to a write.
@@ -185,12 +179,8 @@ impl ConfigEditor {
 
     /// Set a dotted path.
     pub fn set(&mut self, path: &str, value: &EditValue) -> Result<(), EditError> {
+        // Never empty: `split_path` always returns at least one segment.
         let segments = split_path(path);
-        if segments.is_empty() {
-            return Err(EditError::NoSuchKey {
-                path: path.to_string(),
-            });
-        }
         let refs: Vec<&str> = segments.iter().map(String::as_str).collect();
         set_in_table(self.doc.as_table_mut(), &refs, value.to_value(), path, true)
     }
@@ -281,14 +271,13 @@ fn inline_sub_tables(table: &mut Table) {
         .filter(|(_, item)| item.is_table())
         .map(|(k, _)| k.to_string())
         .collect();
+    // Each key was just read off this table as a sub-table, so the match holds.
     for key in keys {
-        let Some(item) = table.remove(&key) else {
-            continue;
-        };
-        let Item::Table(mut sub) = item else { continue };
-        inline_sub_tables(&mut sub);
-        if let Some(inline) = sub.into_inline_table().into() {
-            table.insert(&key, Item::Value(Value::InlineTable(inline)));
+        if let Some(Item::Table(mut sub)) = table.remove(&key) {
+            inline_sub_tables(&mut sub);
+            if let Some(inline) = sub.into_inline_table().into() {
+                table.insert(&key, Item::Value(Value::InlineTable(inline)));
+            }
         }
     }
 }
