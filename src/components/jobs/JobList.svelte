@@ -103,7 +103,8 @@
   // panel so a row's buttons can say `aria-expanded` truthfully.
   let panels = $state<Record<number, { log: boolean; confirm: JobAction | null }>>({});
   const panelOf = (id: number) => panels[id] ?? { log: false, confirm: null };
-  const panelId = (id: number) => `job-panel-${(tools?.watchId ?? "").replace(/[^A-Za-z0-9_-]/g, "_")}-${id}`;
+  // Only the tools' buttons and panel carry an id, so it takes the tools they were drawn with.
+  const panelId = (t: JobTools, id: number) => `job-panel-${t.watchId.replace(/[^A-Za-z0-9_-]/g, "_")}-${id}`;
 
   function toggleLog(id: number) {
     const current = panelOf(id);
@@ -124,10 +125,10 @@
   const copyTimers = new Map<number, ReturnType<typeof setTimeout>>();
   $effect(() => () => copyTimers.forEach((timer) => clearTimeout(timer)));
 
-  async function copyFailure(job: JobView) {
-    if (!tools) return;
-    const copy = tools.api?.copy ?? SHELL_API.copy;
-    const ok = copy ? await copy(failureMarkdown(job, tools.context)) : false;
+  // Only the copy button calls this, and it is drawn with the tools it is given.
+  async function copyFailure(job: JobView, t: JobTools) {
+    const copy = t.api?.copy ?? SHELL_API.copy;
+    const ok = await copy(failureMarkdown(job, t.context));
     copied[job.id] = ok ? "copied" : "failed";
     clearTimeout(copyTimers.get(job.id));
     copyTimers.set(
@@ -161,7 +162,7 @@
   const copyInRow = (job: JobView) => canCopyFailure(job) && !hasLine(job);
 </script>
 
-{#snippet copyButton(job: JobView)}
+{#snippet copyButton(job: JobView, t: JobTools)}
   <button
     type="button"
     class={TOOL_BUTTON}
@@ -169,7 +170,7 @@
     title="Copy failure as Markdown"
     data-slot="job-copy"
     data-copied={copied[job.id]}
-    onclick={() => void copyFailure(job)}
+    onclick={() => void copyFailure(job, t)}
     >{copied[job.id] === "copied" ? "copied" : copied[job.id] === "failed" ? "not copied" : "copy"}</button
   >
   <!-- The label above names the action; this says how it went. -->
@@ -236,21 +237,21 @@
                       type="button"
                       class={TOOL_BUTTON}
                       aria-expanded={panelOf(job.id).log}
-                      aria-controls={panelId(job.id)}
+                      aria-controls={panelId(tools, job.id)}
                       aria-label={`${panelOf(job.id).log ? "Hide" : "Show"} the end of the log of ${job.name}`}
                       data-slot="job-log-toggle"
                       onclick={() => toggleLog(job.id)}>log</button
                     >
                   {/if}
                   {#if copyInRow(job)}
-                    {@render copyButton(job)}
+                    {@render copyButton(job, tools)}
                   {/if}
                   {#if canRetry(job, tools)}
                     <button
                       type="button"
                       class={TOOL_BUTTON}
                       aria-expanded={panelOf(job.id).confirm === "retry"}
-                      aria-controls={panelId(job.id)}
+                      aria-controls={panelId(tools, job.id)}
                       aria-label={`Retry ${job.name}`}
                       data-slot="job-retry"
                       onclick={() => ask(job.id, "retry")}>retry</button
@@ -261,7 +262,7 @@
                       type="button"
                       class={TOOL_BUTTON}
                       aria-expanded={panelOf(job.id).confirm === "play"}
-                      aria-controls={panelId(job.id)}
+                      aria-controls={panelId(tools, job.id)}
                       aria-label={`Start ${job.name}`}
                       data-slot="job-play"
                       onclick={() => ask(job.id, "play")}>play</button
@@ -294,7 +295,7 @@
                   {job.failure}
                 </span>
                 {#if tools}
-                  <span class="flex shrink-0 items-center">{@render copyButton(job)}</span>
+                  <span class="flex shrink-0 items-center">{@render copyButton(job, tools)}</span>
                 {/if}
               </li>
             {/if}
@@ -307,7 +308,7 @@
                   confirm={panelOf(job.id).confirm}
                   onCancel={() => cancel(job.id)}
                   {onOpen}
-                  id={panelId(job.id)}
+                  id={panelId(tools, job.id)}
                 />
               </li>
             {/if}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Distronode Corporation
 
-import { flushSync, mount, unmount } from "svelte";
+import { flushSync, mount, unmount, type ComponentProps } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 
 import UpdatedAgo from "./UpdatedAgo.svelte";
@@ -9,7 +9,7 @@ import UpdatedAgo from "./UpdatedAgo.svelte";
 let host: HTMLDivElement | null = null;
 let component: Record<string, unknown> | null = null;
 
-function render(props: Record<string, unknown>): HTMLElement {
+function render(props: ComponentProps<typeof UpdatedAgo>): HTMLElement {
   host = document.createElement("div");
   document.body.append(host);
   component = mount(UpdatedAgo, { target: host, props });

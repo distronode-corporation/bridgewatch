@@ -42,13 +42,13 @@ const copyButton = (root: HTMLElement) =>
 
 describe("DebugPane's copy button", () => {
   it("copies the snapshot as JSON, says so, and goes back to its label after two seconds", async () => {
-    const writeText = vi.fn(() => Promise.resolve());
+    const writeText = vi.fn((_text: string) => Promise.resolve());
     stubClipboard(writeText);
     const root = render({});
     copyButton(root).click();
     await vi.advanceTimersByTimeAsync(0);
     flushSync();
-    expect(JSON.parse(writeText.mock.calls[0][0] as string)).toEqual(snapshot);
+    expect(JSON.parse(writeText.mock.calls[0][0])).toEqual(snapshot);
     expect(copyButton(root).textContent?.trim()).toBe("Copied");
     await vi.advanceTimersByTimeAsync(2000);
     flushSync();

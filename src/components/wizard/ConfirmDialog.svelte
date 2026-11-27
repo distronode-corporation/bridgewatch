@@ -25,8 +25,9 @@
 
 <Dialog.Root
   {open}
-  onOpenChange={(next) => {
-    if (!next) onCancel();
+  onOpenChange={() => {
+    // Only ever a request to close (Escape, a click outside): nothing in the dialog opens it.
+    onCancel();
   }}
 >
   <Dialog.Content class="sm:max-w-md" data-slot="confirm-dialog" showCloseButton={false}>
