@@ -70,3 +70,16 @@ describe("providerSwitch", () => {
     });
   });
 });
+
+describe("providerSwitch without an account entry", () => {
+  it("reads a missing account as one with every key at its default", () => {
+    expect(providerSwitch("new", undefined, "gitlab", "github")).toEqual({
+      edits: [
+        { op: "unset", path: "accounts.new.base_url" },
+        { op: "unset", path: "accounts.new.api_path" },
+        { op: "unset", path: "accounts.new.header" },
+      ],
+      note: null,
+    });
+  });
+});

@@ -374,3 +374,15 @@ describe("Watch N projects", () => {
     expect(answersOf({ ...emptyDraft(), quick: [] })).not.toHaveProperty("watches");
   });
 });
+
+describe("Watch N projects, clicked twice before a render (#128)", () => {
+  it("reads the deploy jobs once", async () => {
+    const api = fakeApi();
+    await pasteAndTest(api);
+    q<HTMLButtonElement>('[data-action="quick-setup"]')!.click();
+    q<HTMLButtonElement>('[data-action="quick-setup"]')!.click();
+    await settle();
+    // Three ticked rows, one read each, from one click.
+    expect(api.suggestDeployMarkers).toHaveBeenCalledTimes(3);
+  });
+});

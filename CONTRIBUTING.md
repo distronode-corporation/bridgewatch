@@ -201,7 +201,10 @@ Coverage is measured in CI, and floors only go up:
 The last measured numbers, per crate and in total, with the command and the date, are in
 [docs/coverage.md](docs/coverage.md).
 
-There is no exclusion list. A change that raises coverage raises the floor in the same pull
+There is no exclusion list. The one thing the frontend report leaves out is a node the Svelte
+compiler writes, not one in the source: the `?? ''` around each template `{expression}`, whose
+right side runs only when a typed value is null (`vitest.svelte-generated.ts`;
+`src/lib/svelte-generated.test.ts` proves it matches no hand-written node). A change that raises coverage raises the floor in the same pull
 request; lowering one needs a reason stated in review. That is a review rule: no tool
 compares a floor with its previous value.
 

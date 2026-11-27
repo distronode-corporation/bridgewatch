@@ -43,7 +43,10 @@ impl ScriptTransport {
     /// Queue one whole response, headers included: a redirect's `location`,
     /// a rate limit's `x-ratelimit-remaining`, a truncated tail.
     pub fn reply_with(&self, contains: &str, response: HttpResponse) -> &Self {
-        let mut rules = self.rules.lock().unwrap_or_else(|e| e.into_inner());
+        let mut rules = self
+            .rules
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match rules.iter_mut().find(|(c, _)| c == contains) {
             Some((_, queue)) => queue.push_back(response),
             None => rules.push((contains.to_string(), VecDeque::from([response]))),
@@ -53,14 +56,17 @@ impl ScriptTransport {
 
     /// Every request made so far, in order.
     pub fn requests(&self) -> Vec<HttpRequest> {
-        self.seen.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// How many answers are still queued.
     pub fn remaining(&self) -> usize {
         self.rules
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .map(|(_, q)| q.len())
             .sum()
@@ -72,10 +78,13 @@ impl Transport for ScriptTransport {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ClientError> {
         self.seen
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(request.clone());
         let answer = {
-            let mut rules = self.rules.lock().unwrap_or_else(|e| e.into_inner());
+            let mut rules = self
+                .rules
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             rules
                 .iter_mut()
                 .find(|(contains, queue)| {

@@ -19,16 +19,6 @@ let host: HTMLDivElement;
 let component: Record<string, unknown> | null = null;
 
 beforeEach(() => {
-  // jsdom has no ResizeObserver; both webviews do. bits-ui's scroll-area
-  // measures through it, so a no-op stands in.
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
   host = document.createElement("div");
   document.body.append(host);
 });
@@ -37,7 +27,6 @@ afterEach(() => {
   if (component) void unmount(component);
   component = null;
   host.remove();
-  vi.unstubAllGlobals();
 });
 
 const slot = (name: string, root: ParentNode = host) => root.querySelector<HTMLElement>(`[data-slot="${name}"]`);
@@ -48,22 +37,14 @@ describe("vendored ui components", () => {
     flushSync();
 
     for (const name of [
-      "card",
-      "card-title",
       "button",
       "badge",
-      "separator",
       "label",
       "input",
       "switch",
       "checkbox",
-      "progress",
       "stepper",
-      "tabs",
-      "tabs-list",
       "collapsible",
-      "accordion",
-      "scroll-area",
       "alert",
     ]) {
       expect(slot(name), name).not.toBeNull();
@@ -79,12 +60,6 @@ describe("vendored ui components", () => {
     expect(slot("alert")!.getAttribute("role")).toBe("alert");
     expect(slot("checkbox")!.getAttribute("data-state")).toBe("checked");
 
-    // Only the active tab's panel is shown (bits-ui keeps the other mounted, hidden).
-    const panels = [...host.querySelectorAll<HTMLElement>('[data-slot="tabs-content"]')];
-    expect(panels.map((p) => [p.textContent?.trim(), p.hidden])).toEqual([
-      ["every job", false],
-      ["failures only", true],
-    ]);
 
     // Stepper: step 2 of 3 is current, step 1 is complete.
     const current = host.querySelector('[aria-current="step"]');

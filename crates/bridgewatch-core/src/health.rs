@@ -413,6 +413,19 @@ mod tests {
     }
 
     #[test]
+    fn a_state_is_worded_and_a_short_span_is_said_in_seconds_or_minutes() {
+        assert_eq!(HealthState::Expiring.as_str(), "expiring");
+        assert_eq!(span(45), "45s");
+        assert_eq!(span(40 * 60), "40m");
+    }
+
+    #[test]
+    fn an_invalid_token_error_that_names_neither_revoked_nor_expired_is_invalid() {
+        let body = r#"{"error":"invalid_token","error_description":"Token is malformed."}"#;
+        assert_eq!(gitlab_refusal(body), Refusal::Invalid);
+    }
+
+    #[test]
     fn no_expiry_and_no_refusal_is_nothing_to_say() {
         assert_eq!(assess("lab", &Observed::default(), 0), None);
     }

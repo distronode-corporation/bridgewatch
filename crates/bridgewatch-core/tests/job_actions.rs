@@ -927,3 +927,16 @@ fn a_watch_view_says_actions_only_when_they_are_on() {
             .contains("\"actions\":true")
     );
 }
+
+#[test]
+fn a_url_beside_an_accounts_path_prefix_or_not_a_github_job_is_refused() {
+    let config = config_of(TWO_PROVIDERS);
+    let err = |url: &str| actions::locate(&config, url, None).unwrap_err().to_string();
+    // On the host of `self`, but not below its `/gitlab` prefix.
+    assert!(
+        err("https://git.example.com/gitlabx/acme-corp/monorepo/-/jobs/9")
+            .contains("any configured account")
+    );
+    // On github.com, but a pull request rather than a job.
+    assert!(err("https://github.com/acme-corp/monorepo/pull/7").contains("not a job's page"));
+}

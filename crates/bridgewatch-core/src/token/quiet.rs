@@ -154,7 +154,7 @@ pub(super) fn get(service: &str, user: &str) -> Result<String, TokenError> {
         service: service.to_string(),
         message: format!("could not turn the Keychain's prompts off for a status read: {e}"),
     })?;
-    keyring::Entry::new(service, user)
+    super::store_entry(service, user)
         .and_then(|e| e.get_password())
         .map_err(|e| super::classify_keyring_error(e, service, user))
 }
@@ -165,27 +165,65 @@ pub(super) fn get(service: &str, user: &str) -> Result<String, TokenError> {
     not(any(target_os = "macos", target_os = "ios", target_os = "android"))
 ))]
 pub(super) fn get(service: &str, user: &str) -> Result<String, TokenError> {
+    get_with(service, user, secret_service_search)
+}
+
+/// What a Secret Service search for one entry found: the secret of the first
+/// unlocked match (or why it could not be read), and whether any match is locked.
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+))]
+struct Found {
+    unlocked: Option<Result<Vec<u8>, String>>,
+    locked: bool,
+}
+
+/// The search itself, over D-Bus: a search does not unlock anything.
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+))]
+fn secret_service_search(service: &str, user: &str) -> Result<Found, String> {
     use secret_service::{EncryptionType, blocking::SecretService};
 
-    let store = |e: secret_service::Error| TokenError::Store {
+    let ss = SecretService::connect(EncryptionType::Dh).map_err(|e| e.to_string())?;
+    let attributes = std::collections::HashMap::from([("service", service), ("username", user)]);
+    let found = ss.search_items(attributes).map_err(|e| e.to_string())?;
+    let unlocked = found
+        .unlocked
+        .first()
+        .map(|item| item.get_secret().map_err(|e| e.to_string()));
+    Ok(Found {
+        unlocked,
+        locked: !found.locked.is_empty(),
+    })
+}
+
+/// What a search's answer means: the token, "ask first", or no entry. The
+/// search is [`secret_service_search`] in production and scripted in the tests.
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+))]
+fn get_with(
+    service: &str,
+    user: &str,
+    search: fn(&str, &str) -> Result<Found, String>,
+) -> Result<String, TokenError> {
+    let store = |message: String| TokenError::Store {
         service: service.to_string(),
-        message: e.to_string(),
+        message,
     };
-    let ss = SecretService::connect(EncryptionType::Dh).map_err(store)?;
-    let found = ss
-        .search_items(std::collections::HashMap::from([
-            ("service", service),
-            ("username", user),
-        ]))
-        .map_err(store)?;
-    if let Some(item) = found.unlocked.first() {
-        let bytes = item.get_secret().map_err(store)?;
+    let found = search(service, user).map_err(store)?;
+    if let Some(secret) = found.unlocked {
+        let bytes = secret.map_err(store)?;
         return String::from_utf8(bytes).map_err(|_| TokenError::Store {
             service: service.to_string(),
             message: "the stored value is not UTF-8".to_string(),
         });
     }
-    if !found.locked.is_empty() {
+    if found.locked {
         return Err(TokenError::NeedsApproval {
             service: service.to_string(),
             refused: false,
@@ -209,7 +247,7 @@ pub(super) fn get(service: &str, user: &str) -> Result<String, TokenError> {
             user: String::new(),
         });
     }
-    keyring::Entry::new(service, user)
+    super::store_entry(service, user)
         .and_then(|e| e.get_password())
         .map_err(|e| super::classify_keyring_error(e, service, user))
 }
@@ -248,5 +286,79 @@ mod tests {
         let gone = keyring::Error::PlatformFailure(Box::new(secret_service::Error::Unavailable));
         assert_eq!(super::approval_of(&gone), None);
         assert_eq!(super::approval_of(&keyring::Error::NoEntry), None);
+    }
+
+    /// Every answer a Secret Service search can give, through a scripted search.
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+    ))]
+    mod secret_service_answers {
+        use super::super::{Found, TokenError, get_with};
+
+        fn unlocked(secret: &[u8]) -> Result<Found, String> {
+            Ok(Found {
+                unlocked: Some(Ok(secret.to_vec())),
+                locked: false,
+            })
+        }
+
+        #[test]
+        fn an_unlocked_match_is_the_token() {
+            assert_eq!(
+                get_with("svc", "u", |_, _| unlocked(b"glpat-x")).unwrap(),
+                "glpat-x"
+            );
+        }
+
+        #[test]
+        fn a_match_that_is_not_utf8_or_cannot_be_read_is_a_store_error() {
+            let bad = get_with("svc", "u", |_, _| unlocked(&[0xff, 0xfe])).unwrap_err();
+            assert!(
+                matches!(bad, TokenError::Store { message, .. } if message.contains("not UTF-8"))
+            );
+            let unreadable = get_with("svc", "u", |_, _| {
+                Ok(Found {
+                    unlocked: Some(Err("no session".into())),
+                    locked: false,
+                })
+            })
+            .unwrap_err();
+            assert!(
+                matches!(unreadable, TokenError::Store { message, .. } if message == "no session")
+            );
+        }
+
+        #[test]
+        fn only_a_locked_match_asks_first_and_no_match_is_no_entry() {
+            let locked = get_with("svc", "u", |_, _| {
+                Ok(Found {
+                    unlocked: None,
+                    locked: true,
+                })
+            })
+            .unwrap_err();
+            assert!(matches!(
+                locked,
+                TokenError::NeedsApproval { refused: false, .. }
+            ));
+            let none = get_with("svc", "u", |_, _| {
+                Ok(Found {
+                    unlocked: None,
+                    locked: false,
+                })
+            })
+            .unwrap_err();
+            assert!(matches!(none, TokenError::NoEntry { user, .. } if user == "u"));
+        }
+
+        #[test]
+        fn a_search_that_fails_is_a_store_error() {
+            let err = get_with("svc", "u", |_, _| {
+                Err("org.freedesktop.DBus.Error.ServiceUnknown".into())
+            })
+            .unwrap_err();
+            assert!(matches!(err, TokenError::Store { service, .. } if service == "svc"));
+        }
     }
 }

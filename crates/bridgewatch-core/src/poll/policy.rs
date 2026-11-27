@@ -213,10 +213,10 @@ impl PollPolicy {
         if self.consecutive_errors == 0 && self.retry_after.is_none() {
             return false;
         }
-        match self.since_last_poll() {
-            None => false,
-            Some(elapsed) => elapsed < self.interval(any_live),
-        }
+        // Every way to an error or a Retry-After (`on_error`) also stamps the
+        // poll, so there is always a time to measure from here.
+        self.since_last_poll()
+            .is_some_and(|elapsed| elapsed < self.interval(any_live))
     }
 
     /// Whether an out-of-band poll should be honoured now: always for a reason

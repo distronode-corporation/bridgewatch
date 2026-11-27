@@ -34,6 +34,9 @@ futures-util = { version = "0.3.34", default-features = false, features = ["allo
 globset = "0.4.20"
 hex = "0.4.3"
 keyring = "4.2.0"
+# keyring's own core, already in Cargo.lock under it: its default store is what an
+# entry is built in, which lets a test install keyring-core's mock store (token.rs).
+keyring-core = "1.0.0"
 minijinja = { version = "3.0.0", features = ["serde"] }
 # ⚠ `gzip` is not decoration: without it reqwest sends no `accept-encoding` and
 # every GitLab response arrives uncompressed. Measured against gitlab.com, a

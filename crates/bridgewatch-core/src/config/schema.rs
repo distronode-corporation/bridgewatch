@@ -771,14 +771,6 @@ impl GroupMode {
     pub fn is_run(&self) -> bool {
         matches!(self, GroupMode::Run)
     }
-
-    /// The config spelling, `run` or `commit`.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            GroupMode::Run => "run",
-            GroupMode::Commit => "commit",
-        }
-    }
 }
 
 /// A project, addressed either by numeric id or by namespace path.
@@ -897,16 +889,6 @@ pub enum JobsMode {
     /// Every job, parent and child, grouped by stage. The 0.1.0 default.
     #[default]
     All,
-}
-
-impl JobsMode {
-    /// The config spelling, `failures` or `all`.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            JobsMode::Failures => "failures",
-            JobsMode::All => "all",
-        }
-    }
 }
 
 fn default_max_rows() -> usize {

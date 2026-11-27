@@ -88,6 +88,9 @@ describe("state formatting", () => {
   it("falls back to grey and the raw name rather than throwing", () => {
     expect(stateTone(null)).toBe("grey");
     expect(stateWord(undefined)).toBe("unknown");
+    // A state a newer shell sends that this build has no word for: grey, and its identifier.
+    expect(stateTone("from_a_newer_shell" as IconState)).toBe("grey");
+    expect(stateWord("from_a_newer_shell" as IconState)).toBe("from_a_newer_shell");
   });
 });
 
@@ -96,6 +99,8 @@ describe("bridge and deploy words", () => {
     // A trigger job that produced no child pipeline. Every other monitor
     // reports the parent green.
     expect(bridgeTone("dead")).toBe("red");
+    expect(bridgeTone("from_a_newer_shell")).toBe("grey");
+    expect(deployTone("from_a_newer_shell")).toBe("grey");
     expect(bridgeWord("dead")).toBe("dead");
   });
 
@@ -133,6 +138,7 @@ describe("bridge and deploy words", () => {
     expect(jobTone("warning_failure")).toBe("amber");
     expect(jobTone("gate")).toBe("amber");
     expect(jobTone("passed")).toBe("green");
+    expect(jobTone("live")).toBe("blue");
     expect(jobTone("not_built")).toBe("grey");
   });
 });
@@ -236,6 +242,24 @@ describe("debug pane formatting", () => {
     expect(sourceBadge("merge_group")).toBe("queue");
     expect(sourceBadge("dynamic")).toBe("auto");
     expect(sourceBadge("something_github_added_later")).toBe("something_github_added_later");
+  });
+
+  it("badges each GitLab source it knows, and GitHub's remaining events", () => {
+    expect(["pipeline", "web", "api", "trigger"].map(sourceBadge)).toEqual(["child", "web", "api", "trig"]);
+    expect(["workflow_call", "repository_dispatch"].map(sourceBadge)).toEqual(["called", "dispatch"]);
+  });
+
+  it("keeps a path that already fits, whole", () => {
+    expect(shortPath("/projects/1/pipelines", 24)).toBe("/projects/1/pipelines");
+    expect(shortPath("x".repeat(54))).toBe("x".repeat(54));
+  });
+
+  it("colours a client error red and an informational or redirect status grey", () => {
+    expect(statusTone(404)).toBe("red");
+    expect(statusTone(401)).toBe("red");
+    expect(statusTone(304)).toBe("grey");
+    expect(statusTone(101)).toBe("grey");
+    expect(statusTone(299)).toBe("green");
   });
 });
 

@@ -76,8 +76,7 @@ pub fn base_class(status: &Status, allow_failure: bool) -> JobClass {
         }
         Status::Manual => JobClass::Gate,
         Status::Canceled | Status::Skipped => JobClass::NotBuilt,
-        Status::Unknown(_) => JobClass::Unknown,
-        // Every live status is handled above.
+        // `Status::Unknown`: every live status is handled above.
         _ => JobClass::Unknown,
     }
 }

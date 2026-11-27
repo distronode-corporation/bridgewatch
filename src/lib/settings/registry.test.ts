@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import schema from "../config.schema.json" with { type: "json" };
-import { REGISTRY, entry, inapplicableNote, providerOf } from "./registry";
+import { REGISTRY, concretePath, entry, inapplicableNote, providerOf } from "./registry";
 import { leafPaths, type JsonSchema } from "./schema";
 
 // ⚠ Through `unknown`: TypeScript infers the imported JSON as its exact literal
@@ -227,5 +227,48 @@ describe("hints on keys both providers use", () => {
     expect(hint).toContain("<glyph>.png");
     expect(hint).toContain("<glyph>@1x.png");
     expect(hint).not.toContain("<state>");
+  });
+});
+
+describe("registry lookups that a caller can get wrong", () => {
+  it("throws for a path the registry does not hold, rather than returning undefined", () => {
+    expect(() => entry("watches.*.no_such_key")).toThrow("no registry entry for watches.*.no_such_key");
+  });
+
+  it("throws when a wildcard path is given fewer keys than it has wildcards", () => {
+    expect(concretePath("watches.*.jobs.*", 0, "kics-iac-sast")).toBe("watches.0.jobs.kics-iac-sast");
+    expect(concretePath("accounts.*.token", "gitlab.com")).toBe('accounts."gitlab.com".token');
+    expect(() => concretePath("watches.*.jobs.*", 0)).toThrow("not enough keys for watches.*.jobs.*");
+  });
+
+  it("names the provider when a provider-only entry carries no note of its own", () => {
+    const { providerNote: _, ...bare } = entry("watches.*.workflow");
+    expect(inapplicableNote(bare, "gitlab")).toBe("Only used by GitHub accounts.");
+  });
+});
+
+describe("leafPaths on schemas the generator could produce", () => {
+  it("keeps a dangling $ref as a leaf rather than throwing", () => {
+    expect(leafPaths({ properties: { a: { $ref: "#/$defs/missing" } } })).toEqual(["a"]);
+  });
+
+  it("stops at depth 12, so a self-referential schema cannot hang the walk", () => {
+    const root: JsonSchema = {
+      $defs: { node: { properties: { child: { $ref: "#/$defs/node" } } } },
+      properties: { root: { $ref: "#/$defs/node" } },
+    };
+    const [path] = leafPaths(root);
+    expect(path.split(".").length).toBe(13);
+    expect(path.startsWith("root.child.child")).toBe(true);
+  });
+
+  it("walks a map of maps through its wildcard", () => {
+    const root: JsonSchema = {
+      properties: {
+        jobs: { additionalProperties: { additionalProperties: { type: "string" } } },
+        flat: { additionalProperties: { type: "string" } },
+      },
+    };
+    expect(leafPaths(root)).toEqual(["flat.*", "jobs.*.*"]);
   });
 });

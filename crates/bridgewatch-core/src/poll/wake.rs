@@ -134,6 +134,12 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    #[test]
+    fn the_default_watch_reads_the_system_clocks_and_sees_no_wake_at_once() {
+        let mut watch = WakeWatch::default();
+        assert_eq!(watch.check(), None);
+    }
+
     /// Two clocks the test moves by hand.
     #[derive(Clone)]
     struct Hand(Arc<Mutex<(Instant, SystemTime)>>);

@@ -457,16 +457,15 @@ fn covers(span: Option<Range<usize>>, offset: usize) -> bool {
 /// See the call site: serde receives them sorted, and the rule is first match
 /// wins, so the file's order is the user's intent and has to be recovered.
 fn restore_job_override_order(config: &mut Config, raw: &str) {
-    let Ok(doc) = raw.parse::<toml_edit::Document<String>>() else {
-        return;
-    };
+    // `raw` is the text the config was just parsed from, so it is valid TOML
+    // and its `[[watches]]` are exactly `config.watches`, one for one.
+    let doc = raw
+        .parse::<toml_edit::Document<String>>()
+        .expect("the text the config was parsed from is TOML");
     let Some(watches) = doc.get("watches").and_then(|w| w.as_array_of_tables()) else {
         return;
     };
-    for (index, table) in watches.iter().enumerate() {
-        let Some(watch) = config.watches.get_mut(index) else {
-            break;
-        };
+    for (watch, table) in config.watches.iter_mut().zip(watches.iter()) {
         let order: Vec<String> = match table.get("jobs") {
             Some(toml_edit::Item::Table(t)) => t.iter().map(|(k, _)| k.to_string()).collect(),
             Some(toml_edit::Item::Value(toml_edit::Value::InlineTable(t))) => {

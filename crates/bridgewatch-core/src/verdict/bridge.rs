@@ -148,11 +148,8 @@ fn reconcile(raw: BridgeVerdict, own: JobClass, name: &str) -> BridgeVerdict {
             }
             BridgeVerdict::PassedWithWarnings { jobs }
         }
-        JobClass::BlockingFailure if matches!(raw, BridgeVerdict::PassedWithWarnings { .. }) => {
-            BridgeVerdict::Failed {
-                jobs: raw.jobs().to_vec(),
-            }
-        }
+        // No `BlockingFailure` arm: a trigger job is only ever a blocking failure
+        // when it FAILED, and then the child's verdict is already `Failed`.
         // `gate` on a trigger job that was cancelled or skipped says "this lane
         // is expected to sit unrun", which is a park and not missing work.
         JobClass::Gate if matches!(raw, BridgeVerdict::Canceled | BridgeVerdict::Skipped) => {
@@ -311,9 +308,8 @@ fn from_status_only(
         Status::Canceled => BridgeVerdict::Canceled,
         Status::Skipped => BridgeVerdict::Skipped,
         Status::Manual => BridgeVerdict::AwaitingGate { jobs: Vec::new() },
-        Status::Unknown(raw) => BridgeVerdict::Unknown {
-            status: raw.clone(),
-        },
+        // `Status::Unknown`, whose text is the raw status: every other status is
+        // matched above, the live ones by the guard.
         _ => BridgeVerdict::Unknown {
             status: effective.to_string(),
         },
