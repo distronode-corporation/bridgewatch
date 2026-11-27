@@ -711,7 +711,7 @@ impl ReqwestTransport {
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("bridgewatch/", env!("CARGO_PKG_VERSION")))
             .build()
-            .map_err(|e| ClientError::Transport(e.to_string()))?;
+            .map_err(|e| ClientError::Transport(describe(&e)))?;
         Ok(Self { client })
     }
 }
