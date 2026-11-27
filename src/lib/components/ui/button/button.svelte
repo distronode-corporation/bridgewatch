@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { type VariantProps, tv } from "tailwind-variants";
 	import { cn, type WithElementRef } from "$lib/components/ui/utils.js";
-	import type { HTMLAnchorAttributes, HTMLButtonAttributes } from "svelte/elements";
+	import type { HTMLButtonAttributes } from "svelte/elements";
 
 	export const buttonVariants = tv({
 		base: "focus-visible:border-ring focus-visible:ring-ring aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 rounded-2xl border border-transparent bg-clip-padding text-[13px]/[18px] font-medium focus-visible:ring-2 aria-invalid:ring-3 active:not-aria-[haspopup]:translate-y-px [&_svg:not([class*='size-'])]:size-4 group/button inline-flex shrink-0 items-center justify-center whitespace-nowrap transition-all outline-none select-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
@@ -34,11 +34,11 @@
 	export type ButtonVariant = VariantProps<typeof buttonVariants>["variant"];
 	export type ButtonSize = VariantProps<typeof buttonVariants>["size"];
 
-	export type ButtonProps = WithElementRef<HTMLButtonAttributes> &
-		WithElementRef<HTMLAnchorAttributes> & {
-			variant?: ButtonVariant;
-			size?: ButtonSize;
-		};
+	// Button only: shadcn's anchor variant is removed, since the app opens links through the shell, never an href (ipc.test.ts).
+	export type ButtonProps = WithElementRef<HTMLButtonAttributes> & {
+		variant?: ButtonVariant;
+		size?: ButtonSize;
+	};
 </script>
 
 <script lang="ts">
@@ -47,7 +47,6 @@
 		variant = "default",
 		size = "default",
 		ref = $bindable(null),
-		href = undefined,
 		type = "button",
 		disabled,
 		children,
@@ -55,28 +54,13 @@
 	}: ButtonProps = $props();
 </script>
 
-{#if href}
-	<a
-		bind:this={ref}
-		data-slot="button"
-		class={cn(buttonVariants({ variant, size }), className)}
-		href={disabled ? undefined : href}
-		aria-disabled={disabled}
-		role={disabled ? "link" : undefined}
-		tabindex={disabled ? -1 : undefined}
-		{...restProps}
-	>
-		{@render children?.()}
-	</a>
-{:else}
-	<button
-		bind:this={ref}
-		data-slot="button"
-		class={cn(buttonVariants({ variant, size }), className)}
-		{type}
-		{disabled}
-		{...restProps}
-	>
-		{@render children?.()}
-	</button>
-{/if}
+<button
+	bind:this={ref}
+	data-slot="button"
+	class={cn(buttonVariants({ variant, size }), className)}
+	{type}
+	{disabled}
+	{...restProps}
+>
+	{@render children?.()}
+</button>

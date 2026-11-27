@@ -1,4 +1,4 @@
-import { flushSync, mount, unmount } from "svelte";
+import { flushSync, mount, unmount, type Component } from "svelte";
 import { describe, expect, it } from "vitest";
 
 // The components, not the barrels: plain `tsc` cannot see `<script module>`
@@ -128,7 +128,8 @@ function contrast(a: string, b: string): number {
 function linkTextClass(component: typeof Button | typeof Badge, tag: string): string {
   const host = document.createElement("div");
   document.body.append(host);
-  const mounted = mount(component, { target: host, props: { variant: "link" } });
+  // Both take `variant`; their element props differ (a button, a span), which this test does not pass.
+  const mounted = mount(component as Component<{ variant: "link" }>, { target: host, props: { variant: "link" } });
   flushSync();
   // Colour classes only: `text-xs` is a size, and has no --color-xs.
   const colours = [...host.querySelector(tag)!.classList].filter(
