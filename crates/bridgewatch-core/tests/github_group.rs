@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use bridgewatch_core::client::http::{HttpRequest, HttpResponse, Transport};
 use bridgewatch_core::client::{CiClient, ClientError, GitHubClient, ListQuery, RequestRing};
 use bridgewatch_core::config::{Account, Config, GroupMode, ProjectRef, Provider};
-use bridgewatch_core::model::Pipeline;
+use bridgewatch_core::model::{Bridge, Pipeline};
 use bridgewatch_core::poll::Poller;
 use bridgewatch_core::status::Status;
 use bridgewatch_core::token::Secret;
@@ -2126,4 +2126,133 @@ async fn a_gitlab_client_ignores_expect_entirely() {
     }
     assert_eq!(asked[0].len(), 1);
     assert_eq!(asked[0], asked[1]);
+}
+
+// ---------------------------------------------------------------------------
+// The edges of a rebuilt row and of a fold
+// ---------------------------------------------------------------------------
+
+fn row(id: u64, ref_name: &str, source: Option<&str>) -> Pipeline {
+    Pipeline {
+        id,
+        iid: None,
+        project_id: None,
+        sha: SHA.to_string(),
+        ref_name: ref_name.into(),
+        status: Status::Success,
+        source: source.map(str::to_string),
+        web_url: None,
+        created_at: None,
+        updated_at: None,
+        started_at: None,
+        finished_at: None,
+        title: None,
+    }
+}
+
+/// A row with no branch or event is asked about by its commit and the
+/// list's actor alone; a run that is a member of a group (not the group's
+/// own id) finds that group; an expected workflow named twice, or blank,
+/// counts once; and a run no group holds is not found.
+#[tokio::test]
+async fn a_rebuilt_row_is_asked_by_commit_and_actor_and_found_by_any_of_its_runs() {
+    let by_sha = format!(
+        "/repos/acme-corp/monorepo/actions/runs?head_sha={SHA}&actor=ada&exclude_pull_requests=true&per_page=100&page=1"
+    );
+    let transport = Routed::new().on(
+        &by_sha,
+        Reply::ok(runs_page(&[
+            Run::push(4102, "Deploy", "2026-09-18T09:00:00Z", "success"),
+            Run::push(4101, "CI", "2026-09-18T09:00:00Z", "success"),
+        ])),
+    );
+    let client = client(transport.clone());
+    let query = grouped("push", 20, 90).for_user(Some("ada")).expecting(&[
+        "deploy.yml".to_string(),
+        " deploy.yml ".to_string(),
+        "  ".to_string(),
+    ]);
+    let (_, bridges) = CiClient::listed_detail(&client, &repo(), &row(4101, "", None), &query)
+        .await
+        .unwrap();
+    let expected: Vec<&Bridge> = bridges
+        .iter()
+        .filter(|b| {
+            b.web_url
+                .as_deref()
+                .is_some_and(|u| u.contains("/actions/workflows/deploy.yml"))
+        })
+        .collect();
+    assert_eq!(expected.len(), 1, "{bridges:?}");
+
+    let error = CiClient::listed_detail(&client, &repo(), &row(9999, "", None), &query)
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("no commit group holds run 9999"),
+        "{error}"
+    );
+}
+
+fn page_of_two(per_page: &str, runs: &[Run]) -> (Arc<Routed>, ListQuery) {
+    let path = format!(
+        "/repos/acme-corp/monorepo/actions/runs?branch=main&event=push&exclude_pull_requests=true&per_page={per_page}&page=1"
+    );
+    let transport = Routed::new().on(&path, Reply::ok(runs_page(runs)));
+    (transport, grouped("push", per_page.parse().unwrap(), 90))
+}
+
+#[tokio::test]
+async fn an_empty_page_folds_to_no_rows() {
+    let (transport, query) = page_of_two("20", &[]);
+    let rows = client(transport)
+        .list_pipelines(&repo(), &query)
+        .await
+        .unwrap();
+    assert!(rows.is_empty());
+}
+
+/// A full page whose every group may have lost older runs keeps them all
+/// rather than show nothing, and a run with no name is called by its id.
+#[tokio::test]
+async fn a_full_page_of_incomplete_groups_is_kept_and_a_nameless_run_is_named_by_its_id() {
+    // A listening subscriber, so the debug line that says so is evaluated.
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .finish(),
+    );
+    let (transport, query) = page_of_two(
+        "2",
+        &[
+            Run::push(4102, " ", "2026-09-18T09:00:00Z", "success"),
+            Run::push(4101, "CI", "2026-09-18T09:00:00Z", "success"),
+        ],
+    );
+    let client = client(transport);
+    let rows = client.list_pipelines(&repo(), &query).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    let (_, bridges) = CiClient::listed_detail(&client, &repo(), &rows[0], &query)
+        .await
+        .unwrap();
+    let names: Vec<&str> = bridges.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["CI", "workflow run 4102"]);
+}
+
+/// On a full page, a group whose time cannot be read cannot have lost a
+/// member, so it stays.
+#[tokio::test]
+async fn a_group_with_no_readable_time_is_complete_on_a_full_page() {
+    let mut other = Run::push(4101, "CI", "2026-09-18T09:00:00Z", "success");
+    other.sha = OTHER_SHA;
+    let (transport, query) = page_of_two(
+        "2",
+        &[Run::push(4102, "Deploy", "not a time", "success"), other],
+    );
+    let rows = client(transport)
+        .list_pipelines(&repo(), &query)
+        .await
+        .unwrap();
+    assert!(rows.iter().any(|r| r.id == 4102), "{:?}", ids(&rows));
 }

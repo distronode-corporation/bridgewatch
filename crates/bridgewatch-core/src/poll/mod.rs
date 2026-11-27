@@ -370,9 +370,8 @@ impl Poller {
         let mut recovered = Vec::new();
         let mut still = Vec::new();
         for name in std::mem::take(&mut self.refused) {
-            let Some(account) = retry.accounts.get(&name) else {
-                continue;
-            };
+            // Every refused name was a polled account when it was refused.
+            let account = &retry.accounts[&name];
             let made = account_client(&name, account, &retry.store, &self.ring, &retry.transport);
             let client = match made {
                 Ok(client) => {
@@ -638,21 +637,25 @@ impl Poller {
                     });
                 }
                 Turn::SitOut => {
-                    if let Some(view) = &state.last_view {
-                        if let Some(e) = &view.error {
-                            errors.push(format!("{}: {e}", state.watch.id));
-                        }
-                        // Nothing was fetched, but time still passed: the
-                        // elapsed half of an estimate is re-read.
-                        let mut view = view.clone();
-                        annotate_eta(&self.eta, state, &mut view, now);
-                        views.push(view);
+                    // Only an error defers a watch, and the poll that saw it
+                    // left a view.
+                    let view = state
+                        .last_view
+                        .as_ref()
+                        .expect("a deferred watch has a view");
+                    if let Some(e) = &view.error {
+                        errors.push(format!("{}: {e}", state.watch.id));
                     }
+                    // Nothing was fetched, but time still passed: the
+                    // elapsed half of an estimate is re-read.
+                    let mut view = view.clone();
+                    annotate_eta(&self.eta, state, &mut view, now);
+                    views.push(view);
                 }
                 Turn::Poll => {
-                    let Some((mut view, list_error, sent)) = polled.next() else {
-                        continue;
-                    };
+                    // A Poll turn is only given to a watch whose account has a client.
+                    let (mut view, list_error, sent) =
+                        polled.next().expect("one answer per polled watch");
                     // Only when the list request went out: a `mine` watch
                     // whose owner could not be read sent nothing.
                     if sent {
@@ -903,9 +906,8 @@ fn learn_eta(history: &mut EtaHistory, state: &WatchState, view: &WatchView) -> 
         if history.contains(&state.watch.id, row.id) {
             continue;
         }
-        let Some(entry) = state.cache.get(row.id) else {
-            continue;
-        };
+        // A marker is a job, so its row was built from this tick's cached detail.
+        let entry = state.cache.get(row.id).expect("a marked row is cached");
         let finished_at = entry
             .detail
             .jobs
@@ -1059,10 +1061,6 @@ async fn poll_watch(
     let selected = select_rows(&rows, &state.watch, &state.rules);
     let plan = planner::plan(&selected, &state.cache);
     let mut error: Option<String> = None;
-    // Pipelines whose own `/jobs` or `/bridges` could not be read this tick and
-    // that have nothing cached. Evaluating one of these through the rules is B1:
-    // an empty job list reads as "nothing failed".
-    let mut unavailable: HashSet<u64> = HashSet::new();
 
     // ⛔ Fetched side by side, then applied one at a time in the plan's order,
     // which is the order the sequential loop used. Nothing below may move into
@@ -1106,9 +1104,6 @@ async fn poll_watch(
             Err(e) => {
                 state.policy.on_error(&e);
                 error.get_or_insert_with(|| e.to_string());
-                if state.cache.get(row.id).is_none() {
-                    unavailable.insert(row.id);
-                }
             }
         }
     }
@@ -1121,10 +1116,10 @@ async fn poll_watch(
     for row in &selected {
         let (detail, detail_source) = match state.cache.get(row.id) {
             Some(entry) => (entry.detail.clone(), DetailSource::Fetched),
-            None if unavailable.contains(&row.id) => {
-                (PipelineDetail::bare(row.clone()), DetailSource::Unavailable)
-            }
-            None => (PipelineDetail::bare(row.clone()), DetailSource::Fetched),
+            // Every uncached row was planned, so one with nothing cached is one
+            // whose own `/jobs` or `/bridges` failed this tick. Evaluating it
+            // through the rules is B1: an empty job list reads as "nothing failed".
+            None => (PipelineDetail::bare(row.clone()), DetailSource::Unavailable),
         };
         let (view, script_error) =
             evaluate_pipeline(&detail, detail_source, &state.watch, &state.rules, script);
@@ -1493,10 +1488,8 @@ async fn annotate(
     for ((child, i, _), answer) in asks.into_iter().zip(answers) {
         let job = match child {
             None => &mut jobs[i],
-            Some(id) => match child_jobs.get_mut(&id) {
-                Some(list) => &mut list[i],
-                None => continue,
-            },
+            // Every ask names a child held above.
+            Some(id) => &mut child_jobs.get_mut(&id).expect("an asked child is held")[i],
         };
         match answer {
             AnnotationAnswer::Known(found) => job.annotation = found,
@@ -2110,5 +2103,97 @@ mod retry_tests {
         assert_eq!(poller.refused_accounts(), ["moved"]);
         assert_eq!(requests_for(&t, 2), 0, "the refused account sent nothing");
         assert!(requests_for(&t, 1) > 0, "the other account kept polling");
+    }
+
+    /// (e) A retry whose transport cannot be built keeps the refusing client
+    /// already in place, and the account stays refused.
+    #[tokio::test]
+    async fn a_retry_whose_transport_cannot_be_built_keeps_the_account_refused() {
+        let built = Arc::new(Mutex::new(0u32));
+        let counter = built.clone();
+        let t = Arc::new(ScriptTransport::new());
+        let make: super::MakeTransport = Arc::new(move |_: &crate::config::Account| {
+            let mut n = counter.lock().unwrap();
+            *n += 1;
+            // The build makes one transport per account; the retry's fails.
+            match *n {
+                1 | 2 => Ok(t.clone() as Arc<dyn crate::client::Transport>),
+                _ => Err(crate::client::ClientError::Transport(
+                    "no TLS backend".into(),
+                )),
+            }
+        });
+        let mut poller = Poller::build(&config(BOTH), &Memory::default(), true, make).unwrap();
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        assert!(poller.retry_refused().is_empty());
+        assert_eq!(*built.lock().unwrap(), 3);
+        assert_eq!(poller.refused_accounts(), ["moved"]);
+        let tick = poller.tick().await;
+        let broken = tick
+            .snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == "broken")
+            .unwrap();
+        assert!(
+            broken
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("account moved:"),
+            "{:?}",
+            broken.error
+        );
+    }
+
+    /// (f) An account that cannot sign in at all (a self-managed instance
+    /// with no client of its own) is refused like a token failure, with the
+    /// sign-in's own words.
+    #[tokio::test]
+    async fn an_account_that_cannot_sign_in_is_refused_on_its_own_watches() {
+        let raw = r#"
+            [accounts.lab]
+            base_url = "https://gitlab.example.com"
+            token = { oauth = true }
+
+            [[watches]]
+            id = "web"
+            account = "lab"
+            project = 1
+            "#;
+        let t = Arc::new(ScriptTransport::new());
+        let mut poller =
+            Poller::from_config_per_account_on(&config(raw), &Memory::default(), t.clone())
+                .unwrap();
+        assert_eq!(poller.refused_accounts(), ["lab"]);
+        let tick = poller.tick().await;
+        let error = tick.snapshot.watches[0].error.clone().unwrap_or_default();
+        assert!(error.starts_with("account lab:"), "{error}");
+        assert!(t.requests().is_empty(), "{:?}", t.requests());
+    }
+
+    /// The fakes' remaining methods, so each one is known to answer as its
+    /// comment says.
+    #[test]
+    fn the_fake_stores_answer_as_documented() {
+        let memory = Memory::default();
+        memory.keyring_set("s", "u", "v").unwrap();
+        memory.keyring_delete("s", "u").unwrap();
+        assert!(matches!(
+            memory.keyring_get("s", "u"),
+            Err(TokenError::NoEntry { .. })
+        ));
+        assert!(matches!(memory.run(&[]), Err(TokenError::Empty)));
+
+        let cancelling = Cancelling::default();
+        assert!(matches!(
+            cancelling.keyring_get_quiet("s", "u"),
+            Err(TokenError::NeedsApproval { refused: false, .. })
+        ));
+        cancelling.keyring_set("s", "u", "v").unwrap();
+        cancelling.keyring_delete("s", "u").unwrap();
+        assert_eq!(cancelling.env("TOK").as_deref(), Some("glpat-healthy"));
+        assert!(matches!(cancelling.run(&[]), Err(TokenError::Empty)));
+        assert_eq!(cancelling.prompts(), 0);
     }
 }

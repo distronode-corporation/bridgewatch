@@ -256,23 +256,24 @@ impl RequestRing {
     /// Inside [`in_order`] the entry is held back instead, and appended when
     /// that scope's turn comes: see [`in_order`] for why.
     pub fn record(&self, entry: RequestLog) {
-        let mut entry = Some(entry);
-        let held = HELD.try_with(|held| {
-            if let Some(entry) = entry.take() {
-                held.borrow_mut().push((self.clone(), entry));
-            }
-        });
-        if held.is_ok() {
-            return;
+        // Asked first, so the entry is moved exactly once: into the scope, or
+        // straight into the ring.
+        match HELD.try_with(|_| ()) {
+            Ok(()) => HELD.with(|held| held.borrow_mut().push((self.clone(), entry))),
+            Err(_) => self.append(entry),
         }
-        let Some(entry) = entry else { return };
-        self.append(entry);
+    }
+
+    /// The ring's state. Nothing panics while holding it, so a poisoned lock
+    /// still holds a consistent ring.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn append(&self, entry: RequestLog) {
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
+        let mut inner = self.lock();
         if inner.capacity == 0 {
             return;
         }
@@ -284,15 +285,12 @@ impl RequestRing {
 
     /// A snapshot of the ring, oldest first.
     pub fn entries(&self) -> Vec<RequestLog> {
-        self.inner
-            .lock()
-            .map(|i| i.entries.iter().cloned().collect())
-            .unwrap_or_default()
+        self.lock().entries.iter().cloned().collect()
     }
 
     /// How many entries are currently held.
     pub fn len(&self) -> usize {
-        self.inner.lock().map(|i| i.entries.len()).unwrap_or(0)
+        self.lock().entries.len()
     }
 
     /// True when nothing has been recorded.
@@ -302,18 +300,15 @@ impl RequestRing {
 
     /// Discard everything.
     pub fn clear(&self) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.entries.clear();
-        }
+        self.lock().entries.clear();
     }
 
     /// Change the ceiling, trimming immediately if it shrank.
     pub fn set_capacity(&self, capacity: usize) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.capacity = capacity;
-            while inner.entries.len() > capacity {
-                inner.entries.pop_front();
-            }
+        let mut inner = self.lock();
+        inner.capacity = capacity;
+        while inner.entries.len() > capacity {
+            inner.entries.pop_front();
         }
     }
 }
