@@ -1428,3 +1428,46 @@ fn an_empty_secret_says_so() {
     assert!(Secret::new("").is_empty());
     assert!(!Secret::new("glpat-x").is_empty());
 }
+
+/// `AskOnce` remembers only a refused prompt: a read that worked, a write that
+/// failed and a delete that failed leave what it remembers as it was.
+#[test]
+fn ask_once_remembers_nothing_from_a_read_that_worked_or_a_write_or_delete_that_failed() {
+    #[derive(Default)]
+    struct Stubborn;
+    impl TokenProvider for Stubborn {
+        fn keyring_get(&self, _: &str, _: &str) -> Result<String, TokenError> {
+            Ok("glpat-x".into())
+        }
+        fn keyring_set(&self, service: &str, _: &str, _: &str) -> Result<(), TokenError> {
+            Err(TokenError::Store {
+                service: service.into(),
+                message: "read-only".into(),
+            })
+        }
+        fn keyring_delete(&self, service: &str, _: &str) -> Result<(), TokenError> {
+            Err(TokenError::Store {
+                service: service.into(),
+                message: "read-only".into(),
+            })
+        }
+        fn env(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn run(&self, _: &[String]) -> Result<String, TokenError> {
+            Err(TokenError::Empty)
+        }
+    }
+    let once = token::AskOnce::new(Stubborn);
+    assert_eq!(
+        once.keyring_get("bridgewatch:gl", "token").unwrap(),
+        "glpat-x"
+    );
+    assert!(once.refused().is_empty());
+    assert!(
+        once.keyring_set("bridgewatch:gl", "token", "glpat-y")
+            .is_err()
+    );
+    assert!(once.keyring_delete("bridgewatch:gl", "token").is_err());
+    assert!(once.refused().is_empty());
+}

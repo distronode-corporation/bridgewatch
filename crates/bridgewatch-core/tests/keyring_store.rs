@@ -144,3 +144,37 @@ fn an_empty_user_read_with_no_such_item_is_no_entry() {
         Err(TokenError::NoEntry { user, .. }) if user.is_empty()
     ));
 }
+
+#[test]
+fn a_write_the_store_refuses_says_so() {
+    let _store = store();
+    fail_next(
+        "bw-test:readonly",
+        "token",
+        keyring_core::Error::Invalid("store".into(), "is read-only".into()),
+    );
+    assert!(matches!(
+        SystemTokenProvider.keyring_set("bw-test:readonly", "token", "glpat-x"),
+        Err(TokenError::Store { message, .. }) if message.contains("is read-only")
+    ));
+}
+
+/// A prompt the person cancelled is "needs approval, refused", whatever store
+/// reported it: the Secret Service's dismissed prompt on Linux, the Keychain's
+/// user-cancelled status on macOS.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_cancelled_store_prompt_is_needs_approval_refused() {
+    let _store = store();
+    #[cfg(target_os = "linux")]
+    let cancelled = keyring_core::Error::NoStorageAccess(Box::new(secret_service::Error::Prompt));
+    #[cfg(target_os = "macos")]
+    let cancelled = keyring_core::Error::NoStorageAccess(Box::new(
+        security_framework::base::Error::from_code(-128),
+    ));
+    fail_next("bw-test:cancelled", "token", cancelled);
+    assert!(matches!(
+        SystemTokenProvider.keyring_get("bw-test:cancelled", "token"),
+        Err(TokenError::NeedsApproval { refused: true, .. })
+    ));
+}

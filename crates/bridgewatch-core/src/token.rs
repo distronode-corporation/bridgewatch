@@ -1493,11 +1493,10 @@ mod tests {
         let found = empty_user_lookup_with("glab:gitlab.com:token", echo)
             .unwrap()
             .unwrap();
-        let tool = if cfg!(target_os = "macos") {
-            "security "
-        } else {
-            "secret-tool "
-        };
+        #[cfg(target_os = "macos")]
+        let tool = "security ";
+        #[cfg(not(target_os = "macos"))]
+        let tool = "secret-tool ";
         assert!(found.starts_with(tool), "{found}");
         assert!(found.contains("glab:gitlab.com:token"), "{found}");
     }
@@ -1527,13 +1526,11 @@ mod tests {
             "killed at the deadline, not waited out: {:?}",
             started.elapsed()
         );
-        match err {
-            TokenError::Store { service, message } => {
-                assert_eq!(service, "glab:gitlab.com:token");
-                assert!(message.contains("did not answer"), "{message}");
-            }
-            other => panic!("expected a store error, got {other:?}"),
-        }
+        assert!(
+            matches!(&err, TokenError::Store { service, message }
+                if service == "glab:gitlab.com:token" && message.contains("did not answer")),
+            "{err:?}"
+        );
     }
 
     /// The other three outcomes keep their old meanings: a found item is its
