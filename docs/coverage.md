@@ -44,18 +44,22 @@ python3 scripts/check-coverage.py coverage.json
 
 ### Frontend, every file under `src/`
 
+Re-measured on 2026-11-26, after the unused vendored ui components were deleted and the
+Svelte compiler's template fallback was left out of the report (see "Tests" in
+[CONTRIBUTING.md](../CONTRIBUTING.md)).
+
 | Measure | Covered | Total | Coverage | Floor |
 | --- | ---: | ---: | ---: | ---: |
-| Lines | 3438 | 3645 | 94.32% | 94% |
-| Statements | 5055 | 5469 | 92.43% | 92% |
-| Branches | 2311 | 2749 | 84.06% | 83% |
-| Functions | 1485 | 1635 | 90.82% | 90% |
+| Lines | 3333 | 3468 | 96.10% | 96% |
+| Statements | 4967 | 5257 | 94.48% | 94% |
+| Branches | 2300 | 2586 | 88.94% | 88% |
+| Functions | 1443 | 1526 | 94.56% | 94% |
 
-Command: `npm ci && npx vitest run --coverage` (37 test files, 627 tests).
+Command: `npm ci && npx vitest run --coverage` (42 test files, 672 tests).
 
 ### Total
 
-Rust (core and cli) and the frontend together: 15989 of 17595 lines, 90.87%. This leaves out
+Rust (core and cli) and the frontend together: 15884 of 17418 lines, 91.19%. This leaves out
 bridgewatch-app, so it is not the whole workspace.
 
 ## CI, the whole workspace: 2026-11-27
@@ -88,6 +92,6 @@ printed, from `scripts/check-coverage.py`:
 | bridgewatch-app | 18 | 5477 | 3345 | 61.07% | 61% |
 | **all three crates** | **62** | **19427** | **15902** | **81.85%** | |
 
-With the frontend lines from the measurement above (3438 of 3645), the whole project is 19340
-of 23072 lines, 83.82%. The job's log is kept for GitHub's log retention period; this table is
+With the frontend lines from the measurement above (3333 of 3468), the whole project is 19235
+of 22895 lines, 84.01%. The job's log is kept for GitHub's log retention period; this table is
 the record that lasts.
