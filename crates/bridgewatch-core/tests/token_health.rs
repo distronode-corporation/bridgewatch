@@ -1220,3 +1220,90 @@ async fn a_tick_dropped_mid_poll_leaves_the_next_one_showing_what_it_has() {
         assert!(tick.snapshot.watches.iter().any(|w| w.id == "slow"));
     }
 }
+
+/// ⛔ A list failure shows the last stored view. After a cancelled tick
+/// evicted a marked row from the cache, that view still names the row, and
+/// learning its deploy time must skip it rather than panic.
+#[tokio::test]
+async fn a_fallback_view_naming_an_evicted_marked_row_is_skipped_when_learning() {
+    const RAW: &str = r#"
+        [accounts.lab]
+        token = { env = "TOK" }
+
+        [[watches]]
+        id = "dep"
+        account = "lab"
+        project = 1
+        deploy_markers = ["deploy"]
+
+        [[watches]]
+        id = "slow"
+        account = "lab"
+        project = 2
+        role = "secondary"
+        "#;
+    let row = |id: u64| -> &'static str {
+        Box::leak(
+            format!(
+                r#"[{{"id":{id},"iid":{id},"project_id":1,"sha":"0123456789abcdef0123456789abcdef01234567","ref":"main","status":"success","source":"push","created_at":"2026-11-01T10:00:00Z","updated_at":"2026-11-01T10:05:00Z"}}]"#
+            )
+            .into_boxed_str(),
+        )
+    };
+    let transport = Arc::new(Acting(Mutex::new(vec![
+        (
+            "/personal_access_tokens/self",
+            vec![Act::Answer(
+                200,
+                r#"{"id":1,"name":"t","scopes":["read_api"],"expires_at":null,"active":true}"#,
+            )],
+        ),
+        // The marker finished at no stated time: no sample, so never learned.
+        (
+            "/pipelines/7/jobs",
+            vec![Act::Answer(
+                200,
+                r#"[{"id":70,"name":"deploy","stage":"deploy","status":"success","allow_failure":false}]"#,
+            )],
+        ),
+        ("/pipelines/8/jobs", vec![Act::Answer(200, "[]")]),
+        ("/bridges", vec![Act::Answer(200, "[]")]),
+        (
+            "/projects/1/pipelines?",
+            vec![
+                Act::Answer(200, row(7)),
+                Act::Answer(200, row(8)),
+                Act::Answer(500, "{}"),
+            ],
+        ),
+        (
+            "/projects/2/pipelines?",
+            vec![Act::Answer(200, "[]"), Act::Hang, Act::Answer(200, "[]")],
+        ),
+    ])));
+    let mut poller =
+        Poller::from_config_per_account_on(&config(RAW), &Memory::default(), transport)
+            .expect("the poller builds");
+    let first = poller.tick().await;
+    let dep = |tick: &Tick| {
+        tick.snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == "dep")
+            .cloned()
+    };
+    assert!(dep(&first).unwrap().rows[0].deploy_marker.is_some());
+    let dropped = tokio::time::timeout(std::time::Duration::from_millis(200), poller.tick()).await;
+    assert!(
+        dropped.is_err(),
+        "the slow watch held the tick until it was dropped"
+    );
+    let third = poller.tick().await;
+    let shown = dep(&third).expect("the dep watch is shown");
+    assert!(shown.error.is_some(), "the list failed");
+    assert_eq!(
+        shown.rows[0].id, 7,
+        "the last stored view, naming the evicted row"
+    );
+    assert!(poller.eta_history().samples("dep").is_empty());
+}

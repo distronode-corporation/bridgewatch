@@ -913,8 +913,12 @@ fn learn_eta(history: &mut EtaHistory, state: &WatchState, view: &WatchView) -> 
         if history.contains(&state.watch.id, row.id) {
             continue;
         }
-        // A marker is a job, so its row was built from this tick's cached detail.
-        let entry = state.cache.get(row.id).expect("a marked row is cached");
+        // ⚠ Usually this tick's cached detail. A list failure shows the last
+        // stored view instead, and after a cancelled tick that view can name a
+        // row whose cache entry is gone: skipped, never assumed.
+        let Some(entry) = state.cache.get(row.id) else {
+            continue;
+        };
         let finished_at = entry
             .detail
             .jobs
