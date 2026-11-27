@@ -198,6 +198,18 @@ jobs:
           '
           cargo llvm-cov report --show-missing-lines
           cargo llvm-cov report --json --summary-only --output-path "$RUNNER_TEMP/coverage.json"
+          cargo llvm-cov report --json --output-path "$RUNNER_TEMP/coverage-full.json"
+
+      # The whole export, every function's every compiled copy with its counts.
+      # The summary the floors are held to credits each function with its single
+      # best copy, so a line the missing-lines list above shows as run can still
+      # count as missed; this file is what tells the two apart.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-json
+          path: ${{ runner.temp }}/coverage-full.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Line coverage meets every floor
         run: python3 scripts/check-coverage.py "$RUNNER_TEMP/coverage.json"
@@ -213,7 +225,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      NIGHTLY: nightly-2026-11-01
+      # Not district-core-rust's 2026-11-01: on that nightly zbus 5.13.2 (the
+      # Secret Service client, Linux only) does not compile ("cycle detected when
+      # computing when `Child` needs async drop"); 2026-11-20 builds it.
+      NIGHTLY: nightly-2026-11-20
     steps:
       - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:

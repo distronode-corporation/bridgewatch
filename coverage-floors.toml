@@ -23,9 +23,9 @@ branch_floor = 0
 reason = "The level CI's coverage job measured on the second core coverage pull request (#136), 93.79% of lines, rounded down."
 
 [crates.bridgewatch-cli]
-floor = 90
+floor = 100
 branch_floor = 0
-reason = "The level CI's coverage job measured when the gate was added, 90.12% of lines, rounded down."
+reason = "Every line: CI's coverage job measured 100.00% of lines (4129 of 4129) on the fourth coverage pull request (#138). The branch floor is set from the branches job's first run."
 
 [crates.bridgewatch-app]
 floor = 61
