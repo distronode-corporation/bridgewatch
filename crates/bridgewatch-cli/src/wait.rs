@@ -1144,4 +1144,26 @@ show = { settled = 1 }
         let ended = start(&mut started, &plan(), interrupt(false)).await;
         assert!(verdict_of(&ended).is_some(), "{ended:?}");
     }
+
+    /// A wait with no timeout never times out, and its `expired` arm is still
+    /// polled. #148: no other test here waits with no timeout, so the arm ran
+    /// only when a subprocess test's unbiased `select!` happened to poll it.
+    /// Here the first tick finds the pipeline running, so the wait reaches the
+    /// sleep between ticks, where no branch is ready on the first poll and
+    /// every one is polled, `expired` included.
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_with_no_timeout_polls_until_the_answer() {
+        let script = Arc::new(ScriptTransport::new());
+        script.reply(TICK, 200, &list(&[pipeline(10, A, "running")]));
+        always(&script, TICK, 200, &list(&[pipeline(10, A, "success")]));
+        empty_detail(&script, 10);
+        let mut poller = poller(&script);
+        let no_timeout = Plan {
+            timeout: None,
+            ..plan()
+        };
+        let ended = wait(&mut poller, &no_timeout).await;
+        let row = verdict_of(&ended).expect("the wait ends in a verdict");
+        assert_eq!(row.status, "success");
+    }
 }
