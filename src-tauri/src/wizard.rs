@@ -42,7 +42,7 @@ use bridgewatch_core::wizard::{
     WizardError, WizardFailure, WizardStep,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::config::{DiagnosticView, Validation};
 use crate::guard::{ConfirmRequest, Confirmations};
@@ -150,7 +150,10 @@ impl WizardSession {
             return Ok(());
         }
         let key = gate_key(conn);
-        let mut approved = self.approved.lock().unwrap_or_else(|e| e.into_inner());
+        let mut approved = self
+            .approved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if approved.contains(&key) {
             return Ok(());
         }
@@ -285,8 +288,11 @@ pub fn check_base_url(base_url: &str) -> Result<(), WizardFailure> {
 }
 
 /// Gate, resolve and build a client. `Ok(Err(request))` means "confirm first".
-async fn connect(
-    app: &AppHandle,
+///
+/// This and the commands that call it are generic over the runtime so a test
+/// can run them with Tauri's mock one; the app only passes its own handle.
+async fn connect<R: Runtime>(
+    app: &AppHandle<R>,
     conn: &Connection,
 ) -> Result<Result<Arc<dyn CiClient>, ConfirmRequest>, WizardFailure> {
     check_base_url(&conn.base_url)?;
@@ -335,9 +341,9 @@ pub async fn wizard_detect_cli_token(base_url: String, provider: Provider) -> Cl
 
 /// Step 1: who is this token?
 #[tauri::command]
-pub async fn wizard_test_connection(
+pub async fn wizard_test_connection<R: Runtime>(
     connection: Connection,
-    app: AppHandle,
+    app: AppHandle<R>,
 ) -> Result<Confirmable<Identity>, WizardFailure> {
     let client = match connect(&app, &connection).await? {
         Ok(c) => c,
@@ -351,10 +357,10 @@ pub async fn wizard_test_connection(
 
 /// Step 2: the projects this token can pick from.
 #[tauri::command]
-pub async fn wizard_list_projects(
+pub async fn wizard_list_projects<R: Runtime>(
     connection: Connection,
     search: Option<String>,
-    app: AppHandle,
+    app: AppHandle<R>,
 ) -> Result<Confirmable<ProjectListing>, WizardFailure> {
     let client = match connect(&app, &connection).await? {
         Ok(c) => c,
@@ -384,9 +390,9 @@ pub async fn wizard_list_projects(
 /// a project token cannot usefully list; that is `/user` and the token's own
 /// description, never a second list request.
 #[tauri::command]
-pub async fn wizard_recent_projects(
+pub async fn wizard_recent_projects<R: Runtime>(
     connection: Connection,
-    app: AppHandle,
+    app: AppHandle<R>,
 ) -> Result<Confirmable<RecentListing>, WizardFailure> {
     let client = match connect(&app, &connection).await? {
         Ok(c) => c,
@@ -416,10 +422,10 @@ async fn recent_for(
 
 /// Step 2: resolve a typed id, path or pasted project URL.
 #[tauri::command]
-pub async fn wizard_resolve_project(
+pub async fn wizard_resolve_project<R: Runtime>(
     connection: Connection,
     id_or_path: String,
-    app: AppHandle,
+    app: AppHandle<R>,
 ) -> Result<Confirmable<ResolvedProject>, WizardFailure> {
     let client = match connect(&app, &connection).await? {
         Ok(c) => c,
@@ -433,12 +439,12 @@ pub async fn wizard_resolve_project(
 
 /// Step 4: deploy-marker suggestions from the ref's latest pipeline.
 #[tauri::command]
-pub async fn wizard_suggest_deploy_markers(
+pub async fn wizard_suggest_deploy_markers<R: Runtime>(
     connection: Connection,
     project: ProjectRef,
     ref_name: String,
     workflow: Option<String>,
-    app: AppHandle,
+    app: AppHandle<R>,
 ) -> Result<Confirmable<MarkerSuggestions>, WizardFailure> {
     let client = match connect(&app, &connection).await? {
         Ok(c) => c,
@@ -453,12 +459,12 @@ pub async fn wizard_suggest_deploy_markers(
 /// Step 3, GitHub with one row per push: the workflow files the newest pushes
 /// ran, for `expect`. One request.
 #[tauri::command]
-pub async fn wizard_suggest_expected_workflows(
+pub async fn wizard_suggest_expected_workflows<R: Runtime>(
     connection: Connection,
     project: ProjectRef,
     ref_name: String,
     sources: Vec<String>,
-    app: AppHandle,
+    app: AppHandle<R>,
 ) -> Result<Confirmable<ExpectSuggestions>, WizardFailure> {
     let client = match connect(&app, &connection).await? {
         Ok(c) => c,
@@ -739,7 +745,7 @@ fn hide_wizard(app: &AppHandle) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use bridgewatch_core::token::TokenError;
     use std::path::Path;
@@ -1504,5 +1510,148 @@ mod tests {
             serde_json::to_value(&missing).unwrap(),
             serde_json::json!({"status": "not_found", "service": "gh:ghe.acme.com"})
         );
+    }
+
+    /// A server on 127.0.0.1 that answers every request 401, for `n`
+    /// connections: what an instance says to a token it does not accept.
+    pub(crate) fn refusing_server(n: usize) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(n) {
+                let Ok(mut stream) = stream else { continue };
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\n\
+                      content-length: 2\r\nconnection: close\r\n\r\n{}",
+                );
+            }
+        });
+        base
+    }
+
+    fn json<T: Serialize>(value: &T) -> serde_json::Value {
+        serde_json::to_value(value).unwrap()
+    }
+
+    /// Every step that talks to an instance, through Tauri's mock runtime:
+    /// a bad address is an answer issue before anything is sent, a stored
+    /// credential for a host nothing used yet is parked for confirmation, and
+    /// a pasted token the instance refuses comes back as the core's failure.
+    #[test]
+    fn the_instance_steps_gate_then_ask_and_report_a_refusal() {
+        let app = tauri::test::mock_app();
+        app.manage(Arc::new(AppState::new(crate::config::Resolved {
+            path: std::path::PathBuf::from("/nonexistent/config.toml"),
+            seeded: false,
+            first_run: true,
+            loaded: None,
+            validation: Validation::default(),
+            text: None,
+        })));
+        app.manage(WizardSession::default());
+        let handle = || app.handle().clone();
+        fn run<F: std::future::Future>(f: F) -> F::Output {
+            tauri::async_runtime::block_on(f)
+        }
+        let project = || ProjectRef::Id(1);
+
+        let mut bad = conn("ftp://gitlab.com", TokenSource::Own(false));
+        bad.secret = Some("pasted".into());
+        let err = run(wizard_test_connection(bad, handle())).expect_err("refused");
+        assert!(matches!(err.kind, FailureKind::Answers), "{}", err.message);
+
+        let parked = || {
+            conn(
+                "https://gitlab.com",
+                TokenSource::Keyring {
+                    service: "glab:gitlab.com".into(),
+                    user: String::new(),
+                },
+            )
+        };
+        let needs = |r: Result<serde_json::Value, WizardFailure>| {
+            let v = r.expect("no failure");
+            assert!(v.get("confirm").is_some(), "{v}");
+        };
+        needs(run(wizard_test_connection(parked(), handle())).map(|c| json(&c)));
+        needs(run(wizard_list_projects(parked(), None, handle())).map(|c| json(&c)));
+        needs(run(wizard_recent_projects(parked(), handle())).map(|c| json(&c)));
+        needs(run(wizard_resolve_project(parked(), "g/p".into(), handle())).map(|c| json(&c)));
+        needs(
+            run(wizard_suggest_deploy_markers(
+                parked(),
+                project(),
+                "main".into(),
+                None,
+                handle(),
+            ))
+            .map(|c| json(&c)),
+        );
+        needs(
+            run(wizard_suggest_expected_workflows(
+                parked(),
+                project(),
+                "main".into(),
+                vec!["push".into()],
+                handle(),
+            ))
+            .map(|c| json(&c)),
+        );
+
+        let base = refusing_server(16);
+        let pasted = || {
+            let mut c = conn(&base, TokenSource::Own(false));
+            c.secret = Some("not-a-real-token".into());
+            c
+        };
+        let refused = |r: Result<serde_json::Value, WizardFailure>| {
+            let e = r.expect_err("the instance refused the token");
+            assert!(matches!(e.kind, FailureKind::Unauthorized), "{}", e.message);
+        };
+        refused(run(wizard_test_connection(pasted(), handle())).map(|c| json(&c)));
+        refused(
+            run(wizard_list_projects(pasted(), Some(" x ".into()), handle())).map(|c| json(&c)),
+        );
+        refused(run(wizard_recent_projects(pasted(), handle())).map(|c| json(&c)));
+        refused(run(wizard_resolve_project(pasted(), "1".into(), handle())).map(|c| json(&c)));
+        refused(
+            run(wizard_suggest_deploy_markers(
+                pasted(),
+                project(),
+                "main".into(),
+                None,
+                handle(),
+            ))
+            .map(|c| json(&c)),
+        );
+        let github = || {
+            let mut c = pasted();
+            c.provider = Provider::Github;
+            c
+        };
+        refused(
+            run(wizard_suggest_expected_workflows(
+                github(),
+                ProjectRef::Path("o/r".into()),
+                "main".into(),
+                vec!["push".into()],
+                handle(),
+            ))
+            .map(|c| json(&c)),
+        );
+        // A GitLab project runs no workflow files, so there is nothing to ask.
+        let none = run(wizard_suggest_expected_workflows(
+            pasted(),
+            project(),
+            "main".into(),
+            Vec::new(),
+            handle(),
+        ))
+        .map(|c| json(&c))
+        .expect("nothing asked, nothing refused");
+        assert_eq!(none["commits"], 0, "{none}");
     }
 }
