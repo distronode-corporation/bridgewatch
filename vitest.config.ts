@@ -27,9 +27,10 @@ export default defineConfig({
     setupFiles: ["./src/vitest.setup.ts"],
     // `npx vitest run --coverage` (CI's `frontend` job) fails under these floors.
     // Every file under src/ is measured, loaded by a test or not, the vendored
-    // shadcn-svelte components included; there is no exclusion list. The floors
-    // are the measured level rounded down, and only go up: a change that raises
-    // coverage raises them in the same pull request.
+    // shadcn-svelte components included; there is no exclusion list, only the
+    // one compiler-generated node below. The floors are the measured level
+    // rounded down, and only go up: a change that raises coverage raises them in
+    // the same pull request.
     coverage: {
       provider: "v8",
       include: ["src/**"],
@@ -41,7 +42,7 @@ export default defineConfig({
       // feeding a component a value its types forbid. The match is exact, and
       // src/lib/svelte-generated.test.ts proves it matches no hand-written node.
       ignoreNode: isSvelteTemplateFallback,
-      thresholds: { statements: 92, branches: 83, functions: 90, lines: 94 },
+      thresholds: { statements: 94, branches: 88, functions: 94, lines: 96 },
     },
   },
 });
