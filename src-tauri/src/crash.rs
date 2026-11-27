@@ -377,8 +377,9 @@ mod tests {
         assert_eq!(non_empty(Some("  ")), None);
         assert_eq!(non_empty(Some(" x ")), Some("x"));
         // Whatever this build was given: the global reporter has an address
-        // exactly when the build does, and a build label is never empty.
-        assert_eq!(global().has_address(), baked_dsn().is_some());
+        // exactly when the build's parses, and a build label is never empty.
+        let parses = baked_dsn().is_some_and(|d| d.parse::<sentry::types::Dsn>().is_ok());
+        assert_eq!(global().has_address(), parses);
         assert!(!baked_build().is_empty());
     }
 
@@ -489,9 +490,12 @@ mod tests {
             return;
         }
         assert!(report_client().is_err());
+        // `ClientOptions` is non-exhaustive, so it is filled in after it is made.
+        let mut client_options = sentry::ClientOptions::default();
+        client_options.dsn = Some("http://public@127.0.0.1:9/1".parse().unwrap());
         let transport = sentry::TransportFactory::create_transport_with_options(
             &VerifyingTransport,
-            sentry::TransportOptions::default(),
+            sentry::TransportOptions::try_from_client_options(&client_options).unwrap(),
         );
         transport.send_envelope(sentry::Envelope::new());
     }
