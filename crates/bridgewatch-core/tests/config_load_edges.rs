@@ -38,14 +38,17 @@ fn a_leading_tilde_is_the_home_directory() {
 
 #[test]
 fn a_file_that_is_not_there_or_cannot_be_read_says_so_naming_it() {
-    let missing = std::env::temp_dir().join("bw-no-such-config-file.toml");
+    // A directory of this test's own, so no other file can stand in for the missing one.
+    let dir = std::env::temp_dir().join(format!("bw-config-load-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let missing = dir.join("no-such-config.toml");
     assert!(matches!(load(&missing), Err(ConfigError::NotFound(named)) if named == missing));
-    // There, but not a file that can be read: a directory.
-    let dir = std::env::temp_dir();
+    // There, but not a file that can be read: the directory itself.
     match load(&dir) {
         Err(ConfigError::Io { path: named, .. }) => assert_eq!(named, dir),
         other => panic!("expected an Io error, got {other:?}"),
     }
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
