@@ -614,3 +614,48 @@ async fn a_commit_with_two_pipelines_is_judged_by_the_newest() {
     };
     assert_eq!(view.id, 9);
 }
+
+/// An account that cannot sign in at all (a self-managed instance with no
+/// client of its own) is refused through the factory with the sign-in's
+/// words, and a per-account poller refuses only that account.
+#[tokio::test]
+async fn an_account_that_cannot_sign_in_is_refused_through_the_factory() {
+    let raw = r#"
+[accounts.lab]
+base_url = "https://gitlab.example.com"
+token = { oauth = true }
+
+[[watches]]
+id = "web"
+account = "lab"
+project = 1
+"#;
+    // The validator refuses this file, as it should; the factory is checked
+    // on its own, behind it.
+    let config: Config = toml::from_str(raw).expect("the table deserialises");
+    let t = Arc::new(ScriptTransport::new());
+    let store: Arc<dyn bridgewatch_core::token::TokenProvider> =
+        Arc::new(bridgewatch_core::token::SystemTokenProvider);
+    let built = bridgewatch_core::poll::client_for_account_on(
+        "lab",
+        &config.accounts["lab"],
+        None,
+        store,
+        t.clone(),
+        RequestRing::new(1),
+    );
+    assert!(
+        matches!(&built, Err(bridgewatch_core::poll::PollerError::SignIn(name, _)) if name == "lab"),
+        "{:?}",
+        built.err()
+    );
+    let mut poller = Poller::from_config_per_account_on(
+        &config,
+        &bridgewatch_core::token::SystemTokenProvider,
+        t.clone(),
+    )
+    .unwrap();
+    assert_eq!(poller.refused_accounts(), ["lab"]);
+    assert!(poller.tick().await.snapshot.watches[0].error.is_some());
+    assert!(t.requests().is_empty());
+}
