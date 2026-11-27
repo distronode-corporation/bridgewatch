@@ -1,6 +1,8 @@
 import { defineConfig } from "vitest/config";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
+import { isSvelteTemplateFallback } from "./vitest.svelte-generated";
+
 // A separate config from vite.config.ts on purpose: the app build must not
 // carry a test environment, and the component tests need the svelte plugin in
 // its browser (not SSR) mode so `mount()` behaves as it does in the webview.
@@ -32,6 +34,13 @@ export default defineConfig({
       provider: "v8",
       include: ["src/**"],
       reporter: ["text-summary"],
+      // The one node left out of the report, the way Vitest already leaves out
+      // Vite's own generated SSR and CommonJS-interop code: the `?? ''` the Svelte
+      // compiler writes around each template `{expression}`. Its right side runs
+      // only when a typed value is null, so no test could reach it without
+      // feeding a component a value its types forbid. The match is exact, and
+      // src/lib/svelte-generated.test.ts proves it matches no hand-written node.
+      ignoreNode: isSvelteTemplateFallback,
       thresholds: { statements: 92, branches: 83, functions: 90, lines: 94 },
     },
   },

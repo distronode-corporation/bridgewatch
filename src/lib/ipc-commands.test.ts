@@ -157,7 +157,7 @@ describe("the event subscriptions", () => {
     await ipc.onSnapshot((s) => snapshots.push(s));
     await ipc.onOpenSettings((tab) => tabs.push(tab));
     const unlisten = await ipc.onConfigChanged(() => changed++);
-    await ipc.oauthApi().onProgress((p) => progress.push(p));
+    await ipc.oauthApi().onProgress!((p) => progress.push(p));
     expect([...listeners.keys()].sort()).toEqual(["config-changed", "oauth-progress", "open-settings", "snapshot"]);
     listeners.get("snapshot")!({ payload: { watches: [] } });
     listeners.get("open-settings")!({ payload: "text" });
@@ -248,7 +248,7 @@ describe("wizardApi().suggestExpectedWorkflows", () => {
   it("asks the shell with the connection, the window's account filling the gap", async () => {
     const { wizardApi } = await import("./ipc");
     const connection = { provider: "github" as const, base_url: "https://api.github.com", token: { own: true } };
-    await wizardApi("hub").suggestExpectedWorkflows(connection, "acme/web", "main", ["push"]);
+    await wizardApi("hub").suggestExpectedWorkflows!(connection, "acme/web", "main", ["push"]);
     expect(invoked).toEqual([
       {
         cmd: "wizard_suggest_expected_workflows",
