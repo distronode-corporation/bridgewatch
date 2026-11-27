@@ -292,4 +292,13 @@ describe("AccountsTab, the second click and the account's own fields", () => {
     flushSync();
     expect(h.edits).toEqual([[{ op: "unset", path: "accounts.work.api_path" }]]);
   });
+
+  it("writes the actions switch, a sign-in field, through the account", () => {
+    const h = render({ accounts: { work: { base_url: "https://gitlab.example.com" } } });
+    const actions = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    actions.checked = true;
+    actions.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+    expect(h.edits).toEqual([[{ op: "set", path: "accounts.work.actions", value: { boolean: true } }]]);
+  });
 });
