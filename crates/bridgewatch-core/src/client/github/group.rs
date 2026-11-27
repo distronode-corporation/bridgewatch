@@ -216,9 +216,8 @@ pub(super) fn fold(
             }
             current.push(member);
         }
-        if !current.is_empty() {
-            groups.push((anchor, build(current, window, commit_url, expect)));
-        }
+        // A key holds at least one run, so the last group is never empty.
+        groups.push((anchor, build(current, window, commit_url, expect)));
     }
 
     if page_full && let Some(oldest) = oldest_on_page {
@@ -447,10 +446,8 @@ pub(super) fn group_status(statuses: &[Status]) -> Status {
     if statuses.contains(&Status::Canceled) {
         return Status::Canceled;
     }
-    statuses
-        .first()
-        .cloned()
-        .unwrap_or_else(|| Status::Unknown("empty".to_string()))
+    // `build` folds at least one run, so there is a first status.
+    statuses.first().cloned().expect("a group has a run")
 }
 
 fn parse(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -598,5 +595,7 @@ mod tests {
             "https://acme.ghe.com"
         );
         assert_eq!(web_origin("https://ghe.acme.com"), "https://ghe.acme.com");
+        // Not a URL at all: handed back as it came, trailing slash trimmed.
+        assert_eq!(web_origin("ghe.acme.com/"), "ghe.acme.com");
     }
 }

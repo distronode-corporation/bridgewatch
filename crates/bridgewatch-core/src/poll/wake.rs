@@ -252,11 +252,8 @@ mod tests {
         let jump = watch.woke().await;
         jumped.await.unwrap();
         assert_eq!(jump, Duration::from_secs(3600));
-        assert!(
-            started.elapsed() <= CHECK_EVERY * 4,
-            "{:?}",
-            started.elapsed()
-        );
+        let waited = started.elapsed();
+        assert!(waited <= CHECK_EVERY * 4, "{waited:?}");
     }
 
     #[tokio::test(start_paused = true)]

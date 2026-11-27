@@ -500,13 +500,12 @@ pub fn evaluate_pipeline(
         jobs: &detail.jobs,
     }];
     for (id, live) in &dived {
-        if let Some(jobs) = detail.child_jobs.get(id) {
-            scopes.push(deploy::JobScope {
-                pipeline_id: *id,
-                pipeline_live: *live,
-                jobs,
-            });
-        }
+        // `dived_pipelines` lists only the children whose jobs are held.
+        scopes.push(deploy::JobScope {
+            pipeline_id: *id,
+            pipeline_live: *live,
+            jobs: &detail.child_jobs[id],
+        });
     }
 
     let any_dead_bridge = all_bridges.iter().any(|b| b.verdict == "dead");

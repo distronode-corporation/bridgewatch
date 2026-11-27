@@ -107,7 +107,10 @@ pub struct CredentialProbe(std::sync::Arc<std::sync::Mutex<Observed>>);
 
 impl CredentialProbe {
     fn with<R>(&self, f: impl FnOnce(&mut Observed) -> R) -> R {
-        let mut held = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&mut held)
     }
 

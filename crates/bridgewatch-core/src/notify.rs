@@ -155,7 +155,8 @@ impl NotifyLedger {
     pub(crate) fn path_named(file: &str) -> PathBuf {
         dirs::state_dir()
             .or_else(dirs::data_local_dir)
-            .unwrap_or_else(|| PathBuf::from("."))
+            // Neither: relative to the working directory.
+            .unwrap_or_default()
             .join("bridgewatch")
             .join(file)
     }
@@ -192,8 +193,8 @@ impl NotifyLedger {
     /// `load` reads as EMPTY: the next start then had no baselines and
     /// re-announced everything on screen.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let body = serde_json::to_string(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // Sets and maps keyed by strings: always serialisable.
+        let body = serde_json::to_string(self).expect("the ledger serialises");
         crate::config::write_atomic(path, &body)
     }
 
@@ -548,7 +549,7 @@ fn template_failed(watch: &Watch, key: &str, error: &minijinja::Error) {
     let first = WARNED
         .get_or_init(Default::default)
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert((watch.id.clone(), key.to_string()));
     if first {
         tracing::warn!(watch = %watch.id, key, error = %error, "notification template failed");

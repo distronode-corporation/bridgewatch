@@ -186,10 +186,10 @@ impl Store {
             .entries
             .iter()
             .min_by_key(|(_, slot)| slot.used)
-            .map(|(key, _)| key.clone());
-        if let Some(key) = oldest {
-            self.remove(&key);
-        }
+            .map(|(key, _)| key.clone())
+            // Only `put` evicts, and only while the store holds an entry.
+            .expect("an entry to evict");
+        self.remove(&oldest);
     }
 }
 

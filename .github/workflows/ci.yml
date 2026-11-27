@@ -204,9 +204,85 @@ jobs:
           '
           cargo llvm-cov report --show-missing-lines
           cargo llvm-cov report --json --summary-only --output-path "$RUNNER_TEMP/coverage.json"
+          cargo llvm-cov report --json --output-path "$RUNNER_TEMP/coverage-full.json"
+
+      # The whole export, every function's every compiled copy with its counts.
+      # The summary the floors are held to credits each function with its single
+      # best copy, so a line the missing-lines list above shows as run can still
+      # count as missed; this file is what tells the two apart.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-json
+          path: ${{ runner.temp }}/coverage-full.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Line coverage meets every floor
         run: python3 scripts/check-coverage.py "$RUNNER_TEMP/coverage.json"
+
+  # Branch coverage, which only nightly Rust can measure (`-Z coverage-options=branch`,
+  # through `cargo llvm-cov --branch`). A pinned nightly, used for this measurement
+  # and nothing else: every build, test and release stays on stable. Each crate's
+  # branch floor is in coverage-floors.toml. Doctests are left out (on nightly they
+  # need --doctests, which instruments them too); the `rust` job still runs them.
+  # Ported from district-core-rust's job of the same name, with the `coverage`
+  # job's Tauri packages and private Secret Service, since the workspace is the same.
+  branches:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Not district-core-rust's 2026-11-01: on that nightly zbus 5.13.2 (the
+      # Secret Service client, Linux only) does not compile ("cycle detected when
+      # computing when `Child` needs async drop"); 2026-11-20 builds it.
+      NIGHTLY: nightly-2026-11-20
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Tauri system dependencies
+        uses: $/.github/actions/linux-tauri-deps
+
+      - name: Install the pinned nightly toolchain
+        run: |
+          rustup toolchain install "$NIGHTLY" --profile minimal -c llvm-tools-preview
+          rustc "+$NIGHTLY" --version
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: branches
+
+      - name: Install cargo-llvm-cov
+        uses: $/.github/actions/install-cargo-llvm-cov
+        # The job's own token, sent only to api.github.com by the download script.
+        env:
+          DOWNLOAD_GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Install a Secret Service
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends gnome-keyring dbus-daemon
+
+      - name: cargo test, measuring branch coverage
+        env:
+          BRIDGEWATCH_TEST_SECRET_SERVICE: "1"
+        run: |
+          set -euo pipefail
+          dbus-run-session -- sh -ec '
+            printf bridgewatch-ci | gnome-keyring-daemon --unlock --components=secrets > /dev/null
+            cargo "+$NIGHTLY" llvm-cov --branch --workspace --locked --no-report
+          '
+          cargo "+$NIGHTLY" llvm-cov report --branch --show-missing-lines
+          cargo "+$NIGHTLY" llvm-cov report --branch --json --summary-only --output-path "$RUNNER_TEMP/branches.json"
+      # No lcov export, unlike district-core-rust's job: this nightly's llvm-cov
+      # dies of SIGSEGV writing this workspace's lcov. The missing-lines report
+      # above and the coverage job's full export say what is left.
+
+      - name: Branch coverage meets every floor
+        run: python3 scripts/check-coverage.py --branches "$RUNNER_TEMP/branches.json"
 
   # The declared Rust floor, compiled at the floor. Without this job `rust-version`
   # is a comment: CI builds on stable, so a feature stabilised after the declared

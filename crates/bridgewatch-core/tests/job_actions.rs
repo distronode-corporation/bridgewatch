@@ -940,3 +940,141 @@ fn a_url_beside_an_accounts_path_prefix_or_not_a_github_job_is_refused() {
     // On github.com, but a pull request rather than a job.
     assert!(err("https://github.com/acme-corp/monorepo/pull/7").contains("not a job's page"));
 }
+
+// ---------------------------------------------------------------------------
+// The edges: a log's second leg, a refusal's message, a commit lookup
+// ---------------------------------------------------------------------------
+
+/// The second leg's answer is classified as storage, never as the token.
+#[test]
+fn a_blob_answer_is_classified_by_its_status_alone() {
+    assert!(joblog::blob_error(204, "/blob").is_none());
+    assert!(matches!(
+        joblog::blob_error(302, "/blob"),
+        Some(ClientError::Redirect { status: 302, .. })
+    ));
+    assert!(matches!(
+        joblog::blob_error(404, "/blob"),
+        Some(ClientError::NotFound { .. })
+    ));
+    assert!(matches!(
+        joblog::blob_error(503, "/blob"),
+        Some(ClientError::Server { status: 503 })
+    ));
+    assert!(matches!(
+        joblog::blob_error(418, "/blob"),
+        Some(ClientError::Unexpected { status: 418, .. })
+    ));
+}
+
+/// Every shape GitLab and GitHub put under `message` reads as one line, and
+/// anything that is not a message is none.
+#[test]
+fn a_refusals_message_is_one_short_clean_line_whatever_its_shape() {
+    let read = joblog::sanitize_message;
+    assert_eq!(
+        read(r#"{"message":["not retryable","\u202eold"]}"#).as_deref(),
+        Some("not retryable; old")
+    );
+    assert_eq!(
+        read(r#"{"message":{"base":["is locked","by a run"],"ref":"is protected","n":1}}"#)
+            .as_deref(),
+        Some("base is locked, by a run; n; ref is protected")
+    );
+    assert_eq!(read(r#"{"message":7}"#), None);
+    assert_eq!(read(r#"{"message":" \n\t "}"#), None);
+    assert_eq!(read("not json"), None);
+    let long = read(&format!(r#"{{"message":"{}"}}"#, "x".repeat(250))).unwrap();
+    assert_eq!(long.chars().count(), 201);
+    assert!(long.ends_with('…'));
+}
+
+#[tokio::test]
+async fn a_redirect_to_a_location_with_whitespace_in_it_is_refused() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply_with(
+        "/jobs/7/trace",
+        redirect(302, Some("https://cdn.artifacts.example/job log")),
+    );
+    let (client, _) = client_over(Provider::Gitlab, false, t.clone());
+    let error = client.job_log_tail(&project(), 7, 1024).await.unwrap_err();
+    assert!(error.to_string().contains("not a URL"), "{error}");
+    assert_eq!(t.requests().len(), 1, "nothing followed the redirect");
+}
+
+#[tokio::test]
+async fn an_archived_trace_whose_storage_answers_416_is_an_empty_log() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply_with(
+        "/jobs/7/trace",
+        redirect(302, Some("https://cdn.artifacts.example/job.log")),
+    );
+    t.reply("cdn.artifacts.example", 416, "");
+    let (client, _) = client_over(Provider::Gitlab, false, t);
+    let tail = client.job_log_tail(&project(), 7, 1024).await.unwrap();
+    assert!(tail.lines.is_empty());
+}
+
+#[tokio::test]
+async fn a_gitlab_refusal_without_a_message_says_which_status_refused() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply("/jobs/7/retry", 409, "{}");
+    let (client, _) = client_over(Provider::Gitlab, true, t);
+    let error = client.retry_job(&project(), 7).await.unwrap_err();
+    assert!(
+        matches!(&error, ClientError::JobRefused { message, .. } if message == "the request was refused (409)"),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_gitlab_commit_lookup_that_fails_is_that_error_and_a_missing_one_is_none() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply("/repository/commits/abc", 404, "{}");
+    t.reply("/repository/commits/abc", 503, "{}");
+    let (client, _) = client_over(Provider::Gitlab, false, t);
+    assert_eq!(client.commit_sha(&project(), "abc").await.unwrap(), None);
+    assert!(matches!(
+        client.commit_sha(&project(), "abc").await,
+        Err(ClientError::Server { status: 503 })
+    ));
+}
+
+/// GitHub's runs carry their own titles, so asking costs nothing.
+#[tokio::test]
+async fn a_github_commit_title_is_none_without_a_request() {
+    let t = Arc::new(ScriptTransport::new());
+    let (client, _) = client_over(Provider::Github, false, t.clone());
+    assert_eq!(client.commit_title(&project(), "abc").await.unwrap(), None);
+    assert!(t.requests().is_empty());
+}
+
+/// A log answered in place, with no redirect to storage, is read as it is.
+#[tokio::test]
+async fn a_github_log_answered_without_a_redirect_is_read_in_place() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/actions/jobs/7/logs",
+        200,
+        "2026-09-18T09:00:00.0000000Z all good\n",
+    );
+    let (client, _) = client_over(Provider::Github, false, t.clone());
+    let tail = client.job_log_tail(&project(), 7, 1024).await.unwrap();
+    assert_eq!(tail.lines, vec!["all good"]);
+    assert_eq!(t.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn a_github_refusal_without_a_message_says_which_status_refused() {
+    for status in [409, 422] {
+        let t = Arc::new(ScriptTransport::new());
+        t.reply("/actions/jobs/7/rerun", status, "");
+        let (client, _) = client_over(Provider::Github, true, t);
+        let error = client.retry_job(&project(), 7).await.unwrap_err();
+        let expected = format!("the request was refused ({status})");
+        assert!(
+            matches!(&error, ClientError::JobRefused { message, .. } if *message == expected),
+            "{error:?}"
+        );
+    }
+}

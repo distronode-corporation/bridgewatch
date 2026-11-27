@@ -320,3 +320,45 @@ fn the_help_documents_the_timeout_code() {
         stdout(&out)
     );
 }
+
+/// With no `--sha` and no git to ask, the wait says why rather than guess.
+#[test]
+fn without_sha_and_without_git_it_says_git_could_not_be_run() {
+    let out = run(bin()
+        .env("PATH", "")
+        .arg("--config")
+        .arg(example_config())
+        .args(["wait", "--watch", "main-push", "--fixture"])
+        .arg(fixture("4cfaced9-deployed")));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("git could not be run"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// With one watch configured, it is the one waited on, unnamed.
+#[test]
+fn the_only_watch_is_waited_on_without_being_named() {
+    let dir = TempDir::new("one-watch");
+    let config = dir.0.join("config.toml");
+    std::fs::write(
+        &config,
+        "[accounts.gitlab]\ntoken = { env = \"BRIDGEWATCH_TEST_TOKEN_NEVER_SET\" }\n\
+         [[watches]]\nid = \"main-push\"\naccount = \"gitlab\"\nproject = 12345678\nref = \"main\"\n",
+    )
+    .unwrap();
+    let sha = fixture_sha("4cfaced9-deployed");
+    let out = run(bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["wait", "--sha", &sha, "--timeout", "30s", "--fixture"])
+        .arg(fixture("4cfaced9-deployed")));
+    assert!(
+        stdout(&out).starts_with("main-push "),
+        "{}{}",
+        stdout(&out),
+        stderr(&out)
+    );
+}

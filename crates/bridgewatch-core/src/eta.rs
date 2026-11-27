@@ -242,8 +242,8 @@ impl EtaHistory {
         if let Ok(on_disk) = Self::read(path) {
             self.merge(&on_disk);
         }
-        let body = serde_json::to_string(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // Maps keyed by strings: always serialisable.
+        let body = serde_json::to_string(self).expect("the history serialises");
         crate::config::write_atomic(path, &body)
     }
 }

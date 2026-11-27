@@ -350,29 +350,42 @@ pub async fn run(config_args: &ConfigArgs, args: WaitArgs) -> Outcome {
 
     // ⛔ One Ctrl-C listener for the whole run, installed before the first
     // tick, as `watch` does and for the same reasons (see there).
-    let interrupt = tokio::signal::ctrl_c();
+    let ended = start(&mut poller, &plan, tokio::signal::ctrl_c()).await;
+    let (out, err, code) = finish(&plan, &ended, args.json);
+    if let Some(out) = out {
+        println!("{out}");
+    }
+    if let Some(err) = err {
+        eprintln!("{err}");
+    }
+    Ok(code)
+}
+
+/// The wait, unless `interrupt` has already fired: a Ctrl-C before the first
+/// tick ends it with nothing seen.
+async fn start<F: Future>(poller: &mut Poller, plan: &Plan, interrupt: F) -> Ended {
     tokio::pin!(interrupt);
     if std::future::poll_fn(|cx| std::task::Poll::Ready(interrupt.as_mut().poll(cx)))
         .await
         .is_ready()
     {
-        return Ok(Ended::Interrupted(None).code());
+        return Ended::Interrupted(None);
     }
-    let ended = wait_for(&mut poller, &plan, interrupt).await;
+    wait_for(poller, plan, interrupt).await
+}
+
+/// What a finished wait prints on stdout and on stderr, and its exit code.
+fn finish(plan: &Plan, ended: &Ended, json: bool) -> (Option<String>, Option<String>, i32) {
     let code = ended.code();
-    let (row, reason) = match &ended {
+    let (row, reason) = match ended {
         Ended::Verdict(row) => {
-            if args.json {
-                println!(
-                    "{}",
-                    report(&plan.watch, &plan.sha, Some(row), code, false, None)
-                );
-            } else {
-                println!("{}", line(&plan.watch, row));
-            }
-            return Ok(code);
+            let out = match json {
+                true => report(&plan.watch, &plan.sha, Some(row), code, false, None),
+                false => line(&plan.watch, row),
+            };
+            return (Some(out), None, code);
         }
-        Ended::Interrupted(_) => return Ok(code),
+        Ended::Interrupted(_) => return (None, None, code),
         Ended::Skipped => (None, format!("pipeline for {} was skipped", plan.sha7())),
         Ended::NoPipeline => (
             None,
@@ -396,15 +409,9 @@ pub async fn run(config_args: &ConfigArgs, args: WaitArgs) -> Outcome {
             ),
         ),
     };
-    if args.json {
-        let timed_out = matches!(ended, Ended::TimedOut(_));
-        println!(
-            "{}",
-            report(&plan.watch, &plan.sha, row, code, timed_out, Some(&reason))
-        );
-    }
-    eprintln!("{reason}");
-    Ok(code)
+    let timed_out = matches!(ended, Ended::TimedOut(_));
+    let out = json.then(|| report(&plan.watch, &plan.sha, row, code, timed_out, Some(&reason)));
+    (out, Some(reason), code)
 }
 
 /// Whether this tick may be followed by a direct lookup for `watch`: its list
@@ -523,7 +530,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Ended, Plan, human, normalise_sha, parse_duration, wait_for};
+    use super::{
+        Ended, Plan, finish, human, normalise_sha, parse_duration, pick_watch, refusal, start,
+        wait_for,
+    };
     use std::collections::BTreeMap;
     use std::path::Path;
     use std::sync::Arc;
@@ -640,6 +650,14 @@ show = { settled = 1 }
         wait_for(poller, plan, never).await
     }
 
+    /// The verdict a wait ended in, if it ended in one.
+    fn verdict_of(ended: &Ended) -> Option<&bridgewatch_core::verdict::PipelineView> {
+        match ended {
+            Ended::Verdict(row) => Some(row),
+            _ => None,
+        }
+    }
+
     fn requests_to(script: &ScriptTransport, contains: &str) -> usize {
         script
             .requests()
@@ -685,9 +703,7 @@ show = { settled = 1 }
         let mut poller = poller(&script);
 
         let ended = wait(&mut poller, &plan()).await;
-        let Ended::Verdict(row) = &ended else {
-            panic!("{ended:?}");
-        };
+        let row = verdict_of(&ended).expect("the wait ends in a verdict");
         assert_eq!(row.id, 10, "the commit's own pipeline, not the newest");
         assert_eq!(row.status, "failed");
         assert_eq!(ended.code(), crate::code_for(row.state));
@@ -727,9 +743,7 @@ show = { settled = 1 }
             ..plan()
         };
         let ended = wait(&mut poller, &plan).await;
-        let Ended::Verdict(row) = &ended else {
-            panic!("{ended:?}");
-        };
+        let row = verdict_of(&ended).expect("the wait ends in a verdict");
         assert_eq!(row.id, 10);
     }
 
@@ -745,9 +759,7 @@ show = { settled = 1 }
         let mut poller = poller(&script);
 
         let ended = wait(&mut poller, &plan()).await;
-        let Ended::Verdict(row) = &ended else {
-            panic!("{ended:?}");
-        };
+        let row = verdict_of(&ended).expect("the wait ends in a verdict");
         assert_eq!(row.id, 10);
         assert_eq!(ended.code(), crate::exit::OK);
         assert_eq!(
@@ -797,11 +809,12 @@ show = { settled = 1 }
             always(&script, TICK, status, body);
             let mut poller = poller(&script);
             let ended = wait(&mut poller, &plan()).await;
-            let Ended::Refused(why) = &ended else {
-                panic!("{status}: {ended:?}");
-            };
-            assert!(why.starts_with("account gitlab: "), "{why}");
-            assert!(why.ends_with(&format!("(HTTP {status})")), "{why}");
+            let http = format!("(HTTP {status})");
+            assert!(
+                matches!(&ended, Ended::Refused(why)
+                    if why.starts_with("account gitlab: ") && why.ends_with(&http)),
+                "{status}: {ended:?}"
+            );
             assert_eq!(ended.code(), check_code, "{status}");
             assert_eq!(ended.code(), crate::exit::UNKNOWN, "{status}");
             assert_eq!(script.requests().len(), 1, "{status}: no retry");
@@ -959,5 +972,176 @@ show = { settled = 1 }
         for raw in ["4cface", "main", "4cfaced9z", ""] {
             assert!(normalise_sha(raw).is_err(), "{raw:?}");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // How a wait starts and how each ending is reported
+    // -----------------------------------------------------------------------
+
+    /// A Ctrl-C already pending when the wait starts ends it before anything
+    /// is sent.
+    #[tokio::test(start_paused = true)]
+    async fn an_interrupt_before_the_first_tick_sends_nothing() {
+        let script = Arc::new(ScriptTransport::new());
+        let mut poller = poller(&script);
+        let ended = start(&mut poller, &plan(), interrupt(true)).await;
+        assert!(matches!(ended, Ended::Interrupted(None)), "{ended:?}");
+        assert!(verdict_of(&ended).is_none());
+        assert_eq!(ended.code(), crate::exit::UNKNOWN);
+        assert!(script.requests().is_empty());
+    }
+
+    fn row(state: &str) -> bridgewatch_core::verdict::PipelineView {
+        serde_json::from_value(serde_json::json!({
+            "id": 10, "iid": null, "sha": A, "sha7": "aaaaaaa", "ref": "main",
+            "source": "push", "status": "success", "web_url": null, "state": state,
+            "deploy": "none", "deploy_marker": null, "deploy_failures": [], "failures": [],
+            "warnings": [], "gates": [], "post_deploy_failures": [], "sibling_failures": [],
+            "bridges": [], "parent_jobs": [], "updated_at": null, "created_at": null,
+            "live": false
+        }))
+        .expect("a hand-written row deserialises")
+    }
+
+    /// Each ending prints what it says it does: a verdict on stdout, every
+    /// other answer on stderr (and as JSON on stdout with `--json`), and an
+    /// interrupt nothing at all.
+    #[test]
+    fn every_ending_is_reported_with_its_exit_code() {
+        let p = plan();
+        let verdict = Ended::Verdict(Box::new(row("deployed")));
+        let (out, err, _) = finish(&p, &verdict, false);
+        assert!(out.unwrap().starts_with("main-push aaaaaaa #10: deployed"));
+        assert_eq!(err, None);
+        let (out, _, _) = finish(&p, &verdict, true);
+        assert!(out.unwrap().contains("\"state\":\"deployed\""));
+
+        assert_eq!(
+            finish(&p, &Ended::Interrupted(Some(row("running"))), false),
+            (None, None, crate::exit::PENDING)
+        );
+        assert_eq!(
+            finish(&p, &Ended::Interrupted(None), true).2,
+            crate::exit::UNKNOWN
+        );
+
+        let said = |ended: Ended| finish(&p, &ended, false).1.unwrap();
+        assert_eq!(said(Ended::Skipped), "pipeline for aaaaaaa was skipped");
+        assert_eq!(said(Ended::NoPipeline), "no pipeline for aaaaaaa after 10m");
+        assert_eq!(
+            said(Ended::Refused("account gitlab: no".into())),
+            "account gitlab: no"
+        );
+        assert!(said(Ended::TimedOut(None)).ends_with("(last seen: no pipeline)"));
+        let (out, err, code) = finish(&p, &Ended::TimedOut(Some(row("running"))), true);
+        assert!(err.unwrap().ends_with("(last seen: running)"));
+        assert!(out.unwrap().contains("\"timed_out\":true"));
+        assert_eq!(code, crate::exit::TIMEOUT);
+    }
+
+    /// A sign-in to redo and a token that does not resolve are refusals with
+    /// no status to add; a server error is not a refusal at all.
+    #[test]
+    fn a_credential_refusal_carries_no_status_and_a_server_error_is_none() {
+        let p = plan();
+        let token = bridgewatch_core::client::ClientError::Token {
+            account: "gitlab".into(),
+            message: "no entry".into(),
+        };
+        assert!(
+            refusal(&p, &token, Some("no entry"))
+                .unwrap()
+                .ends_with(": no entry")
+        );
+        let again = bridgewatch_core::client::ClientError::SignInAgain {
+            account: "gitlab".into(),
+            provider: bridgewatch_core::config::Provider::Gitlab,
+            never_signed_in: true,
+        };
+        assert!(refusal(&p, &again, None).is_some());
+        let server = bridgewatch_core::client::ClientError::Server { status: 502 };
+        assert_eq!(refusal(&p, &server, None), None);
+    }
+
+    /// A direct lookup refused for good ends the wait; one that fails for
+    /// now is said while waiting, and the wait goes on.
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_lookup_ends_the_wait_and_a_failing_one_does_not() {
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, TICK, 200, "[]");
+        script.reply(LOOKUP, 401, "{}");
+        let mut refused = poller(&script);
+        let ended = wait(&mut refused, &plan()).await;
+        assert!(
+            matches!(&ended, Ended::Refused(why) if why.contains("(HTTP 401)")),
+            "{ended:?}"
+        );
+
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, TICK, 200, "[]");
+        always(&script, LOOKUP, 503, "{}");
+        let mut waiting = poller(&script);
+        let short = Plan {
+            timeout: Some(Duration::from_secs(600)),
+            ..plan()
+        };
+        let ended = wait(&mut waiting, &short).await;
+        assert!(matches!(ended, Ended::TimedOut(None)), "{ended:?}");
+        assert!(
+            requests_to(&script, LOOKUP) > 1,
+            "the lookup was asked again"
+        );
+    }
+
+    /// A watch whose only match was skipped shows it; for a wait that is a
+    /// skipped answer.
+    #[tokio::test(start_paused = true)]
+    async fn the_watchs_own_skipped_row_is_a_skipped_answer() {
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, TICK, 200, &list(&[pipeline(10, A, "skipped")]));
+        empty_detail(&script, 10);
+        let mut poller = poller(&script);
+        let ended = wait(&mut poller, &plan()).await;
+        assert!(matches!(ended, Ended::Skipped), "{ended:?}");
+    }
+
+    /// With one watch configured, it is the one waited on.
+    #[test]
+    fn the_only_watch_is_picked_without_being_named() {
+        let raw = "[accounts.gl]\ntoken = { env = \"T\" }\n[[watches]]\nid = \"only\"\naccount = \"gl\"\nproject = 1\n";
+        let config = parse_str(raw, Path::new("one.toml"))
+            .expect("config")
+            .config;
+        assert_eq!(pick_watch(&config, None).ok().as_deref(), Some("only"));
+    }
+
+    /// The one interrupt type the `start` tests share, already fired or
+    /// never, so one copy of the generic `start` takes both of its paths.
+    async fn interrupt(now: bool) {
+        if !now {
+            std::future::pending::<()>().await;
+        }
+    }
+
+    /// A wait that sees its commit running says so, remembers it, and ends
+    /// when it settles.
+    #[tokio::test(start_paused = true)]
+    async fn a_running_commit_is_waited_on_until_it_settles() {
+        let script = Arc::new(ScriptTransport::new());
+        script.reply(TICK, 200, &list(&[pipeline(10, A, "running")]));
+        always(&script, TICK, 200, &list(&[pipeline(10, A, "success")]));
+        empty_detail(&script, 10);
+        let mut waiting = poller(&script);
+        // Through `wait`, the copy of the loop every other test drives.
+        let ended = wait(&mut waiting, &plan()).await;
+        let row = verdict_of(&ended).expect("the wait ends in a verdict");
+        assert_eq!(row.status, "success");
+        // And `start` with the interrupt that never fires gets to the loop.
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, TICK, 200, &list(&[pipeline(10, A, "success")]));
+        empty_detail(&script, 10);
+        let mut started = poller(&script);
+        let ended = start(&mut started, &plan(), interrupt(false)).await;
+        assert!(verdict_of(&ended).is_some(), "{ended:?}");
     }
 }

@@ -363,3 +363,99 @@ mod scripts {
         }
     }
 }
+
+mod small {
+    use super::*;
+
+    /// A manual trigger whose child holds gates is parked on those gates,
+    /// named by them rather than by the trigger.
+    #[test]
+    fn a_manual_trigger_is_parked_on_its_childs_own_gates() {
+        let jobs = [job(1, "deploy:prod", "manual")];
+        let v = bridge::verdict(
+            &trigger("trigger:web", "manual", Some("manual")),
+            Some(&jobs),
+            &[],
+            &rules(""),
+        );
+        assert_eq!(
+            v,
+            BridgeVerdict::AwaitingGate {
+                jobs: vec!["deploy:prod".into()]
+            }
+        );
+    }
+
+    /// Every state name parses back to its state, `cancelled` included, and
+    /// nothing else does.
+    #[test]
+    fn every_icon_state_name_parses_back() {
+        for state in [
+            IconState::Unknown,
+            IconState::Failed,
+            IconState::DeployedWithFailure,
+            IconState::Deployed,
+            IconState::Running,
+            IconState::Canceled,
+            IconState::ParkedGate,
+            IconState::SucceededNoDeploy,
+        ] {
+            assert_eq!(IconState::parse(state.as_str()), Some(state));
+        }
+        assert_eq!(IconState::parse("cancelled"), Some(IconState::Canceled));
+        assert_eq!(IconState::parse("green"), None);
+    }
+
+    /// A time past what a calendar can hold is shown as its raw seconds.
+    #[test]
+    fn a_stamp_out_of_range_is_its_seconds() {
+        assert_eq!(
+            bridgewatch_core::health::stamp(i64::MAX),
+            i64::MAX.to_string()
+        );
+    }
+
+    /// Every unit a span is said in.
+    #[test]
+    fn a_span_reads_in_the_largest_units_it_needs() {
+        let span = bridgewatch_core::health::span;
+        assert_eq!(span(42), "42s");
+        assert_eq!(span(300), "5m");
+        assert_eq!(span(3 * 3600 + 60), "3h 1m");
+        assert_eq!(span(2 * 86_400 + 3600), "2d 1h");
+    }
+
+    /// A prompt that was cancelled and one that would have to be raised
+    /// say different things.
+    #[test]
+    fn both_kinds_of_approval_say_what_happened() {
+        let said = |refused| {
+            bridgewatch_core::token::TokenError::NeedsApproval {
+                service: "bridgewatch:gl".into(),
+                refused,
+            }
+            .to_string()
+        };
+        assert!(said(true).contains("was cancelled or denied"));
+        assert!(!said(false).contains("was cancelled or denied"));
+    }
+
+    /// A script may print and debug; neither reaches anything.
+    #[test]
+    fn a_script_that_prints_and_debugs_still_answers() {
+        let script = bridgewatch_core::verdict::VerdictScript::from_source(
+            "print(\"x\"); debug(\"y\"); \"deployed\"",
+        )
+        .unwrap();
+        let view: bridgewatch_core::verdict::PipelineView =
+            serde_json::from_value(serde_json::json!({
+                "id": 1, "iid": null, "sha": "a", "sha7": "a", "ref": "main", "source": "push",
+                "status": "success", "web_url": null, "state": "deployed", "deploy": "none",
+                "deploy_marker": null, "deploy_failures": [], "failures": [], "warnings": [],
+                "gates": [], "post_deploy_failures": [], "sibling_failures": [], "bridges": [],
+                "parent_jobs": [], "updated_at": null, "created_at": null, "live": false
+            }))
+            .unwrap();
+        assert_eq!(script.evaluate(&view).unwrap(), IconState::Deployed);
+    }
+}

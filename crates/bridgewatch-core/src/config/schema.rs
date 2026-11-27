@@ -410,14 +410,25 @@ pub struct OAuthSource {
 
 impl Serialize for OAuthSource {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap as _;
+        self.written().serialize(s)
+    }
+}
+
+/// How an [`OAuthSource`] is written: `true`, or `{ client_id = ".." }`.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum WrittenOAuth<'a> {
+    Builtin(bool),
+    Own { client_id: &'a str },
+}
+
+impl OAuthSource {
+    /// Chosen outside the generic `serialize`, so each serializer's copy of it
+    /// has one path.
+    fn written(&self) -> WrittenOAuth<'_> {
         match &self.client_id {
-            None => s.serialize_bool(true),
-            Some(id) => {
-                let mut map = s.serialize_map(Some(1))?;
-                map.serialize_entry("client_id", id)?;
-                map.end()
-            }
+            None => WrittenOAuth::Builtin(true),
+            Some(id) => WrittenOAuth::Own { client_id: id },
         }
     }
 }

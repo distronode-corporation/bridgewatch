@@ -860,3 +860,50 @@ async fn the_gitlab_rate_limit_spelling_wins_over_github_s() {
     assert_eq!(response.ratelimit_remaining, Some(1999));
     assert_eq!(response.ratelimit_reset, Some(1_789_669_380));
 }
+
+fn plain_get(path: &str) -> HttpRequest {
+    HttpRequest {
+        method: "GET",
+        url: format!("https://gitlab.example/api/v4{path}"),
+        path: path.to_string(),
+        headers: Vec::new(),
+        body: None,
+        anonymous: false,
+        tail_bytes: None,
+    }
+}
+
+/// A 304 that names no validator of its own keeps the stored one, and the
+/// transport's debug line says how much it holds and never what.
+#[tokio::test]
+async fn a_304_without_an_etag_keeps_the_stored_validator() {
+    let script = Arc::new(bridgewatch_core::client::ScriptTransport::new());
+    script.reply_with(
+        "/projects/1/pipelines",
+        HttpResponse {
+            etag: Some("\"v1\"".into()),
+            ..HttpResponse::plain(200, "[\"held\"]")
+        },
+    );
+    script.reply("/projects/1/pipelines", 304, "");
+    script.reply("/projects/1/pipelines", 304, "");
+    let conditional = ConditionalTransport::new(script.clone());
+    for _ in 0..3 {
+        let answer = conditional
+            .execute(plain_get("/projects/1/pipelines"))
+            .await
+            .unwrap();
+        assert_eq!(answer.body, "[\"held\"]");
+    }
+    let sent = script.requests();
+    assert!(
+        sent[1..].iter().all(|r| r
+            .headers
+            .iter()
+            .any(|(n, v)| n.eq_ignore_ascii_case("if-none-match") && v == "\"v1\"")),
+        "{sent:?}"
+    );
+    let debug = format!("{conditional:?}");
+    assert!(debug.contains("entries: 1"), "{debug}");
+    assert!(!debug.contains("held"), "{debug}");
+}

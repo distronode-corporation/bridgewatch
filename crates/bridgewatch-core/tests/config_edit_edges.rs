@@ -102,3 +102,52 @@ fn a_quoted_segment_carries_every_escape_both_ways() {
     // A path that ends inside an escape keeps the backslash.
     assert_eq!(split_path(r#""abc\"#), [r"abc\"]);
 }
+
+/// TOML 1.1 lets an inline table carry a comment; a key appended after it
+/// goes in without moving the comment's text onto the new value.
+#[test]
+fn a_key_appended_after_a_commented_inline_value_keeps_the_comment_where_it_was() {
+    let raw = "[accounts.gl]\nshow = { max_rows = 3 # rows\n}\n";
+    let mut e = ConfigEditor::new(raw).expect("TOML 1.1 parses");
+    e.set("accounts.gl.show.settled", &EditValue::Integer(2))
+        .unwrap();
+    let out = e.to_toml();
+    assert!(out.contains("# rows"), "{out}");
+    assert!(out.contains("settled = 2"), "{out}");
+    ConfigEditor::new(&out).expect("the result still parses");
+}
+
+/// A watch edit names a watch by id; one that is not there is said, and a
+/// file whose `watches` is not a list of tables has none to find.
+#[test]
+fn a_watch_edit_on_an_unknown_id_is_no_such_watch() {
+    let mut e = editor();
+    let edit = Edit::SetWatch {
+        id: "zzz".into(),
+        path: "ref".into(),
+        value: EditValue::String("main".into()),
+    };
+    assert!(matches!(e.apply(&[edit]), Err(EditError::NoSuchWatch(id)) if id == "zzz"));
+    let odd = ConfigEditor::new("watches = 1\n").unwrap();
+    assert_eq!(odd.watch_index("a"), None);
+}
+
+#[test]
+fn a_file_with_no_watches_has_none_to_find() {
+    assert_eq!(ConfigEditor::new("").unwrap().watch_index("a"), None);
+}
+
+/// A watch from the settings window is JSON, which can carry an interval no
+/// TOML integer can hold: adding it is an error, never a panic.
+#[test]
+fn a_watch_with_an_interval_toml_cannot_hold_is_refused() {
+    let raw = "[accounts.gl]\ntoken = { env = \"T\" }\n[[watches]]\nid = \"a\"\naccount = \"gl\"\nproject = 1\n";
+    let mut watch = bridgewatch_core::config::parse_lenient(raw, std::path::Path::new("t.toml"))
+        .unwrap()
+        .0
+        .watches
+        .remove(0);
+    watch.poll.live_secs = u64::MAX;
+    let error = editor().add_watch(&watch).unwrap_err();
+    assert!(matches!(error, EditError::Serialize(_)), "{error:?}");
+}

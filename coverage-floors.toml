@@ -10,6 +10,9 @@
 #
 #   floor   The whole-number percentage of the crate's lines under src/ that the
 #           tests must execute. 100 means every line.
+#   branch_floor  The same for branches, measured by CI's `branches` job on a pinned
+#           nightly (stable Rust cannot measure branches) and checked with
+#           `check-coverage.py --branches`. A crate with no branches passes.
 #   reason  One line saying why the floor is where it is.
 #
 # Floors only ratchet up. A change that raises a crate's coverage raises its floor
@@ -19,13 +22,16 @@
 # CONTRIBUTING.md.
 
 [crates.bridgewatch-core]
-floor = 93
-reason = "The level CI's coverage job measured on the second core coverage pull request (#136), 93.79% of lines, rounded down."
+floor = 100
+branch_floor = 95
+reason = "Every line, on the fourth coverage pull request (#138); branches as CI's branches job measured them there, 95.05% (1654 of 1740), rounded down."
 
 [crates.bridgewatch-cli]
-floor = 90
-reason = "The level CI's coverage job measured when the gate was added, 90.12% of lines, rounded down."
+floor = 100
+branch_floor = 93
+reason = "Every line: CI measured 100.00% of lines (4129 of 4129) on the fourth coverage pull request (#138), and 93.98% of branches (297 of 316), rounded down."
 
 [crates.bridgewatch-app]
 floor = 61
-reason = "The level CI's coverage job measured when the gate was added, 61.31% of lines, rounded down. Most uncovered lines are in the IPC command handlers (commands.rs), the background poll loop (poller.rs), the tray, sign-in and window code, and main.rs, which need a running app."
+branch_floor = 42
+reason = "The level CI's coverage job measured when the gate was added, 61.31% of lines, rounded down; branches 42.39% (231 of 545) on #138. Most uncovered lines are in the IPC command handlers (commands.rs), the background poll loop (poller.rs), the tray, sign-in and window code, and main.rs, which need a running app."

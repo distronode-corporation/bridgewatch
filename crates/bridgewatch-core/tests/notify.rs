@@ -1076,3 +1076,18 @@ fn a_failure_with_no_reason_keeps_the_one_line_body() {
         .expect("raised");
     assert_eq!(failure.body, "verify:web");
 }
+
+/// Baselining a watch twice changes nothing the second time, so nothing is
+/// written.
+#[test]
+fn a_second_baseline_of_the_same_watch_writes_nothing() {
+    let file = TempLedger::new("bw-notify-rebaseline");
+    let mut ledger = NotifyLedger::default();
+    ledger.baseline("w");
+    ledger.save_if_changed(&file.path()).unwrap();
+    std::fs::remove_file(file.path()).unwrap();
+    ledger.baseline("w");
+    ledger.save_if_changed(&file.path()).unwrap();
+    assert!(!file.path().exists());
+    assert!(ledger.is_baselined("w"));
+}
