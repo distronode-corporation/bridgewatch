@@ -92,7 +92,7 @@ describe("the coverage report's ignored compiler output", () => {
         .map(() => file),
     );
     expect(matched).toEqual([]);
-  });
+  }, 60_000); // It parses every file under src/, which takes seconds on a loaded machine.
 
   it("would match a hand-written fallback in single quotes, which is why the test above walks the source", () => {
     const ast = astOf("x.svelte", `<script lang="ts">const a = b ?? '';<\/script>`);
