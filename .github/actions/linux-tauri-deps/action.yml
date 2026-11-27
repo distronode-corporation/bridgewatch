@@ -51,6 +51,11 @@ runs:
       # half way.
       run: |
         set -euo pipefail
+        # ⛔ Only the Ubuntu archives. The image also lists packages.microsoft.com,
+        # whose InRelease answers 403 now and then, and one failed source fails the
+        # whole `apt-get update`. Nothing here comes from it, so it is dropped rather
+        # than retried. (grep finds nothing on an image without it: no-op.)
+        { sudo grep -lrs --null packages.microsoft.com /etc/apt/sources.list.d/ || true; } | xargs -0r sudo rm -f --
         pkgs=(
           libwebkit2gtk-4.1-dev
           libjavascriptcoregtk-4.1-dev
