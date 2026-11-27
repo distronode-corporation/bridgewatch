@@ -272,3 +272,11 @@ describe("leafPaths on schemas the generator could produce", () => {
     expect(leafPaths(root)).toEqual(["flat.*", "jobs.*.*"]);
   });
 });
+
+describe("the table entries KeyValueField draws", () => {
+  it("each carry a hint, which the field renders without a guard", () => {
+    const tables = REGISTRY.filter((e) => e.path.endsWith(".*"));
+    expect(tables.map((e) => e.path).sort()).toEqual(["icon.states.*", "watches.*.jobs.*"]);
+    for (const e of tables) expect(e.hint, e.path).toBeTruthy();
+  });
+});

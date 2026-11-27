@@ -59,6 +59,8 @@ describe("vendored ui components", () => {
     expect(slot("label")!.getAttribute("for")).toBe("smoke-url");
     expect(slot("alert")!.getAttribute("role")).toBe("alert");
     expect(slot("checkbox")!.getAttribute("data-state")).toBe("checked");
+    // The default handler: a click with none given does nothing, and does not throw.
+    slot("button")!.click();
 
 
     // Stepper: step 2 of 3 is current, step 1 is complete.

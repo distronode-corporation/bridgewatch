@@ -179,3 +179,44 @@ describe("the job-list controls", () => {
     expect(select.value).toBe("all");
   });
 });
+
+describe("Field's project control", () => {
+  function changeTo(h: Harness, text: string) {
+    h.input().value = text;
+    h.input().dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+  }
+
+  it("writes an all-digits project as its numeric id, and anything else as a path", async () => {
+    const h = render("watches.*.project", 1);
+    changeTo(h, " 12345678 ");
+    await h.answer(12345678);
+    changeTo(h, "acme/web");
+    await h.answer("acme/web");
+    expect(h.edits).toEqual([
+      [{ op: "set", path: "watches.0.project", value: { integer: 12345678 } }],
+      [{ op: "set", path: "watches.0.project", value: { string: "acme/web" } }],
+    ]);
+  });
+
+  it("refuses an emptied project and puts the old one back, writing nothing", () => {
+    const h = render("watches.*.project", 7);
+    flushSync();
+    changeTo(h, "  ");
+    expect(h.edits).toEqual([]);
+    expect(h.input().value).toBe("7");
+  });
+});
+
+describe("Field's select with no choices", () => {
+  it("draws an empty select when neither the entry nor the caller gives options", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    component = mount(Field, {
+      target: host,
+      props: { entry: entry("watches.*.account"), path: "watches.0.account", value: "work", onedit: () => {} },
+    });
+    flushSync();
+    expect(host.querySelectorAll("select option")).toHaveLength(0);
+  });
+});

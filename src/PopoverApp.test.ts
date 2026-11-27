@@ -46,10 +46,17 @@ const calls = {
   resizes: [] as number[],
   acks: [] as [string, boolean][],
   refreshes: 0,
+  hides: 0,
+  settings: [] as (string | null)[],
+  quits: 0,
 };
 
 /** What the shell answers for the two "open" requests; reset per test. */
 const shell = {
+  /** False for the window outside the Tauri webview (a browser during `vite dev`). */
+  inTauri: true,
+  /** The `snapshot` listener PopoverApp registered, if any. */
+  onSnapshot: null as null | ((s: Snapshot) => void),
   status,
   pipelinesUrl: (): Promise<string | null> => Promise.resolve(null),
   openExternal: (_url: string): Promise<void> => Promise.resolve(),
@@ -63,7 +70,7 @@ const shell = {
 };
 
 vi.mock("./lib/ipc", () => ({
-  inTauri: () => true,
+  inTauri: () => shell.inTauri,
   applyConfigEdits: (edits: unknown) => {
     calls.edits.push(edits);
     return shell.applyConfigEdits(edits);
@@ -81,13 +88,25 @@ vi.mock("./lib/ipc", () => ({
     calls.opened++;
     return Promise.resolve(true);
   },
-  onSnapshot: () => Promise.resolve(() => {}),
-  hidePopover: () => Promise.resolve(),
+  onSnapshot: (handler: (s: Snapshot) => void) => {
+    shell.onSnapshot = handler;
+    return Promise.resolve(() => {});
+  },
+  hidePopover: () => {
+    calls.hides++;
+    return Promise.resolve();
+  },
   openExternal: (url: string) => shell.openExternal(url),
-  openSettings: () => Promise.resolve(),
+  openSettings: (tab?: string) => {
+    calls.settings.push(tab ?? null);
+    return Promise.resolve();
+  },
   openWizard: () => shell.openWizard(),
   pipelinesUrl: () => shell.pipelinesUrl(),
-  quit: () => Promise.resolve(),
+  quit: () => {
+    calls.quits++;
+    return Promise.resolve();
+  },
   refreshNow: () => {
     calls.refreshes++;
     return Promise.resolve(true);
@@ -123,6 +142,11 @@ beforeEach(() => {
   calls.resizes = [];
   calls.acks = [];
   calls.refreshes = 0;
+  calls.hides = 0;
+  calls.settings = [];
+  calls.quits = 0;
+  shell.inTauri = true;
+  shell.onSnapshot = null;
   shell.snapshot = snapshot;
   shell.acknowledgeFailure = () => Promise.resolve(true);
   shell.resize = () => {};
@@ -638,5 +662,85 @@ describe("PopoverApp, the keyboard", () => {
     expect(calls.refreshes).toBe(1);
     expect(press("r", { ctrlKey: true }).defaultPrevented).toBe(false);
     expect(calls.refreshes).toBe(1);
+  });
+});
+
+describe("PopoverApp, the rest of the window's wiring", () => {
+  const byText = (label: string) =>
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === label)!;
+
+  it("does nothing outside the Tauri webview", async () => {
+    shell.inTauri = false;
+    const h = await render();
+    h.seconds(3);
+    expect(calls.status).toBe(0);
+    expect(shell.onSnapshot).toBe(null);
+    expect(calls.resizes).toEqual([]);
+  });
+
+  it("shows each snapshot the poller sends", async () => {
+    await render();
+    await Promise.resolve();
+    shell.onSnapshot!({ ...snapshot, icon_state: "failed" });
+    flushSync();
+    expect(host.querySelector("[data-icon-state]")?.getAttribute("data-icon-state")).toBe("failed");
+  });
+
+  it("catches up when the document becomes visible again", async () => {
+    const h = await render();
+    const hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    h.seconds(3);
+    const quiet = calls.status;
+    hidden.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    flushSync();
+    expect(calls.status).toBe(quiet + 1);
+    hidden.mockRestore();
+  });
+
+  it("hides on Escape", async () => {
+    await render();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(calls.hides).toBe(1);
+  });
+
+  it("sends Refresh, Settings and Quit to the shell, and Fix to the text editor", async () => {
+    shell.snapshot = { ...snapshot, errors: ["bad"] };
+    shell.status = { ...status, configOk: false, diagnostics: [{ severity: "error", path: "", message: "bad", line: 1, col: 1 }] };
+    await render();
+    await Promise.resolve();
+    flushSync();
+    host.querySelector<HTMLButtonElement>("[data-action=refresh]")!.click();
+    byText("Settings…").click();
+    byText("Quit").click();
+    byText("Fix in Settings").click();
+    expect(calls.refreshes).toBe(1);
+    expect(calls.settings).toEqual([null, "text"]);
+    expect(calls.quits).toBe(1);
+  });
+
+  it("measures nothing once the window's frame is gone", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => frames.push(fn));
+    await render();
+    void unmount(component!);
+    component = null;
+    for (const frame of frames) frame(0);
+    expect(calls.resizes).toEqual([]);
+  });
+});
+
+describe("PopoverApp, a crash-report choice the file would not take", () => {
+  it("says the file was not written when the shell gives no reason", async () => {
+    shell.status = { ...status, crashReports: "ask" };
+    shell.applyConfigEdits = () => Promise.resolve({ ok: false, diagnostics: [] });
+    await render();
+    await Promise.resolve();
+    flushSync();
+    host.querySelector<HTMLButtonElement>("[data-slot=crash-reports-ask] [data-answer=send]")!.click();
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    flushSync();
+    expect(host.textContent).toContain("Could not save the crash-report choice: the file was not written");
   });
 });

@@ -48,7 +48,6 @@ SPDX-License-Identifier: Apache-2.0
   }: Props = $props();
 
   let search = $state("");
-  const projects = $derived(listing?.mode === "projects" ? listing.projects : []);
   const github = $derived(draft.provider === "github");
   /** GitHub says repository; GitLab says project. */
   const noun = $derived(github ? "repositories" : "projects");
@@ -82,12 +81,12 @@ SPDX-License-Identifier: Apache-2.0
         />
         <Button variant="outline" size="sm" onclick={() => onSearch(search.trim())}>Search</Button>
       </div>
-      {#if projects.length === 0}
+      {#if listing.projects.length === 0}
         <p class="text-muted-foreground">No {noun} match.</p>
       {:else}
         <fieldset class="flex max-h-56 flex-col gap-0.5 overflow-y-auto rounded-lg border p-1" aria-describedby="wizard-project-msg">
           <legend class="sr-only">{github ? "Repositories" : "Projects"}</legend>
-          {#each projects as project (project.id)}
+          {#each listing.projects as project (project.id)}
             <label class="hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1">
               <input
                 type="radio"
