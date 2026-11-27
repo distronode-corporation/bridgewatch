@@ -184,12 +184,8 @@ fn secret_service_search(service: &str, user: &str) -> Result<Found, String> {
     use secret_service::{EncryptionType, blocking::SecretService};
 
     let ss = SecretService::connect(EncryptionType::Dh).map_err(|e| e.to_string())?;
-    let found = ss
-        .search_items(std::collections::HashMap::from([
-            ("service", service),
-            ("username", user),
-        ]))
-        .map_err(|e| e.to_string())?;
+    let attributes = std::collections::HashMap::from([("service", service), ("username", user)]);
+    let found = ss.search_items(attributes).map_err(|e| e.to_string())?;
     let unlocked = found
         .unlocked
         .first()
