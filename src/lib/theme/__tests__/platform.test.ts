@@ -77,21 +77,6 @@ describe("setPlatform", () => {
     expect(root.classList.contains(VIBRANCY_CLASS)).toBe(false);
   });
 
-  it("defaults to the document root and the user agent's platform, vibrancy off", () => {
-    // jsdom's user agent names neither macOS nor Linux.
-    expect(applyPlatformTheme()).toEqual({ platform: "other", vibrancy: false });
-    expect(document.documentElement.dataset.platform).toBe("other");
-    expect(document.documentElement.classList.contains(VIBRANCY_CLASS)).toBe(false);
-  });
-});
-
-describe("detectPlatform without a navigator", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it("reads no user agent as another platform rather than throwing", () => {
-    vi.stubGlobal("navigator", undefined);
-    expect(detectPlatform()).toBe("other");
-  });
 });
 
 describe("setVibrancy", () => {
@@ -127,6 +112,23 @@ describe("applyPlatformTheme", () => {
     });
     expect(root.dataset.platform).toBe("linux");
     expect(root.classList.contains(VIBRANCY_CLASS)).toBe(false);
+  });
+});
+
+describe("applyPlatformTheme and detectPlatform with nothing passed", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("default to the document root and the user agent's platform, vibrancy off", () => {
+    // jsdom's own user agent names the OS the tests run on, so a fixed one stands in.
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" });
+    expect(applyPlatformTheme()).toEqual({ platform: "other", vibrancy: false });
+    expect(document.documentElement.dataset.platform).toBe("other");
+    expect(document.documentElement.classList.contains(VIBRANCY_CLASS)).toBe(false);
+  });
+
+  it("read no navigator as another platform rather than throwing", () => {
+    vi.stubGlobal("navigator", undefined);
+    expect(detectPlatform()).toBe("other");
   });
 });
 
