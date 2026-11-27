@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import fixture from "../../lib/__fixtures__/ca41ab28.json" with { type: "json" };
-import type { Snapshot } from "../../lib/types";
+import type { JobClass, Snapshot } from "../../lib/types";
 import { PARENT_JOBS, RUNNING_JOB, T0, bridge, job } from "./__fixtures__/pipeline";
 import {
   NO_STAGE,
   approxDuration,
   bridgeVisible,
+  classWord,
   createExpansionStore,
   elapsedSeconds,
   etaLine,
@@ -165,5 +166,41 @@ describe("the deploy ETA line", () => {
   it("is empty when the core sent no estimate, whether the key is null or absent", () => {
     expect(etaLine({ created_at: CREATED, eta: null }, T0)).toBe("");
     expect(etaLine({ created_at: CREATED }, T0)).toBe("");
+  });
+});
+
+describe("the remaining arms of the job helpers", () => {
+  it("puts jobs with no stage last, whichever side of the comparison they are on", () => {
+    const loose = job({ id: 1, name: "orphan", stage: "" });
+    const built = job({ id: 2, name: "build", stage: "build" });
+    expect(groupByStage([loose, built]).map((g) => g.stage)).toEqual(["build", NO_STAGE]);
+    expect(groupByStage([built, loose]).map((g) => g.stage)).toEqual(["build", NO_STAGE]);
+  });
+
+  it("keeps a stage's first position when the stage order names it twice", () => {
+    const jobs = [job({ id: 1, name: "a", stage: "test" }), job({ id: 2, name: "b", stage: "build" })];
+    expect(groupByStage(jobs, ["test", "build", "test"]).map((g) => g.stage)).toEqual(["test", "build"]);
+  });
+
+  it("shows a live job with no start time at the last poll's duration, or nothing", () => {
+    const pending = { class: "live" as const, started_at: null };
+    expect(elapsedSeconds(job({ id: 1, name: "p", ...pending, duration: 12.9 }), T0)).toBe(12);
+    expect(elapsedSeconds(job({ id: 1, name: "p", ...pending, duration: null }), T0)).toBeNull();
+  });
+
+  it("words every job class, and an unknown one as unknown", () => {
+    expect(classWord("not_built")).toBe("not built");
+    expect(classWord("ignored")).toBe("ignored");
+    expect(classWord("from_a_newer_shell" as JobClass)).toBe("unknown");
+  });
+
+  it("counts the explicit choices the expansion store holds", () => {
+    const store = createExpansionStore();
+    expect(store.size).toBe(0);
+    store.set(1, "trigger:web", true);
+    store.set(2, "trigger:web", false);
+    expect(store.size).toBe(2);
+    store.prune([2]);
+    expect(store.size).toBe(1);
   });
 });

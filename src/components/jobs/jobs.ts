@@ -78,7 +78,8 @@ export function groupByStage(jobs: readonly JobView[], stageOrder?: readonly str
 
   return [...groups.entries()]
     .sort(([a, ga], [b, gb]) => {
-      if (a === NO_STAGE || b === NO_STAGE) return a === NO_STAGE ? (b === NO_STAGE ? 0 : 1) : -1;
+      // Group keys are unique, so a and b are never both NO_STAGE: the one that is goes last.
+      if (a === NO_STAGE || b === NO_STAGE) return a === NO_STAGE ? 1 : -1;
       const ia = explicit.get(a);
       const ib = explicit.get(b);
       if (ia !== undefined && ib !== undefined) return ia - ib;
