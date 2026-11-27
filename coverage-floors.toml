@@ -15,8 +15,8 @@
 # CONTRIBUTING.md.
 
 [crates.bridgewatch-core]
-floor = 92
-reason = "The level CI's coverage job measured on the first core coverage pull request (#132), 92.26% of lines, rounded down."
+floor = 93
+reason = "The level CI's coverage job measured on the second core coverage pull request (#136), 93.79% of lines, rounded down."
 
 [crates.bridgewatch-cli]
 floor = 90
