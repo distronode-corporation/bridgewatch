@@ -34,7 +34,8 @@ function deref(node: JsonSchema, root: JsonSchema): JsonSchema {
   // A bounded loop rather than recursion: a self-referential $ref in a
   // generated schema would otherwise hang `npm test` with no output.
   for (let i = 0; i < 32 && current.$ref; i++) {
-    const name = current.$ref.split("/").pop() ?? "";
+    // The last segment; `split("/").pop()` never returns undefined here, so no fallback is needed.
+    const name = current.$ref.slice(current.$ref.lastIndexOf("/") + 1);
     const target = root.$defs?.[name];
     if (!target) return current;
     current = target;

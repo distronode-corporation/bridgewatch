@@ -7,7 +7,7 @@
     // ⛔ NOT ["node"]. @types/node is an OPTIONAL peer of vite and vitest and is
     // not installed here, so `"types": ["node"]` makes this project fail to
     // build at all with TS2688 ("Cannot find type definition file for 'node'").
-    // None of the three files below touches a node global, so an empty list is
+    // None of the four files below touches a node global, so an empty list is
     // both correct and deterministic — an ABSENT `types` key would instead pull
     // in whatever @types/* a transitive install happens to leave in node_modules.
     "types": [],
@@ -19,5 +19,5 @@
     // writes are a by-product, so the output is parked inside node_modules.
     "outDir": "./node_modules/.tmp/tsconfig.node"
   },
-  "include": ["vite.config.ts", "vitest.config.ts", "svelte.config.js"]
+  "include": ["vite.config.ts", "vitest.config.ts", "vitest.svelte-generated.ts", "svelte.config.js"]
 }
