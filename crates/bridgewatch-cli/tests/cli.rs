@@ -1843,3 +1843,266 @@ fn ctrl_c_during_a_tick_exits_watch_with_a_verdict() {
         "watch must exit with a verdict code, not die of the signal: {status:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Against a GitLab on loopback: log, retry, play, fixture record and a
+// watch's notification, each as a person runs it
+// ---------------------------------------------------------------------------
+
+/// One canned answer: status, extra header lines, body.
+type Answer = (u16, &'static str, String);
+
+/// A loopback server: each request goes to the first route whose fragment
+/// its request line contains; a route answers in order and repeats its last.
+/// Returns the base URL and every request line seen.
+fn routed(
+    routes: Vec<(&'static str, Vec<Answer>)>,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead as _, Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        let mut routes = routes;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut first = String::new();
+            let _ = reader.read_line(&mut first);
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some(n) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = n.trim().parse().unwrap_or(0);
+                }
+            }
+            let _ = reader.read_exact(&mut vec![0; length]);
+            log.lock().unwrap().push(first.trim().to_string());
+            let (status, headers, body) = match routes.iter_mut().find(|(f, _)| first.contains(f)) {
+                Some((_, answers)) if answers.len() > 1 => answers.remove(0),
+                Some((_, answers)) => answers[0].clone(),
+                None => (404, "", r#"{"message":"404 Not found"}"#.to_string()),
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n{headers}\
+                 content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (base, seen)
+}
+
+fn ok(body: &str) -> Answer {
+    (200, "", body.to_string())
+}
+
+/// One GitLab account on `base`, its token read from a variable the test sets.
+fn loopback_config(dir: &TempDir, base: &str, extra: &str) -> PathBuf {
+    dir.write(
+        "config.toml",
+        &format!(
+            "[accounts.lab]\nbase_url = \"{base}\"\nactions = true\n\
+             token = {{ env = \"BW_TEST_LOOPBACK_TOKEN\" }}\n\n\
+             [[watches]]\nid = \"w\"\naccount = \"lab\"\nproject = \"acme/web\"\nref = \"main\"\n{extra}"
+        ),
+    )
+}
+
+fn against(config: &Path, dir: &TempDir) -> Command {
+    let mut cmd = bin();
+    cmd.arg("--config")
+        .arg(config)
+        .env("BW_TEST_LOOPBACK_TOKEN", "glpat-LOOPBACK")
+        .env("HOME", &dir.0)
+        .env("XDG_STATE_HOME", &dir.0)
+        .env("XDG_DATA_HOME", &dir.0);
+    cmd
+}
+
+#[test]
+fn log_prints_the_tail_and_says_when_it_is_long_empty_or_unreadable() {
+    let (base, _) = routed(vec![(
+        "/jobs/7/trace",
+        vec![
+            (
+                206,
+                "content-range: bytes 100-117/118\r\n",
+                "first\n\nsecond line\n".into(),
+            ),
+            ok(""),
+            (500, "", "{}".into()),
+            ok("only line\n"),
+        ],
+    )]);
+    let dir = TempDir::new("loopback-log");
+    let config = loopback_config(&dir, &base, "");
+    let job = format!("{base}/acme/web/-/jobs/7");
+
+    let out = run(against(&config, &dir).args(["log", &job]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("second line"), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("only its end was read"),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = run(against(&config, &dir).args(["log", &job]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("the log is empty"),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = run(against(&config, &dir).args(["log", &job]));
+    assert_eq!(code(&out), 70, "{}", stderr(&out));
+
+    let out = run(against(&config, &dir).args(["log", "--json", &job]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("\"only line\""), "{}", stdout(&out));
+}
+
+#[test]
+fn retry_and_play_say_what_was_started_and_a_refusal_is_an_error() {
+    let (base, seen) = routed(vec![
+        (
+            "/jobs/7/retry",
+            vec![
+                ok(r#"{"id":8,"status":"pending","web_url":"https://gitlab.example/j/8"}"#),
+                (403, "", r#"{"message":"403 Forbidden"}"#.into()),
+            ],
+        ),
+        ("/jobs/9/play", vec![ok(r#"{"id":9,"status":"pending"}"#)]),
+    ]);
+    let dir = TempDir::new("loopback-actions");
+    let config = loopback_config(&dir, &base, "");
+    let job = |id: u32| format!("{base}/acme/web/-/jobs/{id}");
+
+    let out = run(against(&config, &dir).args(["retry", "--yes", &job(7)]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "retried job 7: https://gitlab.example/j/8"
+    );
+
+    let out = run(against(&config, &dir).args(["play", "--yes", &job(9)]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "started job 9 as job 9");
+
+    let out = run(against(&config, &dir).args(["retry", "--yes", &job(7)]));
+    assert_eq!(code(&out), 70, "{}", stderr(&out));
+    assert!(
+        seen.lock().unwrap().iter().all(|l| l.starts_with("POST ")),
+        "{:?}",
+        seen.lock().unwrap()
+    );
+}
+
+const LOOPBACK_PIPELINE: &str = r#"{"id":7,"iid":7,"project_id":1,"sha":"0123456789abcdef0123456789abcdef01234567","ref":"main","status":"failed","source":"push","web_url":"https://gitlab.example/p/7","created_at":"2026-11-01T10:00:00Z","updated_at":"2026-11-01T10:05:00Z"}"#;
+
+#[test]
+fn fixture_record_walks_a_pipeline_by_id_or_path_and_a_failure_is_an_error() {
+    let bridges = r#"[
+        {"id":70,"name":"trigger:child","stage":"t","status":"success","allow_failure":false,
+         "downstream_pipeline":{"id":8,"project_id":1,"sha":"0123456789abcdef0123456789abcdef01234567","ref":"main","status":"success"}},
+        {"id":71,"name":"trigger:dead","stage":"t","status":"failed","allow_failure":false,"downstream_pipeline":null}
+    ]"#;
+    let (base, _) = routed(vec![
+        ("/pipelines/7/jobs", vec![ok("[]")]),
+        ("/pipelines/7/bridges", vec![ok(bridges)]),
+        ("/pipelines/8/jobs", vec![ok("[]")]),
+        ("/projects/1/pipelines/7 ", vec![ok(LOOPBACK_PIPELINE)]),
+        (
+            "/projects/acme%2Fweb/pipelines/7 ",
+            vec![(500, "", "{}".into())],
+        ),
+    ]);
+    let dir = TempDir::new("loopback-record");
+    let config = loopback_config(&dir, &base, "");
+    let out_dir = dir.0.join("recorded");
+
+    let out = run(against(&config, &dir)
+        .args([
+            "fixture",
+            "record",
+            "--account",
+            "lab",
+            "--project",
+            "1",
+            "7",
+            "--out",
+        ])
+        .arg(&out_dir));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let printed = stdout(&out);
+    assert!(
+        printed.contains("bridge trigger:child -> child 8"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("bridge trigger:dead -> no child (dead bridge)"),
+        "{printed}"
+    );
+    assert!(printed.contains("Now write"), "{printed}");
+
+    let out = run(against(&config, &dir)
+        .args([
+            "fixture",
+            "record",
+            "--account",
+            "lab",
+            "--project",
+            "acme/web",
+            "7",
+            "--out",
+        ])
+        .arg(dir.0.join("failed")));
+    assert_eq!(code(&out), 70, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("recording failed"),
+        "{}",
+        stderr(&out)
+    );
+
+    // No --project: the watch's, a path.
+    let out = run(against(&config, &dir)
+        .args(["fixture", "record", "--account", "lab", "7", "--out"])
+        .arg(dir.0.join("default")));
+    assert_eq!(code(&out), 70, "{}", stderr(&out));
+}
+
+/// A pipeline that fails between two ticks is one notification, printed as
+/// one line.
+#[test]
+fn watch_prints_a_notification_as_one_line() {
+    let running = LOOPBACK_PIPELINE.replace("\"failed\"", "\"running\"");
+    let failed_job =
+        r#"[{"id":701,"name":"test","stage":"test","status":"failed","allow_failure":false}]"#;
+    let (base, _) = routed(vec![
+        ("/pipelines/7/jobs", vec![ok("[]"), ok(failed_job)]),
+        ("/pipelines/7/bridges", vec![ok("[]")]),
+        (
+            "/pipelines?",
+            vec![
+                ok(&format!("[{running}]")),
+                ok(&format!("[{LOOPBACK_PIPELINE}]")),
+            ],
+        ),
+    ]);
+    let dir = TempDir::new("loopback-watch");
+    let config = loopback_config(&dir, &base, "poll = { live_secs = 1, idle_secs = 1 }\n");
+    let out = run(against(&config, &dir).args(["watch", "--ticks", "2"]));
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    let line = stdout(&out)
+        .lines()
+        .find(|l| l.starts_with("notify ["))
+        .map(str::to_string);
+    assert!(line.is_some(), "{}", stdout(&out));
+}

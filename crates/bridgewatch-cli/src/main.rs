@@ -445,7 +445,7 @@ async fn run(cli: Cli) -> Outcome {
         Command::Wait(args) => wait::run(&config, args).await,
         Command::Fixture { action } => fixture(&config, action).await,
         Command::Init(args) => init(&config, *args, &SystemTokenProvider),
-        Command::Auth { action } => auth_command(&config, action).await,
+        Command::Auth { action } => auth_command(&config, action, &SystemTokenProvider).await,
         Command::Log(args) => job_log(&config, args).await,
         Command::Retry(args) => job_action(&config, args, JobAction::Retry).await,
         Command::Play(args) => job_action(&config, args, JobAction::Play).await,
@@ -552,21 +552,15 @@ async fn job_action(config_args: &ConfigArgs, args: JobActionArgs, action: JobAc
         target.account
     );
     if !args.yes {
-        if !std::io::stdin().is_terminal() {
-            return Err(Failure::new(
-                exit::USAGE,
-                anyhow::anyhow!(
-                    "not sending a {} without a confirmation: there is no terminal to ask on, \
-                     so pass --yes",
-                    action.as_str()
-                ),
-            ));
-        }
-        eprint!("{question} [y/N] ");
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer)?;
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            eprintln!("nothing sent");
+        let stdin = std::io::stdin();
+        let terminal = stdin.is_terminal();
+        if !confirmed(
+            &question,
+            action,
+            terminal,
+            &mut stdin.lock(),
+            &mut std::io::stderr(),
+        )? {
             return Ok(exit::FAILED);
         }
     }
@@ -584,6 +578,36 @@ async fn job_action(config_args: &ConfigArgs, args: JobActionArgs, action: JobAc
         (None, None) => println!("{done} job {}", target.job_id),
     }
     Ok(exit::OK)
+}
+
+/// Ask `question` on `err` and read the answer from `input`: only "y" or
+/// "yes" sends. With no terminal there is nobody to ask, which is a usage
+/// error rather than a no. `main` passes the process's stdin and stderr.
+fn confirmed(
+    question: &str,
+    action: JobAction,
+    terminal: bool,
+    input: &mut dyn std::io::BufRead,
+    err: &mut dyn std::io::Write,
+) -> std::result::Result<bool, Failure> {
+    if !terminal {
+        return Err(Failure::new(
+            exit::USAGE,
+            anyhow::anyhow!(
+                "not sending a {} without a confirmation: there is no terminal to ask on, \
+                 so pass --yes",
+                action.as_str()
+            ),
+        ));
+    }
+    write!(err, "{question} [y/N] ")?;
+    let mut answer = String::new();
+    input.read_line(&mut answer)?;
+    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        return Ok(true);
+    }
+    writeln!(err, "nothing sent")?;
+    Ok(false)
 }
 
 /// `bridgewatch init`: the wizard's `build_config`, answered from flags.
@@ -1071,12 +1095,16 @@ fn load(args: &ConfigArgs) -> std::result::Result<config::Loaded, Failure> {
     }
 }
 
-/// `bridgewatch auth`, against the network and the OS credential store.
-async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
+/// `bridgewatch auth`, against the network and `store`: the OS credential
+/// store, from `main`.
+async fn auth_command(
+    args: &ConfigArgs,
+    action: auth::AuthAction,
+    store: &dyn TokenProvider,
+) -> Outcome {
     let loaded = load(args)?;
     start_logging(&loaded);
     let config = loaded.config;
-    let store = SystemTokenProvider;
     let now = bridgewatch_core::oauth::now();
     match action {
         auth::AuthAction::Login { account } => {
@@ -1101,7 +1129,7 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
                 &config,
                 &account,
                 transport,
-                &store,
+                store,
                 &bridgewatch_core::oauth::BuiltinClients::shipped(),
                 tokio::time::sleep,
                 cancel,
@@ -1111,7 +1139,7 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
             .await
         }
         auth::AuthAction::Logout { account } => {
-            auth::logout(&config, &account, &store, &mut std::io::stdout())
+            auth::logout(&config, &account, store, &mut std::io::stdout())
         }
         auth::AuthAction::Status { account } => {
             // One request per bound own token, for its expiry (F3).
@@ -1120,7 +1148,7 @@ async fn auth_command(args: &ConfigArgs, action: auth::AuthAction) -> Outcome {
                     .map(|t| Arc::new(t) as Arc<dyn bridgewatch_core::client::Transport>)
             };
             // One read per keyring item for the whole run: each can prompt.
-            let once = auth::ReadOnce::new(&store);
+            let once = auth::ReadOnce::new(store);
             let expiries =
                 auth::own_expiries(&config, account.as_deref(), &once, &transport_for).await;
             // Read the clock after the lookups, which can take a while each.
@@ -1288,6 +1316,15 @@ fn code_for(state: IconState) -> i32 {
 }
 
 async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
+    watch_until(config_args, args, tokio::signal::ctrl_c()).await
+}
+
+/// [`watch`], stopped by `interrupt`: Ctrl-C, from `watch`.
+async fn watch_until<F: Future>(
+    config_args: &ConfigArgs,
+    args: WatchArgs,
+    interrupt: F,
+) -> Outcome {
     let loaded = load(config_args)?;
     start_logging(&loaded);
     let mut config = loaded.config;
@@ -1323,7 +1360,6 @@ async fn watch(config_args: &ConfigArgs, args: WatchArgs) -> Outcome {
     // group, so one keypress is two signals here. The first completes this
     // listener and `watch` returns its verdict; the rest find tokio's handler
     // still installed and do nothing. Never turn a second SIGINT into "force quit".
-    let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
     // `ctrl_c()` is an async fn: it installs the handler on its FIRST poll, not when
     // called (tokio 1.54.1, signal/ctrl_c.rs). Polled once here, so the handler is in
@@ -1898,6 +1934,150 @@ mod tests {
         #[test]
         fn a_repoint_with_nothing_to_bind_goes_ahead() {
             assert_eq!(repoint("empty", &Memory::default()), Ok(super::exit::OK));
+        }
+    }
+
+    mod seams {
+        use std::io::{BufRead as _, Read as _, Write as _};
+
+        use super::super::{
+            ConfigArgs, JobAction, WatchArgs, auth_command, confirmed, exit, watch_until,
+        };
+        use crate::auth::{AuthAction, tests::Memory};
+
+        /// The write confirmation: only "y" or "yes" sends; no terminal is a
+        /// usage error, not a no.
+        #[test]
+        fn a_write_is_confirmed_by_y_or_yes_and_refused_without_a_terminal() {
+            for (answer, sends) in [("y\n", true), ("YES\n", true), ("n\n", false), ("", false)] {
+                let mut err = Vec::new();
+                let got = confirmed(
+                    "Retry job 7?",
+                    JobAction::Retry,
+                    true,
+                    &mut answer.as_bytes(),
+                    &mut err,
+                )
+                .ok();
+                assert_eq!(got, Some(sends), "{answer:?}");
+                let said = String::from_utf8(err).unwrap();
+                assert!(said.starts_with("Retry job 7? [y/N] "), "{said}");
+                assert_eq!(said.ends_with("nothing sent\n"), !sends, "{said}");
+            }
+            let refused = confirmed(
+                "?",
+                JobAction::Play,
+                false,
+                &mut "y\n".as_bytes(),
+                &mut Vec::new(),
+            );
+            assert!(matches!(refused, Err(f) if f.code == exit::USAGE));
+        }
+
+        fn temp_config(name: &str, raw: &str) -> ConfigArgs {
+            let dir = std::env::temp_dir().join(format!("bw-cli-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("config.toml");
+            std::fs::write(&path, raw).unwrap();
+            ConfigArgs { config: Some(path) }
+        }
+
+        /// A Ctrl-C already pending when `watch` starts ends it with the
+        /// unknown verdict, before the first tick.
+        #[tokio::test]
+        async fn a_watch_interrupted_before_its_first_tick_is_unknown() {
+            let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../bridgewatch-core/tests/fixtures/4cfaced9-deployed");
+            let config = temp_config(
+                "watch-int",
+                "[accounts.gl]\ntoken = { env = \"BW_NEVER\" }\n[[watches]]\nid = \"w\"\naccount = \"gl\"\nproject = 1\n",
+            );
+            let args = WatchArgs {
+                watches: Vec::new(),
+                json: false,
+                ticks: None,
+                fixture: Some(fixture),
+            };
+            let code = watch_until(&config, args, std::future::ready(())).await;
+            assert_eq!(code.ok(), Some(exit::UNKNOWN));
+        }
+
+        /// A loopback server answering each connection with the next of the
+        /// answers `make` gives for its address, after reading the request.
+        fn serve(make: impl FnOnce(&str) -> Vec<(u16, String)>) -> String {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let answers = make(&base);
+            std::thread::spawn(move || {
+                for ((status, body), stream) in answers.into_iter().zip(listener.incoming()) {
+                    let mut stream = stream.unwrap();
+                    let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        reader.read_line(&mut line).unwrap();
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some(n) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                            length = n.trim().parse().unwrap();
+                        }
+                    }
+                    reader.read_exact(&mut vec![0; length]).unwrap();
+                    write!(
+                        stream,
+                        "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n\
+                         content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .unwrap();
+                }
+            });
+            base
+        }
+
+        /// `auth login`, `status` and `logout` as `main` runs them, over a
+        /// store in memory and a self-managed GitLab on loopback.
+        #[tokio::test]
+        async fn auth_signs_in_reports_and_signs_out_through_the_store_it_is_given() {
+            let base = serve(|base| {
+                vec![
+                    (
+                        200,
+                        format!(
+                            r#"{{"device_code":"d","user_code":"U-1","verification_uri":"{base}/oauth/device","expires_in":60,"interval":1}}"#
+                        ),
+                    ),
+                    (
+                        200,
+                        r#"{"access_token":"gl-A","token_type":"Bearer","expires_in":7200,"scope":"read_api","created_at":1}"#
+                            .into(),
+                    ),
+                    (200, r#"{"id":1,"username":"ada"}"#.into()),
+                ]
+            });
+            let config = temp_config(
+                "auth",
+                &format!(
+                    "[accounts.lab]\nbase_url = \"{base}\"\ntoken = {{ oauth = {{ client_id = \"app\" }} }}\n"
+                ),
+            );
+            let store = Memory::default();
+            let lab = || "lab".to_string();
+            for (action, code) in [
+                (AuthAction::Login { account: lab() }, exit::OK),
+                (AuthAction::Status { account: None }, exit::OK),
+                (AuthAction::Logout { account: lab() }, exit::OK),
+                (
+                    AuthAction::Status {
+                        account: Some(lab()),
+                    },
+                    exit::ERROR,
+                ),
+            ] {
+                let got = auth_command(&config, action, &store).await;
+                assert_eq!(got.ok(), Some(code));
+            }
         }
     }
 }
