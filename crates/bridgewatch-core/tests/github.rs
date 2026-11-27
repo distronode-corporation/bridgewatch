@@ -1690,6 +1690,13 @@ async fn a_redirect_and_an_unlisted_status_are_errors_of_their_own() {
 /// forever; and a next link naming only the origin is the API root.
 #[tokio::test]
 async fn jobs_pagination_stops_at_its_cap_and_follows_a_bare_origin() {
+    // A listening subscriber, so the warning's fields are evaluated.
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_test_writer()
+            .finish(),
+    );
     let next =
         "<https://api.github.com/repositories/1/actions/runs/4001/jobs?page=2>; rel=\"next\"";
     let page = jobs_body(&[job_body(

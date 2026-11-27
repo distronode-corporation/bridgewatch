@@ -3230,3 +3230,56 @@ fn a_one_click_project_listed_twice_is_one_watch() {
         built.toml
     );
 }
+
+/// Re-running for an existing watch with a different numeric project
+/// rewrites the project as a number, and with no notification answers
+/// leaves the watch's notifications as the file had them.
+#[test]
+fn re_running_with_a_new_numeric_project_and_no_notify_answers() {
+    let example = support::example_config_raw();
+    let before = load(&example);
+    let changed = WizardAnswers {
+        project: Some(ProjectRef::Id(999)),
+        watch_id: "main-push".into(),
+        notify: None,
+        ..answers()
+    };
+    let built = wizard::build_config(&changed, Some(&example)).unwrap();
+    let after = load(&built.toml);
+    let watch = |c: &config::Config| {
+        c.watches
+            .iter()
+            .find(|w| w.id == "main-push")
+            .cloned()
+            .expect("main-push")
+    };
+    assert_eq!(watch(&after).project, ProjectRef::Id(999));
+    assert!(built.toml.contains("project = 999"), "{}", built.toml);
+    assert_eq!(
+        serde_json::to_value(&watch(&after).notify).unwrap(),
+        serde_json::to_value(&watch(&before).notify).unwrap()
+    );
+}
+
+/// One project ticked twice over a file that already follows it is reported
+/// as already watched once.
+#[test]
+fn a_project_already_followed_and_ticked_twice_is_reported_once() {
+    let first = wizard::build_config(&quick_answers(vec![quick(11, "g/web", None)]), None).unwrap();
+    let again = wizard::build_config(
+        &quick_answers(vec![quick(11, "g/web", None), quick(11, "g/web", None)]),
+        Some(&first.toml),
+    )
+    .unwrap();
+    assert_eq!(again.already_watched, ["web-main"]);
+}
+
+/// The real probe answers for an entry nobody wrote: no entry, or the
+/// platform tool's own complaint, and never a panic.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn the_system_keyring_probe_answers_for_an_entry_that_does_not_exist() {
+    use bridgewatch_core::wizard::KeyringProbe as _;
+    let answer = wizard::SystemKeyringProbe.exists("bridgewatch-test-no-such-entry", "nobody");
+    assert!(!matches!(answer, Ok(true)), "{answer:?}");
+}

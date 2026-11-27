@@ -2327,3 +2327,61 @@ async fn a_refresh_refused_because_another_process_refreshed_adopts_its_sign_in(
     );
     assert_eq!(session.access_token().await.unwrap().expose(), "gl-NEWER");
 }
+
+/// A poll the network redirected is retried at the same pace: only a rate
+/// limit or a server error slows the next one.
+#[tokio::test]
+async fn a_redirected_poll_is_retried_without_slowing_down() {
+    let t = ScriptTransport::new();
+    t.reply("/login/device/code", 200, GH_DEVICE);
+    t.reply("/login/oauth/access_token", 302, "");
+    t.reply("/login/oauth/access_token", 200, GH_TOKEN);
+    let device = oauth::start(&t, &github_endpoints(), "c").await.unwrap();
+    let slept = Arc::new(Mutex::new(Vec::new()));
+    oauth::wait_for_token(
+        &t,
+        &github_endpoints(),
+        "c",
+        &device,
+        recording_sleep(slept.clone()),
+        std::future::pending(),
+        &mut |_| {},
+    )
+    .await
+    .expect("the second poll is approved");
+    assert_eq!(*slept.lock().unwrap(), vec![5, 5]);
+}
+
+/// A refresh answered with JSON that is neither a token nor an error code
+/// is "sign in again", named by its status.
+#[tokio::test]
+async fn a_refresh_answered_with_an_empty_object_is_sign_in_again_by_status() {
+    let t = ScriptTransport::new();
+    t.reply("/login/oauth/access_token", 400, "{}");
+    let error = oauth::refresh(&t, &github_endpoints(), "c", &Secret::new("ghr_R"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, OAuthError::SignInAgain { code } if code == "HTTP 400"),
+        "{error:?}"
+    );
+}
+
+/// A stored sign-in for another instance is not used, and the log says why.
+#[tokio::test]
+async fn a_stored_sign_in_for_another_instance_is_sign_in_again() {
+    let _log = listening();
+    let memory = MemoryStore::new();
+    store::save(
+        "gl",
+        &set("gl-A", None, None, "https://gitlab.example.com"),
+        memory.as_ref(),
+    )
+    .unwrap();
+    let clock = Clock::at(2_000);
+    let (session, _) = gitlab_session(Arc::new(ScriptTransport::new()), &memory, &clock);
+    assert!(matches!(
+        session.access_token().await,
+        Err(ClientError::SignInAgain { .. })
+    ));
+}

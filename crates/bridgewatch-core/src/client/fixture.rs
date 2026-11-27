@@ -81,9 +81,10 @@ impl FixtureTransport {
 
     /// Forget the recorded request paths.
     pub fn clear_seen(&self) {
-        if let Ok(mut s) = self.seen.lock() {
-            s.clear();
-        }
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// The pipelines in `list.json`, newest first, as the API would return them.

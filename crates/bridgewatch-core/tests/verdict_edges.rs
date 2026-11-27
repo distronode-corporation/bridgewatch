@@ -363,3 +363,55 @@ mod scripts {
         }
     }
 }
+
+mod small {
+    use super::*;
+
+    /// A manual trigger whose child holds gates is parked on those gates,
+    /// named by them rather than by the trigger.
+    #[test]
+    fn a_manual_trigger_is_parked_on_its_childs_own_gates() {
+        let jobs = [job(1, "deploy:prod", "manual")];
+        let v = bridge::verdict(
+            &trigger("trigger:web", "manual", Some("manual")),
+            Some(&jobs),
+            &[],
+            &rules(""),
+        );
+        assert_eq!(
+            v,
+            BridgeVerdict::AwaitingGate {
+                jobs: vec!["deploy:prod".into()]
+            }
+        );
+    }
+
+    /// Every state name parses back to its state, `cancelled` included, and
+    /// nothing else does.
+    #[test]
+    fn every_icon_state_name_parses_back() {
+        for state in [
+            IconState::Unknown,
+            IconState::Failed,
+            IconState::DeployedWithFailure,
+            IconState::Deployed,
+            IconState::Running,
+            IconState::Canceled,
+            IconState::ParkedGate,
+            IconState::SucceededNoDeploy,
+        ] {
+            assert_eq!(IconState::parse(state.as_str()), Some(state));
+        }
+        assert_eq!(IconState::parse("cancelled"), Some(IconState::Canceled));
+        assert_eq!(IconState::parse("green"), None);
+    }
+
+    /// A time past what a calendar can hold is shown as its raw seconds.
+    #[test]
+    fn a_stamp_out_of_range_is_its_seconds() {
+        assert_eq!(
+            bridgewatch_core::health::stamp(i64::MAX),
+            i64::MAX.to_string()
+        );
+    }
+}

@@ -189,7 +189,7 @@ impl ConfigEditor {
     pub fn unset(&mut self, path: &str) -> Result<bool, EditError> {
         let segments = split_path(path);
         let refs: Vec<&str> = segments.iter().map(String::as_str).collect();
-        unset_in_table(self.doc.as_table_mut(), &refs, path)
+        Ok(unset_in_table(self.doc.as_table_mut(), &refs))
     }
 
     /// The index of the watch with this id, if it exists.
@@ -255,9 +255,10 @@ impl ConfigEditor {
 /// header, which is also how the shipped example writes it.
 fn watch_to_table(watch: &Watch) -> Result<Table, EditError> {
     let rendered = toml::to_string(watch).map_err(|e| EditError::Serialize(e.to_string()))?;
+    // toml's own output is TOML.
     let doc = rendered
         .parse::<DocumentMut>()
-        .map_err(|e| EditError::Serialize(e.to_string()))?;
+        .expect("toml's output parses");
     let mut table = doc.as_table().clone();
     inline_sub_tables(&mut table);
     table.set_implicit(false);
@@ -271,14 +272,17 @@ fn inline_sub_tables(table: &mut Table) {
         .filter(|(_, item)| item.is_table())
         .map(|(k, _)| k.to_string())
         .collect();
-    // Each key was just read off this table as a sub-table, so the match holds.
+    // Each key was just read off this table as a sub-table, so `expect` holds.
     for key in keys {
-        if let Some(Item::Table(mut sub)) = table.remove(&key) {
-            inline_sub_tables(&mut sub);
-            if let Some(inline) = sub.into_inline_table().into() {
-                table.insert(&key, Item::Value(Value::InlineTable(inline)));
-            }
-        }
+        let mut sub = table
+            .remove(&key)
+            .and_then(|item| item.into_table().ok())
+            .expect("a key just read as a sub-table");
+        inline_sub_tables(&mut sub);
+        table.insert(
+            &key,
+            Item::Value(Value::InlineTable(sub.into_inline_table())),
+        );
     }
 }
 
@@ -289,7 +293,7 @@ fn set_in_table(
     path: &str,
     is_root: bool,
 ) -> Result<(), EditError> {
-    let (head, rest) = split(segments, path)?;
+    let (head, rest) = split(segments);
     if rest.is_empty() {
         // Preserve the existing decor (a trailing comment on the line) when the
         // key is already there.
@@ -342,7 +346,7 @@ fn set_in_item(
         Item::Table(t) => set_in_table(t, segments, value, path, false),
         Item::Value(Value::InlineTable(t)) => set_in_inline(t, segments, value, path),
         Item::ArrayOfTables(a) => {
-            let (head, rest) = split(segments, path)?;
+            let (head, rest) = split(segments);
             let index: usize = head.parse().map_err(|_| EditError::NotATable {
                 path: so_far.to_string(),
                 segment: head.to_string(),
@@ -371,7 +375,7 @@ fn set_in_inline(
     value: Value,
     path: &str,
 ) -> Result<(), EditError> {
-    let (head, rest) = split(segments, path)?;
+    let (head, rest) = split(segments);
     if rest.is_empty() {
         if let Some(old) = table.get_mut(head) {
             let decor = old.decor().clone();
@@ -412,54 +416,48 @@ fn set_in_inline(
     }
 }
 
-fn unset_in_table(table: &mut Table, segments: &[&str], path: &str) -> Result<bool, EditError> {
-    let (head, rest) = split(segments, path)?;
+fn unset_in_table(table: &mut Table, segments: &[&str]) -> bool {
+    let (head, rest) = split(segments);
     if rest.is_empty() {
-        return Ok(table.remove(head).is_some());
+        return table.remove(head).is_some();
     }
     match table.get_mut(head) {
-        Some(Item::Table(t)) => unset_in_table(t, rest, path),
-        Some(Item::Value(Value::InlineTable(t))) => unset_in_inline(t, rest, path),
+        Some(Item::Table(t)) => unset_in_table(t, rest),
+        Some(Item::Value(Value::InlineTable(t))) => unset_in_inline(t, rest),
         Some(Item::ArrayOfTables(a)) => {
-            let (idx, tail) = split(rest, path)?;
+            let (idx, tail) = split(rest);
             let Ok(index) = idx.parse::<usize>() else {
-                return Ok(false);
+                return false;
             };
             let Some(t) = a.get_mut(index) else {
-                return Ok(false);
+                return false;
             };
             if tail.is_empty() {
                 a.remove(index);
-                return Ok(true);
+                return true;
             }
-            unset_in_table(t, tail, path)
+            unset_in_table(t, tail)
         }
-        _ => Ok(false),
+        _ => false,
     }
 }
 
-fn unset_in_inline(
-    table: &mut InlineTable,
-    segments: &[&str],
-    path: &str,
-) -> Result<bool, EditError> {
-    let (head, rest) = split(segments, path)?;
+fn unset_in_inline(table: &mut InlineTable, segments: &[&str]) -> bool {
+    let (head, rest) = split(segments);
     if rest.is_empty() {
-        return Ok(table.remove(head).is_some());
+        return table.remove(head).is_some();
     }
     match table.get_mut(head) {
-        Some(Value::InlineTable(t)) => unset_in_inline(t, rest, path),
-        _ => Ok(false),
+        Some(Value::InlineTable(t)) => unset_in_inline(t, rest),
+        _ => false,
     }
 }
 
-fn split<'a>(segments: &'a [&'a str], path: &str) -> Result<(&'a str, &'a [&'a str]), EditError> {
-    segments
-        .split_first()
-        .map(|(h, r)| (*h, r))
-        .ok_or_else(|| EditError::NoSuchKey {
-            path: path.to_string(),
-        })
+/// The first segment and the rest. Never empty: `split_path` always returns a
+/// segment, and every recursion is on a rest already checked to be non-empty.
+fn split<'a>(segments: &'a [&'a str]) -> (&'a str, &'a [&'a str]) {
+    let (head, rest) = segments.split_first().expect("a non-empty path");
+    (head, rest)
 }
 
 /// Split a dotted path into segments, honouring double quotes.

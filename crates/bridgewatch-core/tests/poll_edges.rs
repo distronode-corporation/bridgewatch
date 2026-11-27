@@ -393,3 +393,20 @@ async fn a_deploy_older_than_a_full_history_is_not_learned_and_nothing_is_writte
         written
     );
 }
+
+#[tokio::test]
+async fn a_found_commit_keeps_its_title_when_titles_are_on() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/projects/1/pipelines?",
+        200,
+        &format!("[{}]", row(7, "success")),
+    );
+    t.reply("/pipelines/7/jobs", 200, "[]");
+    t.reply("/pipelines/7/bridges", 200, "[]");
+    let poller = scripted(ONE, &t).with_commit_titles(true);
+    assert!(matches!(
+        poller.look_up_commit("web", SHA).await,
+        Ok(CommitLookup::Found(_))
+    ));
+}

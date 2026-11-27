@@ -219,10 +219,10 @@ mod tests {
             one_line(&snapshot),
             "00:06:30 running | main-push=0123456 running (usually ~11m, 6m 30s in)"
         );
+        let table = super::snapshot(&snapshot);
         assert!(
-            super::snapshot(&snapshot).contains("      eta: usually ~11m, 6m 30s in\n"),
-            "{}",
-            super::snapshot(&snapshot)
+            table.contains("      eta: usually ~11m, 6m 30s in\n"),
+            "{table}"
         );
     }
 
@@ -261,5 +261,20 @@ mod tests {
         assert_eq!(approx_duration(90), "~2m");
         assert_eq!(approx_duration(3_580), "~1h 00m");
         assert_eq!(approx_duration(3_900), "~1h 05m");
+    }
+
+    /// A watch's error, a snapshot's errors and the failures after a deploy
+    /// are each printed, and an erroring watch is part of the fingerprint.
+    #[test]
+    fn errors_and_failures_after_a_deploy_are_printed_and_fingerprinted() {
+        let mut snapshot = snapshot_with_eta(None);
+        snapshot.errors = vec!["main-push: 503".into()];
+        snapshot.watches[0].error = Some("503".into());
+        snapshot.watches[0].rows[0].post_deploy_failures = vec!["smoke".into()];
+        let table = super::snapshot(&snapshot);
+        assert!(table.contains("\nerrors:\n  main-push: 503\n"), "{table}");
+        assert!(table.contains("  error: 503\n"), "{table}");
+        assert!(table.contains("      after deploy: smoke\n"), "{table}");
+        assert!(fingerprint(&snapshot).ends_with("|main-push:err:503"));
     }
 }

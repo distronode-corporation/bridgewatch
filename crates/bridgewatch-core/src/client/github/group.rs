@@ -212,9 +212,8 @@ pub(super) fn fold(
             }
             current.push(member);
         }
-        if !current.is_empty() {
-            groups.push((anchor, build(current, window, commit_url, expect)));
-        }
+        // A key holds at least one run, so the last group is never empty.
+        groups.push((anchor, build(current, window, commit_url, expect)));
     }
 
     if page_full && let Some(oldest) = oldest_on_page {

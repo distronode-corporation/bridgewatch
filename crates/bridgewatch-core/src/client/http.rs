@@ -878,7 +878,9 @@ fn range_start(header: &str) -> Option<u64> {
         .trim()
         .strip_prefix("bytes ")?
         .split('-')
-        .next()?
+        // `split` always yields a first piece, if only an empty one.
+        .next()
+        .unwrap_or_default()
         .trim()
         .parse()
         .ok()
@@ -892,16 +894,14 @@ fn range_start(header: &str) -> Option<u64> {
 /// `builder error` on every request, forever, which is unactionable; the cause
 /// says `failed to parse header value`. Walk the chain.
 fn describe(error: &reqwest::Error) -> String {
-    let mut parts = vec![strip_url(&error.to_string())];
-    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
-    while let Some(cause) = source {
-        let text = strip_url(&cause.to_string());
-        if !parts.contains(&text) {
-            parts.push(text);
-        }
-        source = cause.source();
-    }
-    parts.join(": ")
+    let first: &(dyn std::error::Error + 'static) = error;
+    let mut seen = std::collections::HashSet::new();
+    std::iter::successors(Some(first), |e| e.source())
+        .map(|e| strip_url(&e.to_string()))
+        // A cause that only repeats an earlier one says nothing new.
+        .filter(|text| seen.insert(text.clone()))
+        .collect::<Vec<_>>()
+        .join(": ")
 }
 
 /// reqwest puts the full URL in some error strings. It never contains a token

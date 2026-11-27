@@ -405,11 +405,17 @@ impl Poller {
                 state.policy.forget_refusals();
             }
         }
-        for name in &recovered {
-            if retry.accounts.get(name).is_some_and(expiry_costs_a_request) {
-                self.expiry_due.insert(name.clone());
-            }
-        }
+        self.expiry_due.extend(
+            recovered
+                .iter()
+                .filter(|name| {
+                    retry
+                        .accounts
+                        .get(*name)
+                        .is_some_and(expiry_costs_a_request)
+                })
+                .cloned(),
+        );
         recovered
     }
 
@@ -643,9 +649,12 @@ impl Poller {
                         .last_view
                         .as_ref()
                         .expect("a deferred watch has a view");
-                    if let Some(e) = &view.error {
-                        errors.push(format!("{}: {e}", state.watch.id));
-                    }
+                    // The error that deferred it is on that view.
+                    let e = view
+                        .error
+                        .as_ref()
+                        .expect("a deferred watch's view says why");
+                    errors.push(format!("{}: {e}", state.watch.id));
                     // Nothing was fetched, but time still passed: the
                     // elapsed half of an estimate is re-read.
                     let mut view = view.clone();
@@ -1398,9 +1407,11 @@ async fn fetch_detail(
                 }
                 None => {}
             }
-            if let Some(nested) = child_bridges.get(&child.id) {
-                next.push((nested.clone(), child.project, child.previous));
-            }
+            // Fetched just now, or cached when it was not due: either way held.
+            let nested = child_bridges
+                .get(&child.id)
+                .expect("a child walked below has its bridges");
+            next.push((nested.clone(), child.project, child.previous));
         }
         frontier = next;
     }

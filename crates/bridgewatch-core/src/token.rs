@@ -1521,10 +1521,10 @@ mod tests {
     fn a_keychain_lookup_that_hangs_is_killed_and_says_so_rather_than_no_entry() {
         let started = std::time::Instant::now();
         let err = lookup("sleep 30", 150).expect_err("a hung lookup is an error");
+        let waited = started.elapsed();
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "killed at the deadline, not waited out: {:?}",
-            started.elapsed()
+            waited < std::time::Duration::from_secs(5),
+            "killed at the deadline, not waited out: {waited:?}"
         );
         assert!(
             matches!(&err, TokenError::Store { service, message }
