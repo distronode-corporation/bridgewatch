@@ -64,21 +64,20 @@ bridgewatch-app, so it is not the whole workspace.
 
 ## CI, the whole workspace: 2026-11-27, pull request #141 (the Tauri shell)
 
-The `coverage` job on pull request #141 at `dbb5b91`
-([run 45996213756](https://github.com/distronode-corporation/bridgewatch/actions/runs/45996213756)),
-on `main` at `75033f8` plus that pull request, printed, from `scripts/check-coverage.py`:
+The `coverage` and `branches` jobs on pull request #141 at `42251b3`, merged with `main` at
+`6f259ed` ([run 46004876940](https://github.com/distronode-corporation/bridgewatch/actions/runs/46004876940)),
+printed, from `scripts/check-coverage.py`:
 
-| Crate | Files | Lines | Covered | Coverage | Floor |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| bridgewatch-core | 40 | 11003 | 10449 | 94.96% | 93% |
-| bridgewatch-cli | 4 | 3047 | 2746 | 90.12% | 90% |
-| bridgewatch-app | 18 | 6001 | 4253 | 70.87% | 61%, now 70% |
-| **all three crates** | **62** | **20051** | **17448** | **87.02%** | |
+| Crate | Files | Lines | Covered | Coverage | Branches | Covered | Coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| bridgewatch-core | 40 | 11101 | 11101 | 100.00% | 1742 | 1656 | 95.06% |
+| bridgewatch-cli | 4 | 4129 | 4129 | 100.00% | 316 | 297 | 93.98% |
+| bridgewatch-app | 18 | 6001 | 4253 | 70.87% | 569 | 281 | 49.38% |
 
-bridgewatch-app rose from 61.07% (3345 of 5477). The line total grew because the new tests
-live in the same files as the code (a binary crate has no separate test target to put them
-in) and the summary counts test lines too. The branch figure is not on this table: `main`
-had no branches job when this ran (it arrives with #138).
+bridgewatch-app rose from 61.07% of lines (3345 of 5477) and 42.38% of branches (231 of 545),
+and its floors from 61 and 42 to 70 and 49. The totals grew because the new tests live in the
+same files as the code (a binary crate has no separate test target to put them in) and the
+summary counts test lines and branches too.
 
 ### bridgewatch-app: what the tests do not reach, per file
 

@@ -33,5 +33,5 @@ reason = "Every line: CI measured 100.00% of lines (4129 of 4129) on the fourth 
 
 [crates.bridgewatch-app]
 floor = 70
-branch_floor = 42
-reason = "Lines: 70.87% (4253 of 6001) on the app coverage pull request (#141), rounded down; branches as CI's branches job measured them there. What is left needs a running desktop app (a window, the tray, a global shortcut, the run loop, OS services): docs/coverage.md lists it per file, and #143 tracks it."
+branch_floor = 49
+reason = "On the app coverage pull request (#141), merged with main at 6f259ed: CI measured 70.87% of lines (4253 of 6001) and 49.38% of branches (281 of 569), each rounded down. What is left needs a running desktop app (a window, the tray, a global shortcut, the run loop, OS services): docs/coverage.md lists it per file, and #143 tracks it."
