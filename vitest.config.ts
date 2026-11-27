@@ -5,7 +5,7 @@
 import { defineConfig } from "vitest/config";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
-import { isSvelteTemplateFallback } from "./vitest.svelte-generated";
+import { ignoreSvelteGenerated } from "./vitest.svelte-generated";
 
 // A separate config from vite.config.ts on purpose: the app build must not
 // carry a test environment, and the component tests need the svelte plugin in
@@ -32,21 +32,22 @@ export default defineConfig({
     // `npx vitest run --coverage` (CI's `frontend` job) fails under these floors.
     // Every file under src/ is measured, loaded by a test or not, the vendored
     // shadcn-svelte components included; there is no exclusion list, only the
-    // one compiler-generated node below. The floors are the measured level
+    // compiler-generated nodes below. The floors are the measured level
     // rounded down, and only go up: a change that raises coverage raises them in
     // the same pull request.
     coverage: {
       provider: "v8",
       include: ["src/**"],
       reporter: ["text-summary"],
-      // The one node left out of the report, the way Vitest already leaves out
-      // Vite's own generated SSR and CommonJS-interop code: the `?? ''` the Svelte
-      // compiler writes around each template `{expression}`. Its right side runs
-      // only when a typed value is null, so no test could reach it without
-      // feeding a component a value its types forbid. The match is exact, and
-      // src/lib/svelte-generated.test.ts proves it matches no hand-written node.
-      ignoreNode: isSvelteTemplateFallback,
-      thresholds: { statements: 94, branches: 88, functions: 94, lines: 96 },
+      // The nodes left out of the report, the way Vitest already leaves out
+      // Vite's own generated SSR and CommonJS-interop code: three shapes the
+      // Svelte compiler writes (the `?? ''` around a template expression, the
+      // dev-mode `$$ownership_validator.binding` check, and the `x !== (x = v)`
+      // attribute cache). No test could reach their other side without misusing
+      // a component. Each match is exact, and src/lib/svelte-generated.test.ts
+      // proves none of them matches a hand-written node (vitest.svelte-generated.ts).
+      ignoreNode: ignoreSvelteGenerated,
+      thresholds: { statements: 99, branches: 99, functions: 99, lines: 99 },
     },
   },
 });

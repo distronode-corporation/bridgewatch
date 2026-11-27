@@ -97,10 +97,11 @@ SPDX-License-Identifier: Apache-2.0
     );
   }
 
-  function openJob(event: MouseEvent) {
+  // The link renders only when the job has a page, so `url` is always set.
+  function openJob(event: MouseEvent, url: string) {
     event.preventDefault();
     event.stopPropagation();
-    if (job.web_url) onOpen(job.web_url);
+    onOpen(url);
   }
 </script>
 
@@ -139,6 +140,7 @@ SPDX-License-Identifier: Apache-2.0
   {/if}
 
   {#if log}
+    {@const pageUrl = job.web_url}
     <div class="flex flex-col gap-1" data-slot="job-log">
       {#if loaded.state === "loading"}
         <p class="text-muted-foreground" role="status" data-slot="job-log-loading">Loading the log…</p>
@@ -162,12 +164,12 @@ SPDX-License-Identifier: Apache-2.0
           <p class="text-muted-foreground" data-slot="job-log-truncated">Only the end of a long log was read.</p>
         {/if}
       {/if}
-      {#if job.web_url}
+      {#if pageUrl}
         <a
-          href={job.web_url}
+          href={pageUrl}
           class="text-muted-foreground focus-visible:ring-ring self-start rounded-sm outline-none hover:underline focus-visible:ring-2"
           data-slot="job-log-open"
-          onclick={openJob}>Open the full log</a
+          onclick={(event) => openJob(event, pageUrl)}>Open the full log</a
         >
       {/if}
     </div>

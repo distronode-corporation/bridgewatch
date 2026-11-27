@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { flushSync, mount, unmount, type ComponentProps } from "svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { reactive } from "../../lib/__tests__/props.svelte";
 import type { Edit } from "../../lib/types";
@@ -269,3 +269,75 @@ describe("WatchesTab, only my pipelines (F3)", () => {
   });
 });
 
+
+describe("WatchesTab on a partial or hand-edited file", () => {
+  function mountTab(config: unknown, jobOrder: string[][] = []) {
+    host = document.createElement("div");
+    document.body.append(host);
+    const edits: Edit[][] = [];
+    component = mount(WatchesTab, {
+      target: host,
+      props: {
+        config,
+        jobOrder,
+        onedit: (e: Edit[]) => {
+          edits.push(e);
+          return Promise.resolve();
+        },
+        onremove: () => {},
+        onmove: () => {},
+        onadd: () => {},
+      },
+    });
+    flushSync();
+    return edits;
+  }
+
+  it("lists no watch for a file with no watches and no accounts", () => {
+    mountTab({});
+    expect(host.querySelectorAll("section.watch")).toHaveLength(0);
+  });
+
+  it("shows a watch with no id as (no id), and dims nothing for an account the file does not define", () => {
+    mountTab({ watches: [{ account: 7, ref: "main" }] });
+    expect(host.querySelector("section.watch header strong")?.textContent).toBe("(no id)");
+    expect(host.querySelector('[data-inapplicable="true"]')).toBeNull();
+  });
+
+  it("reads job overrides in the object's order when the file's order is missing, and writes them under the watch", () => {
+    const edits = mountTab({
+      accounts: { lab: {} },
+      watches: [{ id: "w", account: "lab", jobs: { "lint": "warning", "e2e": "gate" } }],
+    });
+    const keys = [...host.querySelectorAll<HTMLInputElement>(".kv .row input[type=text]")].map((i) => i.value);
+    expect(keys).toEqual(["lint", "e2e"]);
+    const pick = host.querySelector<HTMLSelectElement>(".kv .row select")!;
+    pick.value = "blocking";
+    pick.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+    expect(edits).toEqual([[{ op: "set", path: 'watches.0.jobs."lint"', value: { string: "blocking" } }]]);
+  });
+});
+
+describe("WatchesTab's header buttons", () => {
+  it("move and remove the watch they sit on, by id", () => {
+    const onmove = vi.fn();
+    const onremove = vi.fn();
+    host = document.createElement("div");
+    document.body.append(host);
+    component = mount(WatchesTab, {
+      target: host,
+      props: { config: { watches: WATCHES }, jobOrder: [], onedit: () => {}, onremove, onmove, onadd: () => {} },
+    });
+    flushSync();
+    const second = host.querySelectorAll("section.watch")[1];
+    second.querySelector<HTMLButtonElement>('button[title="move up"]')!.click();
+    second.querySelector<HTMLButtonElement>('button[title="move down"]')!.click();
+    second.querySelector<HTMLButtonElement>('button[title="remove this watch"]')!.click();
+    expect(onmove.mock.calls).toEqual([
+      ["hourly", -1],
+      ["hourly", 1],
+    ]);
+    expect(onremove).toHaveBeenCalledWith("hourly");
+  });
+});

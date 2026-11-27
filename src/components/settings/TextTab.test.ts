@@ -185,3 +185,72 @@ describe("TextTab, a file that moved underneath the buffer", () => {
     expect(h.conflict()).toBe(null);
   });
 });
+
+describe("TextTab's other buttons and its diagnostics list", () => {
+  function mountTab(props: Partial<ComponentProps<typeof TextTab>> = {}) {
+    host = document.createElement("div");
+    document.body.append(host);
+    const calls = { validated: [] as string[], saves: 0, reverts: 0 };
+    const all = reactive({
+      text: "a = 1\n",
+      validation: null,
+      diskText: () => Promise.resolve("a = 1\n"),
+      onvalidate: (t: string) => void calls.validated.push(t),
+      onsave: () => {
+        calls.saves++;
+        return new Promise<Validation>(() => {});
+      },
+      onrevert: () => void calls.reverts++,
+      ...props,
+    }) as ComponentProps<typeof TextTab>;
+    component = mount(TextTab, { target: host, props: all });
+    flushSync();
+    return { calls, props: all };
+  }
+
+  const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === name)!;
+
+  it("validates the box's text, not the file's", () => {
+    const { calls } = mountTab();
+    const box = host.querySelector("textarea")!;
+    box.value = "a = 2\n";
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    button("Validate").click();
+    expect(calls.validated).toEqual(["a = 2\n"]);
+  });
+
+  it("sends one save however fast Save is clicked twice", () => {
+    const { calls } = mountTab();
+    button("Save").click();
+    button("Save").click();
+    expect(calls.saves).toBe(1);
+  });
+
+  it("puts the file's text back on Revert and asks the window to re-read it", () => {
+    const { calls, props } = mountTab();
+    const box = host.querySelector("textarea")!;
+    box.value = "a = 3\n";
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    button("Revert").click();
+    flushSync();
+    expect(calls.reverts).toBe(1);
+    // No longer dirty: the next text from disk is shown as is.
+    props.text = "b = 1\n";
+    flushSync();
+    expect(host.querySelector("textarea")!.value).toBe("b = 1\n");
+  });
+
+  it("lists warnings in amber, and a diagnostic with no position by its path alone", () => {
+    mountTab({
+      validation: {
+        ok: true,
+        diagnostics: [{ severity: "warning", path: "watches[0]", message: "slow poll", line: null, col: null }],
+      },
+    });
+    const item = host.querySelector(".diagnostics li")!;
+    expect(item.className).toContain("text-tone-amber");
+    expect(item.querySelector(".where")?.textContent?.trim()).toBe("watches[0]");
+  });
+});

@@ -50,6 +50,10 @@ const CONFIG = {
 };
 
 const shell = {
+  /** False for the window outside the Tauri webview (a browser during `vite dev`). */
+  inTauri: true,
+  /** An older shell's `get_config_json`, which sent no `job_order`. */
+  noJobOrder: false,
   status: HEALTHY,
   tab: null as string | null,
   edits: [] as Edit[][],
@@ -74,7 +78,7 @@ const shell = {
 };
 
 vi.mock("./lib/ipc", () => ({
-  inTauri: () => true,
+  inTauri: () => shell.inTauri,
   // Sign-in is not what these tests are about: this build offers it nowhere
   // (no client id is built in), so the token field shows the four sources.
   oauthApi: () => ({
@@ -83,7 +87,7 @@ vi.mock("./lib/ipc", () => ({
     status: () => Promise.resolve(null),
   }),
   ownTokenStatus: () => Promise.resolve({ kind: "none" }),
-  getConfigJson: () => Promise.resolve({ config: shell.config, job_order: [[], []] }),
+  getConfigJson: () => Promise.resolve(shell.noJobOrder ? { config: shell.config } : { config: shell.config, job_order: [[], []] }),
   readConfigText: () => Promise.resolve(shell.text),
   getStatus: () => Promise.resolve(shell.status),
   takeSettingsTab: () => Promise.resolve(shell.tab),
@@ -134,6 +138,8 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   // The window restores the last pane used: every test starts from none.
   localStorage.clear();
+  shell.inTauri = true;
+  shell.noJobOrder = false;
   shell.status = HEALTHY;
   shell.tab = null;
   shell.edits = [];
@@ -994,4 +1000,153 @@ describe("SettingsApp, the scroll position across panes (Seer, #65)", () => {
   function tabsOf() {
     return [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
   }
+});
+
+describe("SettingsApp, the paths the rest of this file does not take", () => {
+  const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === label)!;
+
+  it("reads nothing outside the Tauri webview", async () => {
+    shell.inTauri = false;
+    shell.text = "never read\n";
+    const h = await render();
+    expect(host.querySelector("section.account")).toBeNull();
+    // Revert reads the file again, and outside the webview there is none to read.
+    await h.tab("Advanced");
+    button("Revert").click();
+    await settle();
+    expect(host.querySelector<HTMLTextAreaElement>("#edit-as-text textarea")?.value).toBe("");
+  });
+
+  it("opens on the default pane when the webview refuses its storage", async () => {
+    const refuse = vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+      throw new DOMException("denied", "SecurityError");
+    });
+    try {
+      const h = await render();
+      expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe("Accounts");
+      // Choosing a pane with no storage to remember it in still shows it.
+      await h.tab("Watches");
+      expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe("Watches");
+    } finally {
+      refuse.mockRestore();
+    }
+  });
+
+  it("moves nowhere on a key the sidebar does not use", async () => {
+    await render();
+    const tab = host.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
+    tab.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true, cancelable: true }));
+    await settle();
+    expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe("Accounts");
+  });
+
+  it("lists the watches of an older shell that sent no job order", async () => {
+    shell.noJobOrder = true;
+    const h = await render();
+    await h.tab("Watches");
+    expect([...host.querySelectorAll("section.watch header strong")].map((s) => s.textContent)).toEqual(["main-push", "hourly"]);
+  });
+
+  it("asks for an account before a watch, and adds no watch when the question is cancelled", async () => {
+    shell.config = { watches: [] };
+    const h = await render();
+    await h.tab("Watches");
+    await h.clickText("Add watch");
+    expect(host.textContent).toContain("Add an account first: a watch has to name one.");
+    expect(h.ask()).toBe(null);
+    shell.config = CONFIG;
+    shell.changed!();
+    await settle();
+    await h.clickText("Add watch");
+    expect(h.ask()?.textContent).toContain('It will use the account "gitlab.com"');
+    await h.click('[role="dialog"] .cancel');
+    expect(h.ask()).toBe(null);
+    expect(shell.edits).toEqual([]);
+  });
+
+  it("adds nothing when the file lost its accounts while the new-watch question was out", async () => {
+    const h = await render();
+    await h.tab("Watches");
+    await h.clickText("Add watch");
+    h.fill(0, "web");
+    h.fill(1, "acme/web");
+    shell.config = { watches: [] };
+    shell.changed!();
+    await settle();
+    await h.click('[role="dialog"] .confirm');
+    expect(shell.edits).toEqual([]);
+  });
+
+  it("lists a form save's warnings in amber", async () => {
+    shell.result = {
+      ok: false,
+      diagnostics: [{ severity: "warning", path: "watches[0]", message: "slow poll", line: null, col: null }],
+    };
+    const h = await render();
+    await h.tab("Watches");
+    const id = host.querySelector<HTMLInputElement>("section.watch .body input[type=text]")!;
+    id.value = "renamed";
+    id.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    const item = host.querySelector(".diagnostics li")!;
+    expect(item.className).toContain("text-tone-amber");
+    expect(item.textContent).toContain("slow poll");
+  });
+
+  describe("Edit as text", () => {
+    async function advanced() {
+      const h = await render();
+      await h.tab("Advanced");
+      const box = host.querySelector<HTMLTextAreaElement>("#edit-as-text textarea")!;
+      box.value = '[accounts."gitlab.com"]\nbase_url = "x"\n';
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+      await settle();
+      return h;
+    }
+
+    it("validates the box", async () => {
+      await advanced();
+      button("Validate").click();
+      await settle();
+      expect(host.querySelector("#edit-as-text .verdict")?.textContent?.trim()).toBe("valid");
+    });
+
+    it("says a save was not confirmed when the shell's question is declined", async () => {
+      shell.saveQueue = [{ ok: false, diagnostics: [], confirm: { id: "c-2", changes: ["A command source."] } }];
+      const h = await advanced();
+      button("Save").click();
+      await settle();
+      await h.click('[role="dialog"] .cancel');
+      expect(host.textContent).toContain("Not saved: the change was not confirmed.");
+      expect(shell.saves).toHaveLength(1);
+    });
+
+    it("says a refused save left the file alone", async () => {
+      shell.saveQueue = [{ ok: false, diagnostics: [{ severity: "error", path: "", message: "bad", line: 1, col: 1 }] }];
+      await advanced();
+      button("Save").click();
+      await settle();
+      expect(host.textContent).toContain("Not saved: the file was left alone.");
+    });
+
+    it("re-reads the file and saves against it when the user overwrites a changed file", async () => {
+      shell.saveQueue = [{ ok: false, diagnostics: [], conflict: true }];
+      await advanced();
+      button("Save").click();
+      await settle();
+      expect(host.textContent).toContain("Not saved: the file changed on disk since this tab read it.");
+      shell.text = "[ui]\n";
+      host.querySelector<HTMLButtonElement>("#edit-as-text button.overwrite")!.click();
+      await settle();
+      expect(shell.saves.map((s) => s.base)).toEqual(['[accounts."gitlab.com"]\n', "[ui]\n"]);
+    });
+
+    it("reads the file again on Revert", async () => {
+      await advanced();
+      shell.text = "[ui]\n";
+      button("Revert").click();
+      await settle();
+      expect(host.querySelector<HTMLTextAreaElement>("#edit-as-text textarea")?.value).toBe("[ui]\n");
+    });
+  });
 });

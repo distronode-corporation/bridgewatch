@@ -44,22 +44,22 @@ python3 scripts/check-coverage.py coverage.json
 
 ### Frontend, every file under `src/`
 
-Re-measured on 2026-11-26, after the unused vendored ui components were deleted and the
-Svelte compiler's template fallback was left out of the report (see "Tests" in
-[CONTRIBUTING.md](../CONTRIBUTING.md)).
+Re-measured on 2026-11-27 with frontend coverage part 2 (#142): the wizard, sign-in,
+Settings and popover windows under test, and two more compiler-generated shapes left out of
+the report (see "Tests" in [CONTRIBUTING.md](../CONTRIBUTING.md)). Node 24.20.0, vitest 5.1.1.
 
 | Measure | Covered | Total | Coverage | Floor |
 | --- | ---: | ---: | ---: | ---: |
-| Lines | 3333 | 3468 | 96.10% | 96% |
-| Statements | 4967 | 5257 | 94.48% | 94% |
-| Branches | 2300 | 2586 | 88.94% | 88% |
-| Functions | 1443 | 1526 | 94.56% | 94% |
+| Lines | 3501 | 3503 | 99.94% | 99% |
+| Statements | 5391 | 5396 | 99.90% | 99% |
+| Branches | 2555 | 2558 | 99.88% | 99% |
+| Functions | 1541 | 1542 | 99.93% | 99% |
 
-Command: `npm ci && npx vitest run --coverage` (42 test files, 672 tests).
+Command: `npm ci && npx vitest run --coverage` (63 test files, 875 tests).
 
 ### Total
 
-Rust (core and cli) and the frontend together: 15884 of 17418 lines, 91.19%. This leaves out
+Rust (core and cli) and the frontend together: 16052 of 17453 lines, 91.97%. This leaves out
 bridgewatch-app, so it is not the whole workspace.
 
 ## CI, the whole workspace: 2026-11-27, pull request #141 (the Tauri shell)

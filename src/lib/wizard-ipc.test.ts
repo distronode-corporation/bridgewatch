@@ -266,6 +266,58 @@ describe("WizardApp", () => {
   });
 });
 
+describe("WizardApp without a configuration to read", () => {
+  let host: HTMLDivElement;
+  let component: Record<string, unknown> | null = null;
+
+  afterEach(() => {
+    if (component) void unmount(component);
+    component = null;
+    host?.remove();
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    vi.restoreAllMocks();
+  });
+
+  async function mountApp(): Promise<HTMLDivElement> {
+    // What the shell answers when no CLI holds a token; it never answers null.
+    answers.set("wizard_detect_cli_token", { status: "not_found", service: "glab:gitlab.com" });
+    host = document.createElement("div");
+    document.body.append(host);
+    component = mount(WizardApp, { target: host, props: {} });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    flushSync();
+    return host;
+  }
+
+  const urlInputs = (root: HTMLElement) => [...root.querySelectorAll<HTMLInputElement>("input")].map((i) => i.value);
+
+  it("starts empty outside the Tauri webview, and reads nothing", async () => {
+    const root = await mountApp();
+    expect(invoked.map((i) => i.cmd)).not.toContain("get_config_json");
+    expect(root.querySelector("button")).not.toBeNull();
+    expect(urlInputs(root)).not.toContain("https://gitlab.example.com");
+  });
+
+  it("starts empty when the file has no account to pre-fill", async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    answers.set("get_config_json", { config: { accounts: {} }, job_order: [] });
+    const root = await mountApp();
+    expect(invoked.map((i) => i.cmd)).toContain("get_config_json");
+    expect(root.querySelector("button")).not.toBeNull();
+  });
+
+  it("starts empty when reading the configuration fails", async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    const core = await import("@tauri-apps/api/core");
+    const real = core.invoke;
+    vi.spyOn(core, "invoke").mockImplementation(((cmd: string, args?: Record<string, unknown>) =>
+      cmd === "get_config_json" ? Promise.reject(new Error("unreadable")) : real(cmd, args)) as typeof real);
+    const root = await mountApp();
+    expect(root.querySelector("button")).not.toBeNull();
+    expect(urlInputs(root)).not.toContain("https://gitlab.example.com");
+  });
+});
+
 describe("oauthApi", () => {
   it("maps every method onto one oauth command, and no token goes either way", async () => {
     answers.set("oauth_start", {
