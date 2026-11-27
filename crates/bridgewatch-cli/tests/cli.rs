@@ -2106,3 +2106,224 @@ fn watch_prints_a_notification_as_one_line() {
         .map(str::to_string);
     assert!(line.is_some(), "{}", stdout(&out));
 }
+
+// ---------------------------------------------------------------------------
+// The binary's other refusals, each as a person meets it
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_refuses_a_config_path_it_cannot_read_a_hostless_base_and_a_pasted_token() {
+    let dir = TempDir::new("init-refusals");
+    let out = run(bin().arg("--config").arg(&dir.0).args([
+        "init",
+        "--project",
+        "1",
+        "--token-env",
+        "GL",
+    ]));
+    assert_eq!(
+        code(&out),
+        78,
+        "a directory is not a config file: {}",
+        stderr(&out)
+    );
+
+    let config = dir.0.join("config.toml");
+    let out = run(bin().arg("--config").arg(&config).args([
+        "init",
+        "--project",
+        "1",
+        "--base-url",
+        "http://",
+        "--glab",
+    ]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("--base-url has no host"),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = run(bin().arg("--config").arg(&config).args([
+        "init",
+        "--project",
+        "1",
+        "--token-keyring",
+        "glpat-AAAAAAAAAAAAAAAAAAAA",
+    ]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("glpat-AAAA"),
+        "the token is never echoed"
+    );
+}
+
+#[test]
+fn config_dump_prints_every_default_filled_in() {
+    let out = run(bin()
+        .arg("--config")
+        .arg(example_config())
+        .args(["config", "dump"]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("timeout_secs"), "{}", stdout(&out));
+}
+
+#[test]
+fn a_fixture_that_is_not_there_and_a_fatal_error_after_an_unknown_key_are_config_errors() {
+    let out = run(bin().arg("--config").arg(example_config()).args([
+        "check",
+        "--fixture",
+        "/nonexistent/bridgewatch-fixture",
+    ]));
+    assert_eq!(code(&out), 70, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("cannot load fixture"),
+        "{}",
+        stderr(&out)
+    );
+
+    let dir = TempDir::new("fatal-after-unknown");
+    // More unknown keys than a config could hold: refused with no position.
+    let keys: String = (0..40).map(|n| format!("bogus{n} = 1\n")).collect();
+    let config = dir.write("config.toml", &keys);
+    let out = run(bin().arg("--config").arg(&config).arg("check"));
+    assert_eq!(code(&out), 78, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains(&format!("{}: more than 32", config.display())),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn fixture_record_defaults_its_account_and_refuses_what_it_cannot_use() {
+    let dir = TempDir::new("record-defaults");
+    // No watch: the first account, and its token cannot be resolved.
+    let one = dir.write(
+        "one.toml",
+        "[accounts.gl]\ntoken = { env = \"BRIDGEWATCH_TEST_TOKEN_NEVER_SET\" }\n",
+    );
+    let out = run(bin()
+        .arg("--config")
+        .arg(&one)
+        .args(["fixture", "record", "--project", "1", "7", "--out"])
+        .arg(dir.0.join("out")));
+    assert_eq!(code(&out), 70, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("cannot resolve the token for account \"gl\""),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn fixture_scrub_says_which_directory_it_cannot_read_or_write() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        // A directory that cannot be listed.
+        let shut = TempDir::new("scrub-shut");
+        std::fs::set_permissions(&shut.0, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let out = run(bin().args(["fixture", "scrub", "--check"]).arg(&shut.0));
+        std::fs::set_permissions(&shut.0, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(code(&out), 70, "{}", stderr(&out));
+        assert!(stderr(&out).contains("cannot scrub"), "{}", stderr(&out));
+
+        let dir = TempDir::new("scrub-readonly");
+        let file = dir.write("jobs.json", "[1]");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let out = run(bin().args(["fixture", "scrub"]).arg(&dir.0));
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(code(&out), 70, "{}", stderr(&out));
+        assert!(stderr(&out).contains("cannot scrub"), "{}", stderr(&out));
+    }
+}
+
+#[test]
+fn a_job_action_answered_with_nothing_still_says_it_was_done() {
+    let (base, _) = routed(vec![("/jobs/7/retry", vec![ok("{}")])]);
+    let dir = TempDir::new("loopback-bare-action");
+    let config = loopback_config(&dir, &base, "");
+    let out =
+        run(against(&config, &dir).args(["retry", "--yes", &format!("{base}/acme/web/-/jobs/7")]));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "retried job 7");
+}
+
+/// A person asked on a terminal: a no sends nothing, a yes sends the write.
+/// Run under `script`, which gives the command a terminal; the answer is
+/// typed only once the prompt is on screen, and the terminal stays open
+/// until the command is done, so neither is read as the end of input.
+#[cfg(unix)]
+#[test]
+fn a_write_asked_on_a_terminal_is_sent_only_on_a_yes() {
+    use std::io::{Read as _, Write as _};
+    let (base, seen) = routed(vec![("/jobs/7/retry", vec![ok("{}")])]);
+    let dir = TempDir::new("loopback-asked");
+    let config = loopback_config(&dir, &base, "");
+    let command = format!(
+        "{} --config {} retry {base}/acme/web/-/jobs/7",
+        env!("CARGO_BIN_EXE_bridgewatch"),
+        config.display()
+    );
+    let answer = |reply: &[u8]| -> String {
+        let mut script = Command::new("script");
+        if cfg!(target_os = "macos") {
+            script.args(["-q", "/dev/null", "sh", "-c", &command]);
+        } else {
+            script.args(["-q", "-e", "-c", &command, "/dev/null"]);
+        }
+        let mut child = script
+            .env("BW_TEST_LOOPBACK_TOKEN", "glpat-LOOPBACK")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("script runs");
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let mut said = Vec::new();
+        let mut byte = [0u8; 1];
+        while !String::from_utf8_lossy(&said).contains("[y/N]") {
+            assert_eq!(stdout.read(&mut byte).unwrap(), 1, "the prompt never came");
+            said.push(byte[0]);
+        }
+        stdin.write_all(reply).unwrap();
+        stdout.read_to_end(&mut said).unwrap();
+        child.wait().unwrap();
+        drop(stdin);
+        String::from_utf8_lossy(&said).into_owned()
+    };
+    let said = answer(b"n\n");
+    assert!(said.contains("nothing sent"), "{said}");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "a declined write sends nothing"
+    );
+    let said = answer(b"y\n");
+    assert!(said.contains("retried job 7"), "{said}");
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+/// A file that already holds something shaped like a token (here, in a
+/// comment) is not edited: init refuses rather than carry it along.
+#[test]
+fn init_refuses_to_edit_a_file_that_already_holds_a_token() {
+    let dir = TempDir::new("init-token-in-file");
+    let config = dir.write(
+        "config.toml",
+        "# glpat-AAAAAAAAAAAAAAAAAAAA\n[accounts.gl]\ntoken = { env = \"GL\" }\n",
+    );
+    let out = run(bin().arg("--config").arg(&config).args([
+        "init",
+        "--project",
+        "1",
+        "--token-env",
+        "GL",
+    ]));
+    assert_eq!(code(&out), 64, "{}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("glpat-AAAA"),
+        "the token is never echoed"
+    );
+}

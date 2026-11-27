@@ -3283,3 +3283,13 @@ fn the_system_keyring_probe_answers_for_an_entry_that_does_not_exist() {
     let answer = wizard::SystemKeyringProbe.exists("bridgewatch-test-no-such-entry", "nobody");
     assert!(!matches!(answer, Ok(true)), "{answer:?}");
 }
+
+/// A file that writes its watches as an inline array (`watches = []`)
+/// cannot take a new `[[watches]]` table, and says so.
+#[test]
+fn a_file_with_an_inline_watches_array_cannot_take_a_new_watch() {
+    // Before the first table header, so `watches` is a top-level key.
+    let raw = "watches = []\n[accounts.gitlab]\ntoken = { env = \"T\" }\n";
+    let error = wizard::build_config(&answers(), Some(raw)).unwrap_err();
+    assert!(matches!(error, wizard::WizardError::Edit(_)), "{error:?}");
+}

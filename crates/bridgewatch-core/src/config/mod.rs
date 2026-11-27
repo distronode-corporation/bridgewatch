@@ -1403,9 +1403,8 @@ fn span_for(doc: &toml_edit::Document<String>, path: &str) -> Option<Range<usize
         let Some(next) = cursor.child(segment) else {
             break;
         };
-        if let Some(s) = next.span() {
-            best = Some(s);
-        }
+        // Every parsed node has a span; the `or` only keeps the last one found.
+        best = next.span().or(best);
         cursor = next;
     }
     best
@@ -1629,13 +1628,18 @@ mod tests {
         assert_eq!(&raw[span], "\"dark\"");
     }
 
-    /// An array of tables has no span of its own: the walk goes through
-    /// `watches` to the key below.
+    /// The walk goes through tables, an array of tables by index, inline
+    /// tables and arrays, and stops at a segment that names nothing.
     #[test]
-    fn a_path_through_an_array_of_tables_points_at_the_key_below() {
-        let raw = "[[watches]]\nid = \"x\"\n";
+    fn a_path_walks_every_kind_of_node_and_stops_at_what_is_not_there() {
+        let raw = "[accounts.gl]\nshow = { b = [1, { c = 2 }], d = { e = 3 } }\narr = [7]\n[[watches]]\nid = \"x\"\n";
         let doc = raw.parse::<toml_edit::Document<String>>().unwrap();
-        let span = span_for(&doc, "watches.0.id").expect("a span");
-        assert_eq!(&raw[span], "\"x\"");
+        let at = |path: &str| span_for(&doc, path).map(|s| raw[s].to_string());
+        assert_eq!(at("watches.0.id").as_deref(), Some("\"x\""));
+        assert_eq!(at("accounts.gl.show.b.1.c").as_deref(), Some("2"));
+        assert_eq!(at("accounts.gl.show.d.e").as_deref(), Some("3"));
+        assert_eq!(at("accounts.gl.arr.0").as_deref(), Some("7"));
+        assert_eq!(at("watches.first.id"), at("watches"));
+        assert_eq!(at("accounts.gl.show.b.first"), at("accounts.gl.show.b"));
     }
 }

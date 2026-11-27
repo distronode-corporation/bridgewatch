@@ -2385,3 +2385,137 @@ async fn a_stored_sign_in_for_another_instance_is_sign_in_again() {
         Err(ClientError::SignInAgain { .. })
     ));
 }
+
+/// A code that has expired before the first poll is said at once, and a
+/// third transient failure in a row ends the wait.
+#[tokio::test]
+async fn a_wait_ends_on_an_expired_code_and_on_the_third_failure_in_a_row() {
+    let t = ScriptTransport::new();
+    t.reply(
+        "/login/device/code",
+        200,
+        r#"{"device_code":"d","user_code":"u","verification_uri":"https://github.com/login/device","expires_in":0,"interval":5}"#,
+    );
+    assert!(matches!(wait_on(&t).await, Err(OAuthError::Expired)));
+
+    let t = ScriptTransport::new();
+    t.reply("/login/device/code", 200, GH_DEVICE);
+    for _ in 0..3 {
+        t.reply("/login/oauth/access_token", 502, "");
+    }
+    assert!(matches!(
+        wait_on(&t).await,
+        Err(OAuthError::Client(ClientError::Server { status: 502 }))
+    ));
+    assert_eq!(t.remaining(), 0, "three polls, then it gave up");
+}
+
+/// A GitHub base that is not a URL keeps its own text as host and origin;
+/// a typed client id makes signing in available anywhere.
+#[test]
+fn an_unparsable_github_base_is_its_own_host_and_a_typed_client_id_is_available() {
+    let account = oauth_account(Provider::Github, Some("not a url"), None);
+    let endpoints = Endpoints::for_account(&account);
+    assert_eq!(endpoints.host, endpoints.origin);
+    let typed = oauth::availability(
+        Provider::Gitlab,
+        "https://gitlab.example.com",
+        Some("app"),
+        &REGISTERED,
+    );
+    assert!(typed.available && typed.needs_client_id);
+    let blank = oauth::availability(
+        Provider::Gitlab,
+        "https://gitlab.example.com",
+        Some("  "),
+        &REGISTERED,
+    );
+    assert!(!blank.available);
+}
+
+// Every path of `wait_for_token` through ONE instantiation of it: it is
+// generic over its sleep and its cancel, each closure is a type of its own,
+// and llvm-cov's summary credits a function with its best single copy.
+
+fn no_sleep(_: Duration) -> std::future::Ready<()> {
+    std::future::ready(())
+}
+
+/// Cancelled after `polls` polls of the cancel future, or never.
+async fn cancel_after(polls: Option<u32>) {
+    match polls {
+        Some(n) => {
+            for _ in 0..n {
+                tokio::task::yield_now().await;
+            }
+        }
+        None => std::future::pending().await,
+    }
+}
+
+async fn wait_through(
+    t: &ScriptTransport,
+    cancel: Option<u32>,
+) -> Result<oauth::device::TokenReplyView, OAuthError> {
+    let device = oauth::start(t, &github_endpoints(), "c").await?;
+    oauth::wait_for_token(
+        t,
+        &github_endpoints(),
+        "c",
+        &device,
+        no_sleep,
+        cancel_after(cancel),
+        &mut |_| {},
+    )
+    .await
+}
+
+#[tokio::test]
+async fn one_instantiation_of_the_wait_takes_every_path() {
+    let t = ScriptTransport::new();
+    t.reply("/login/device/code", 200, GH_DEVICE);
+    for (status, body) in [
+        (200, r#"{"error":"authorization_pending"}"#),
+        (200, r#"{"error":"slow_down"}"#),
+        (429, ""),
+        (302, ""),
+    ] {
+        t.reply("/login/oauth/access_token", status, body);
+    }
+    t.reply("/login/oauth/access_token", 200, GH_TOKEN);
+    assert!(wait_through(&t, None).await.is_ok());
+
+    let t = ScriptTransport::new();
+    t.reply(
+        "/login/device/code",
+        200,
+        r#"{"device_code":"d","user_code":"u","verification_uri":"https://github.com/login/device","expires_in":0,"interval":5}"#,
+    );
+    assert!(matches!(
+        wait_through(&t, None).await,
+        Err(OAuthError::Expired)
+    ));
+
+    let t = ScriptTransport::new();
+    t.reply("/login/device/code", 200, GH_DEVICE);
+    for _ in 0..3 {
+        t.reply("/login/oauth/access_token", 502, "");
+    }
+    assert!(matches!(
+        wait_through(&t, None).await,
+        Err(OAuthError::Client(ClientError::Server { status: 502 }))
+    ));
+
+    for polls in [0, 1] {
+        let t = ScriptTransport::new();
+        t.reply("/login/device/code", 200, GH_DEVICE);
+        t.reply("/login/oauth/access_token", 200, GH_TOKEN);
+        assert!(
+            matches!(
+                wait_through(&t, Some(polls)).await,
+                Err(OAuthError::Cancelled)
+            ),
+            "{polls}"
+        );
+    }
+}

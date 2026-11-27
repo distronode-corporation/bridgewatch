@@ -131,3 +131,8 @@ fn a_watch_edit_on_an_unknown_id_is_no_such_watch() {
     let odd = ConfigEditor::new("watches = 1\n").unwrap();
     assert_eq!(odd.watch_index("a"), None);
 }
+
+#[test]
+fn a_file_with_no_watches_has_none_to_find() {
+    assert_eq!(ConfigEditor::new("").unwrap().watch_index("a"), None);
+}

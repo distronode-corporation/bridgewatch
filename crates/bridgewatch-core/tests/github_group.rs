@@ -2256,3 +2256,23 @@ async fn a_group_with_no_readable_time_is_complete_on_a_full_page() {
         .unwrap();
     assert!(rows.iter().any(|r| r.id == 4102), "{:?}", ids(&rows));
 }
+
+/// A rate-limited annotation is owed, not an error: the row is the same
+/// verdict without its first failing line, and the next tick asks again.
+/// (`annotate`'s every path in this one binary: llvm-cov's summary credits
+/// an async fn with its best single binary's copy.)
+#[tokio::test]
+async fn a_rate_limited_annotation_is_owed_and_asked_for_again() {
+    let transport = Routed::new();
+    three_way_push(&transport);
+    let annotations = "/repos/acme-corp/monorepo/check-runs/9301/annotations?per_page=50";
+    transport
+        .on(annotations, Reply::status(429))
+        .on(annotations, Reply::ok("[]".to_string()));
+    let mut poller = poller_for(&group_config(""), transport.clone());
+    let first = poller.tick().await.snapshot;
+    assert_eq!(first.icon_state.as_str(), "deployed_with_failure");
+    assert_eq!(first.watches[0].error, None, "an owed line is not an error");
+    poller.tick().await;
+    assert_eq!(transport.count("/annotations"), 2, "asked again next tick");
+}

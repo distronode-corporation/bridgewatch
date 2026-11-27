@@ -805,11 +805,12 @@ show = { settled = 1 }
             always(&script, TICK, status, body);
             let mut poller = poller(&script);
             let ended = wait(&mut poller, &plan()).await;
-            let Ended::Refused(why) = &ended else {
-                panic!("{status}: {ended:?}");
-            };
-            assert!(why.starts_with("account gitlab: "), "{why}");
-            assert!(why.ends_with(&format!("(HTTP {status})")), "{why}");
+            let http = format!("(HTTP {status})");
+            assert!(
+                matches!(&ended, Ended::Refused(why)
+                    if why.starts_with("account gitlab: ") && why.ends_with(&http)),
+                "{status}: {ended:?}"
+            );
             assert_eq!(ended.code(), check_code, "{status}");
             assert_eq!(ended.code(), crate::exit::UNKNOWN, "{status}");
             assert_eq!(script.requests().len(), 1, "{status}: no retry");
@@ -979,7 +980,7 @@ show = { settled = 1 }
     async fn an_interrupt_before_the_first_tick_sends_nothing() {
         let script = Arc::new(ScriptTransport::new());
         let mut poller = poller(&script);
-        let ended = start(&mut poller, &plan(), std::future::ready(())).await;
+        let ended = start(&mut poller, &plan(), interrupt(true)).await;
         assert!(matches!(ended, Ended::Interrupted(None)), "{ended:?}");
         assert!(verdict_of(&ended).is_none());
         assert_eq!(ended.code(), crate::exit::UNKNOWN);
@@ -1108,5 +1109,35 @@ show = { settled = 1 }
             .expect("config")
             .config;
         assert_eq!(pick_watch(&config, None).ok().as_deref(), Some("only"));
+    }
+
+    /// The one interrupt type the `start` tests share, already fired or
+    /// never, so one copy of the generic `start` takes both of its paths.
+    async fn interrupt(now: bool) {
+        if !now {
+            std::future::pending::<()>().await;
+        }
+    }
+
+    /// A wait that sees its commit running says so, remembers it, and ends
+    /// when it settles.
+    #[tokio::test(start_paused = true)]
+    async fn a_running_commit_is_waited_on_until_it_settles() {
+        let script = Arc::new(ScriptTransport::new());
+        script.reply(TICK, 200, &list(&[pipeline(10, A, "running")]));
+        always(&script, TICK, 200, &list(&[pipeline(10, A, "success")]));
+        empty_detail(&script, 10);
+        let mut waiting = poller(&script);
+        // Through `wait`, the copy of the loop every other test drives.
+        let ended = wait(&mut waiting, &plan()).await;
+        let row = verdict_of(&ended).expect("the wait ends in a verdict");
+        assert_eq!(row.status, "success");
+        // And `start` with the interrupt that never fires gets to the loop.
+        let script = Arc::new(ScriptTransport::new());
+        always(&script, TICK, 200, &list(&[pipeline(10, A, "success")]));
+        empty_detail(&script, 10);
+        let mut started = poller(&script);
+        let ended = start(&mut started, &plan(), interrupt(false)).await;
+        assert!(verdict_of(&ended).is_some(), "{ended:?}");
     }
 }

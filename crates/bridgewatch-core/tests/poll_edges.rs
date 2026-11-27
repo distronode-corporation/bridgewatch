@@ -410,3 +410,207 @@ async fn a_found_commit_keeps_its_title_when_titles_are_on() {
         Ok(CommitLookup::Found(_))
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Every path of `look_up_commit`, `poll_watch` and `fetch_detail` in this one
+// binary: llvm-cov's summary credits an async fn with the coverage of the
+// best single binary's copy of it, so the paths split across binaries would
+// read as missed lines.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_short_sha_is_expanded_first_and_one_the_project_lacks_is_not_found() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/repository/commits/0123456",
+        200,
+        &format!(r#"{{"id":"{SHA}"}}"#),
+    );
+    t.reply(
+        "/projects/1/pipelines?",
+        200,
+        &format!("[{}]", row(7, "success")),
+    );
+    t.reply("/pipelines/7/jobs", 200, "[]");
+    t.reply("/pipelines/7/bridges", 200, "[]");
+    t.reply("/repository/commits/fedcba9", 404, "{}");
+    let poller = scripted(ONE, &t);
+    assert!(matches!(
+        poller.look_up_commit("web", "0123456").await,
+        Ok(CommitLookup::Found(_))
+    ));
+    assert!(matches!(
+        poller.look_up_commit("web", "fedcba9").await,
+        Ok(CommitLookup::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn a_lookup_whose_list_fails_is_that_error_and_one_that_only_skipped_is_skipped() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply("/projects/1/pipelines?", 500, "{}");
+    t.reply(
+        "/projects/1/pipelines?",
+        200,
+        &format!("[{}]", row(7, "skipped")),
+    );
+    let poller = scripted(ONE, &t);
+    assert!(matches!(
+        poller.look_up_commit("web", SHA).await,
+        Err(ClientError::Server { status: 500 })
+    ));
+    assert!(matches!(
+        poller.look_up_commit("web", SHA).await,
+        Ok(CommitLookup::Skipped(_))
+    ));
+}
+
+/// A list that fails keeps the last frame when there is one and is a bare
+/// error view when there is not; a `mine` watch whose owner cannot be read
+/// sends no list at all.
+#[tokio::test]
+async fn a_list_that_fails_keeps_the_last_frame_or_is_a_bare_error() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply("/projects/1/pipelines?", 500, "{}");
+    let first = scripted(ONE, &t).tick().await;
+    assert!(first.snapshot.watches[0].rows.is_empty());
+    assert!(first.snapshot.watches[0].error.is_some());
+
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/projects/1/pipelines?",
+        200,
+        &format!("[{}]", row(7, "success")),
+    );
+    t.reply("/pipelines/7/jobs", 200, "[]");
+    t.reply("/pipelines/7/bridges", 200, "[]");
+    t.reply("/projects/1/pipelines?", 503, "{}");
+    let mut poller = scripted(ONE, &t);
+    assert_eq!(poller.tick().await.snapshot.watches[0].rows.len(), 1);
+    let failed = poller.tick().await;
+    assert_eq!(
+        failed.snapshot.watches[0].rows.len(),
+        1,
+        "the last frame is kept"
+    );
+    assert!(failed.snapshot.watches[0].error.is_some());
+
+    let t = Arc::new(ScriptTransport::new());
+    t.reply("/user", 200, r#"{"id":1,"username":"ada"}"#);
+    t.reply("/projects/1/pipelines?", 200, "[]");
+    let mut poller = scripted(MINE, &t);
+    let tick = poller.tick().await;
+    assert_eq!(tick.snapshot.watches[0].error, None);
+    assert!(tick.polled.contains("web"));
+
+    let t = Arc::new(ScriptTransport::new());
+    t.reply("/user", 401, "{}");
+    let mut poller = scripted(MINE, &t);
+    let tick = poller.tick().await;
+    assert!(tick.snapshot.watches[0].error.is_some());
+    assert!(!tick.polled.contains("web"), "no list was sent");
+}
+
+/// A GitHub sign-in's 404 carries the hint about the app's installations.
+#[tokio::test]
+async fn a_signed_in_github_watch_that_is_not_found_says_to_install_the_app() {
+    const GH: &str = r#"
+[accounts.gh]
+provider = "github"
+token = { oauth = true }
+
+[[watches]]
+id = "web"
+account = "gh"
+project = "acme/web"
+ref = "main"
+"#;
+    let t = Arc::new(ScriptTransport::new());
+    t.reply("/actions/runs?", 404, r#"{"message":"Not Found"}"#);
+    let mut poller = scripted(GH, &t);
+    let tick = poller.tick().await;
+    let error = tick.snapshot.watches[0].error.clone().unwrap_or_default();
+    assert!(error.contains("GitHub App"), "{error}");
+}
+
+/// A row whose own jobs cannot be read is shown as unavailable, never as
+/// "nothing failed"; and a script that fails is the watch's error.
+#[tokio::test]
+async fn a_row_that_cannot_be_read_is_unavailable_and_a_failing_script_is_an_error() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/projects/1/pipelines?",
+        200,
+        &format!("[{}]", row(7, "success")),
+    );
+    t.reply("/pipelines/7/jobs", 500, "{}");
+    let mut poller = scripted(ONE, &t);
+    let tick = poller.tick().await;
+    assert!(tick.snapshot.watches[0].error.is_some());
+    assert_eq!(tick.snapshot.watches[0].rows[0].state.as_str(), "unknown");
+
+    let mut config = config(ONE);
+    config.verdict.script_source = Some("\"not a state\"".into());
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/projects/1/pipelines?",
+        200,
+        &format!("[{}]", row(7, "success")),
+    );
+    t.reply("/pipelines/7/jobs", 200, "[]");
+    t.reply("/pipelines/7/bridges", 200, "[]");
+    let ring = RequestRing::new(50);
+    let mut poller =
+        Poller::with_clients(&config, clients(&config, &t, &ring), ring).expect("builds");
+    let tick = poller.tick().await;
+    let error = tick.snapshot.watches[0].error.clone().unwrap_or_default();
+    assert!(error.contains("not a state"), "{error}");
+}
+
+/// A bridge the dive rules leave out is not walked, and one with no child
+/// has nothing to walk.
+#[tokio::test]
+async fn an_excluded_bridge_and_a_dead_one_are_not_walked() {
+    let raw = format!("{ONE}dive = {{ bridges = \"trigger:*\", exclude = [\"trigger:skip\"] }}\n");
+    let dead = r#"{"id":1999,"name":"trigger:dead","stage":"trigger","status":"failed","allow_failure":false,"downstream_pipeline":null}"#;
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/projects/1/pipelines?",
+        200,
+        &format!("[{}]", row(7, "success")),
+    );
+    t.reply("/pipelines/7/jobs", 200, "[]");
+    t.reply(
+        "/pipelines/7/bridges",
+        200,
+        &format!("[{},{dead}]", bridge("trigger:skip", 8)),
+    );
+    let mut poller = scripted(&raw, &t);
+    poller.tick().await;
+    assert!(
+        !t.requests().iter().any(|r| r.url.contains("/pipelines/8/")),
+        "{:?}",
+        t.requests()
+            .iter()
+            .map(|r| r.url.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Two pipelines for one commit: the newest that ran is the one judged.
+#[tokio::test]
+async fn a_commit_with_two_pipelines_is_judged_by_the_newest() {
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/projects/1/pipelines?",
+        200,
+        &format!("[{},{}]", row(7, "failed"), row(9, "success")),
+    );
+    t.reply("/pipelines/9/jobs", 200, "[]");
+    t.reply("/pipelines/9/bridges", 200, "[]");
+    let CommitLookup::Found(view) = scripted(ONE, &t).look_up_commit("web", SHA).await.unwrap()
+    else {
+        panic!("found");
+    };
+    assert_eq!(view.id, 9);
+}

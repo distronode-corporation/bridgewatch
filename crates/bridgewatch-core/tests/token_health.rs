@@ -1027,3 +1027,96 @@ async fn a_user_refusal_survives_the_expiry_lookups_ignored_401() {
     );
     assert_eq!(token_notes(&tick).len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Every path of `Poller::tick` in this one binary: llvm-cov's summary credits
+// an async fn with its best single binary's copy, so the paths have to meet
+// here rather than across binaries.
+// ---------------------------------------------------------------------------
+
+/// One tick over a watch with no account, a refused account, and a deploy
+/// that teaches a sample, saving to a ledger and a history that cannot be
+/// written, with a subscriber listening: every error is said, nothing is
+/// written, and the sample is still learned in memory.
+#[tokio::test]
+async fn one_tick_over_every_kind_of_watch_says_each_and_survives_unwritable_files() {
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .finish(),
+    );
+    const RAW: &str = r#"
+        [accounts.lab]
+        token = { env = "TOK" }
+
+        [accounts.own]
+        base_url = "https://gitlab.example.com"
+        token = { own = true }
+
+        [[watches]]
+        id = "dep"
+        account = "lab"
+        project = 1
+        deploy_markers = ["deploy"]
+
+        [[watches]]
+        id = "refused"
+        account = "own"
+        project = 2
+        role = "secondary"
+
+        [[watches]]
+        id = "lost"
+        account = "ghost"
+        project = 3
+        role = "secondary"
+        "#;
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/personal_access_tokens/self",
+        200,
+        r#"{"id":9,"name":"bw","scopes":["read_api"],"expires_at":null,"active":true}"#,
+    );
+    t.reply(
+        "/projects/1/pipelines?",
+        200,
+        r#"[{"id":7,"iid":7,"project_id":1,"sha":"0123456789abcdef0123456789abcdef01234567","ref":"main","status":"success","source":"push","created_at":"2026-11-01T10:00:00Z","updated_at":"2026-11-01T10:10:00Z"}]"#,
+    );
+    t.reply(
+        "/pipelines/7/jobs",
+        200,
+        r#"[{"id":70,"name":"deploy","stage":"deploy","status":"success","allow_failure":false,"started_at":"2026-11-01T10:05:00Z","finished_at":"2026-11-01T10:10:00Z"}]"#,
+    );
+    t.reply("/pipelines/7/bridges", 200, "[]");
+    let blocker =
+        std::env::temp_dir().join(format!("bw-token-health-blocker-{}", std::process::id()));
+    std::fs::write(&blocker, "not a directory").unwrap();
+    let clock = Clock::at(wall());
+    let mut poller = poller(RAW, &Memory::default(), &t, &clock)
+        .with_ledger(blocker.join("ledger.json"))
+        .with_eta_history(blocker.join("eta.json"));
+    assert_eq!(poller.refused_accounts(), ["own"]);
+    let tick = poller.tick().await;
+    let _ = std::fs::remove_file(&blocker);
+
+    let error = |id: &str| {
+        tick.snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.error.clone())
+    };
+    assert_eq!(error("dep"), None);
+    assert!(
+        error("refused")
+            .unwrap_or_default()
+            .starts_with("account own:")
+    );
+    assert_eq!(error("lost").as_deref(), Some("unknown account \"ghost\""));
+    assert_eq!(poller.eta_history().samples("dep"), [600]);
+    assert!(
+        health(&tick, "own").is_none(),
+        "a refused account sent nothing"
+    );
+}

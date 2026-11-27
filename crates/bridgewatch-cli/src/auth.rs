@@ -377,7 +377,9 @@ impl<'a> ReadOnce<'a> {
         &self,
     ) -> std::sync::MutexGuard<'_, std::collections::HashMap<(String, String), Option<String>>>
     {
-        self.seen.lock().unwrap_or_else(|e| e.into_inner())
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -741,6 +743,12 @@ pub(crate) mod tests {
         }
     }
 
+    /// The one sleep every login test shares: a fn item, so it is one type and
+    /// one copy of the generic `login`.
+    fn no_sleep(_: Duration) -> std::future::Ready<()> {
+        std::future::ready(())
+    }
+
     const BUILTIN: BuiltinClients = BuiltinClients {
         github_com: Some("Iv23liEXAMPLE"),
         github_app_slug: Some("bridgewatch"),
@@ -790,7 +798,7 @@ pub(crate) mod tests {
             transport.clone(),
             &store,
             &BUILTIN,
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             1_000,
             &mut out,
@@ -825,7 +833,7 @@ pub(crate) mod tests {
             Arc::new(ScriptTransport::new()),
             &Memory::default(),
             &BUILTIN,
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             0,
             &mut Vec::new(),
@@ -845,7 +853,7 @@ pub(crate) mod tests {
             Arc::new(ScriptTransport::new()),
             &Memory::default(),
             &BUILTIN,
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             0,
             &mut Vec::new(),
@@ -867,7 +875,7 @@ pub(crate) mod tests {
             transport.clone(),
             &Memory::default(),
             &BuiltinClients::default(),
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             0,
             &mut Vec::new(),
@@ -902,7 +910,7 @@ pub(crate) mod tests {
             t,
             &Memory::default(),
             &BUILTIN,
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             0,
             &mut Vec::new(),
@@ -929,7 +937,7 @@ pub(crate) mod tests {
             scripted_github_sign_in(),
             &store,
             &BUILTIN,
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             1_000,
             &mut Vec::new(),
@@ -1539,8 +1547,45 @@ pub(crate) mod tests {
         }
     }
 
+    /// [`scripted_github_sign_in`], except that `/user` cannot be read.
+    fn scripted_sign_in_without_user() -> Arc<ScriptTransport> {
+        let t = Arc::new(ScriptTransport::new());
+        t.reply(
+            "/login/device/code",
+            200,
+            r#"{"device_code":"D","user_code":"U","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}"#,
+        );
+        t.reply(
+            "/login/oauth/access_token",
+            200,
+            r#"{"access_token":"ghu_A","token_type":"bearer","scope":""}"#,
+        );
+        t.reply("api.github.com/user", 500, "{}");
+        t
+    }
+
     #[tokio::test]
     async fn a_login_whose_output_is_refused_is_an_error_at_every_line() {
+        for n in 0.. {
+            let store = Memory::default();
+            let mut out = FailsAfter(n);
+            let done = login(
+                &github(),
+                "gh",
+                scripted_sign_in_without_user(),
+                &store,
+                &BUILTIN,
+                no_sleep,
+                std::future::pending(),
+                1_000,
+                &mut out,
+            )
+            .await;
+            if done.is_ok() {
+                break;
+            }
+            assert!(n < 10_000, "never got through");
+        }
         for n in 0.. {
             let store = Memory::default();
             let mut out = FailsAfter(n);
@@ -1550,7 +1595,7 @@ pub(crate) mod tests {
                 scripted_github_sign_in(),
                 &store,
                 &BUILTIN,
-                |_| std::future::ready(()),
+                no_sleep,
                 std::future::pending(),
                 1_000,
                 &mut out,
@@ -1587,15 +1632,15 @@ pub(crate) mod tests {
     /// One account for each answer an own token and a sign-in can give.
     fn mixed() -> (Config, Memory, Expiries) {
         let own = [
-            ("far", Some(OwnExpiry::At(NOW as i64 + 90 * 86_400))),
-            ("now", Some(OwnExpiry::At(NOW as i64))),
-            ("never", Some(OwnExpiry::Never)),
-            ("unstated", Some(OwnExpiry::NotStated)),
-            ("revoked", Some(OwnExpiry::Refused(Refusal::Revoked))),
-            ("ended", Some(OwnExpiry::Refused(Refusal::SignInEnded))),
-            ("invalid", Some(OwnExpiry::Refused(Refusal::Invalid))),
-            ("unread", Some(OwnExpiry::AcceptedUnread)),
-            ("error", Some(OwnExpiry::Unread("503".into()))),
+            ("far", OwnExpiry::At(NOW as i64 + 90 * 86_400)),
+            ("now", OwnExpiry::At(NOW as i64)),
+            ("never", OwnExpiry::Never),
+            ("unstated", OwnExpiry::NotStated),
+            ("revoked", OwnExpiry::Refused(Refusal::Revoked)),
+            ("ended", OwnExpiry::Refused(Refusal::SignInEnded)),
+            ("invalid", OwnExpiry::Refused(Refusal::Invalid)),
+            ("unread", OwnExpiry::AcceptedUnread),
+            ("error", OwnExpiry::Unread("503".into())),
         ];
         let mut raw = String::new();
         let store = Memory::default();
@@ -1606,13 +1651,17 @@ pub(crate) mod tests {
                 "[accounts.{name}]\nbase_url = \"https://gitlab.example.com\"\ntoken = {{ own = true }}\n"
             ));
             token::set_own_token(name, "https://gitlab.example.com", &secret, &store).unwrap();
-            if let Some(e) = expiry {
-                expiries.insert(name.to_string(), e);
-            }
+            expiries.insert(name.to_string(), expiry);
         }
-        // Sign-ins: no client id, no expiry and no refresh, an end passed.
+        // A token saved for another server, on a base that is not a URL.
+        raw.push_str("[accounts.elsewhere]\nbase_url = \"not a url\"\ntoken = { own = true }\n");
+        token::set_own_token("elsewhere", "https://gitlab.com", &secret, &store).unwrap();
+        // Sign-ins: no client id, no expiry and no refresh, an end passed,
+        // one issued by another instance, and one never made.
         raw.push_str(
-            "[accounts.noid]\nbase_url = \"https://gitlab.example.com\"\ntoken = { oauth = true }\n\
+            "[accounts.moved]\nbase_url = \"https://gitlab.example.com\"\ntoken = { oauth = { client_id = \"gitlab-app-id\" } }\n\
+             [accounts.unsigned]\ntoken = { oauth = true }\n\
+             [accounts.noid]\nbase_url = \"https://gitlab.example.com\"\ntoken = { oauth = true }\n\
              [accounts.plain]\ntoken = { oauth = true }\n\
              [accounts.over]\ntoken = { oauth = true }\n",
         );
@@ -1623,6 +1672,7 @@ pub(crate) mod tests {
         plain.login = None;
         store::save("noid", &plain, &store).unwrap();
         store::save("plain", &plain, &store).unwrap();
+        store::save("moved", &plain, &store).unwrap();
         let mut over = issued_by("https://gitlab.com", "gitlab-app-id");
         over.refresh_expires_at = Some(NOW - 60);
         store::save("over", &over, &store).unwrap();
@@ -1668,6 +1718,12 @@ pub(crate) mod tests {
             "{text}"
         );
         assert!(line("over").contains("the sign-in ended at"), "{text}");
+        assert!(line("elsewhere").contains("not an http(s) URL"), "{text}");
+        assert!(
+            line("moved").contains("run bridgewatch auth login --account moved"),
+            "{text}"
+        );
+        assert!(line("unsigned").contains("not signed in"), "{text}");
         assert!(!text.contains("glpat-SECRET"), "{text}");
     }
 
@@ -1774,13 +1830,11 @@ pub(crate) mod tests {
             Err(TokenError::NoEntry { .. })
         ));
         memory.keyring_set("s", "u", "v").unwrap();
-        assert!(
-            matches!(
-                once.keyring_get_quiet("s", "u"),
-                Err(TokenError::NoEntry { .. })
-            ),
-            "the absence was remembered"
+        let remembered = matches!(
+            once.keyring_get_quiet("s", "u"),
+            Err(TokenError::NoEntry { .. })
         );
+        assert!(remembered, "the absence was remembered");
         once.keyring_set("s", "u", "w").unwrap();
         assert_eq!(once.keyring_get("s", "u").unwrap(), "w");
         once.keyring_delete("s", "u").unwrap();
@@ -1796,5 +1850,115 @@ pub(crate) mod tests {
                 Err(TokenError::Store { .. })
             ));
         }
+    }
+
+    /// A server that asks for slower polling is waited out, and a sign-in
+    /// whose `/user` cannot be read is stored without a login and says so.
+    #[tokio::test]
+    async fn a_slowed_sign_in_whose_user_cannot_be_read_says_who_could_not_be_asked() {
+        let _log = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_test_writer()
+                .finish(),
+        );
+        let t = Arc::new(ScriptTransport::new());
+        t.reply(
+            "/login/device/code",
+            200,
+            r#"{"device_code":"D","user_code":"U","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}"#,
+        );
+        t.reply("/login/oauth/access_token", 200, r#"{"error":"slow_down"}"#);
+        t.reply(
+            "/login/oauth/access_token",
+            200,
+            r#"{"access_token":"ghu_A","token_type":"bearer","scope":""}"#,
+        );
+        t.reply("api.github.com/user", 500, "{}");
+        let mut out = Vec::new();
+        let code = login(
+            &github(),
+            "gh",
+            t,
+            &Memory::default(),
+            &BUILTIN,
+            no_sleep,
+            std::future::pending(),
+            1_000,
+            &mut out,
+        )
+        .await
+        .expect("signs in");
+        assert_eq!(code, exit::OK);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("Who you are could not be asked"), "{text}");
+    }
+
+    /// The expiry lookup's other answers: a token that resolves no further,
+    /// a transport that cannot be built, GitHub stating nothing, and a
+    /// server error that says nothing about the token.
+    #[tokio::test]
+    async fn every_expiry_answer_is_read_as_what_it_says() {
+        /// Answers a quiet read, refuses one that may ask.
+        struct QuietOnly(Memory);
+        impl TokenProvider for QuietOnly {
+            fn keyring_get(&self, service: &str, _: &str) -> Result<String, TokenError> {
+                Err(TokenError::Store {
+                    service: service.into(),
+                    message: "locked".into(),
+                })
+            }
+            fn keyring_get_quiet(&self, service: &str, user: &str) -> Result<String, TokenError> {
+                self.0.keyring_get(service, user)
+            }
+            fn keyring_set(&self, s: &str, u: &str, v: &str) -> Result<(), TokenError> {
+                self.0.keyring_set(s, u, v)
+            }
+            fn keyring_delete(&self, s: &str, u: &str) -> Result<(), TokenError> {
+                self.0.keyring_delete(s, u)
+            }
+            fn env(&self, n: &str) -> Option<String> {
+                self.0.env(n)
+            }
+            fn run(&self, a: &[String]) -> Result<String, TokenError> {
+                self.0.run(a)
+            }
+        }
+        let secret = bridgewatch_core::token::Secret::new("tok-FIXTURE");
+        let config = config(
+            "[accounts.gh]\nprovider = \"github\"\ntoken = { own = true }\n\n\
+             [accounts.lab]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n",
+        );
+        let memory = Memory::default();
+        token::set_own_token("gh", "https://api.github.com", &secret, &memory).unwrap();
+        token::set_own_token("lab", "https://gitlab.example.com", &secret, &memory).unwrap();
+
+        let t = Arc::new(ScriptTransport::new());
+        t.reply("/user", 200, r#"{"login":"octocat","id":1}"#);
+        t.reply("/personal_access_tokens/self", 500, "{}");
+        let transport = t.clone();
+        let ok = move |_: &Account| Ok(transport.clone() as Arc<dyn Transport>);
+        let expiries = own_expiries(&config, None, &memory, &ok).await;
+        assert!(
+            matches!(expiries.get("gh"), Some(OwnExpiry::NotStated)),
+            "{expiries:?}"
+        );
+        assert!(
+            matches!(expiries.get("lab"), Some(OwnExpiry::Unread(_))),
+            "{expiries:?}"
+        );
+
+        let broken = |_: &Account| Err(ClientError::Transport("no TLS".into()));
+        let expiries = own_expiries(&config, Some("lab"), &memory, &broken).await;
+        assert!(matches!(expiries.get("lab"), Some(OwnExpiry::Unread(e)) if e.contains("no TLS")));
+
+        let quiet = QuietOnly(Memory::default());
+        token::set_own_token("lab", "https://gitlab.example.com", &secret, &quiet.0).unwrap();
+        let expiries = own_expiries(&config, Some("lab"), &quiet, &broken).await;
+        assert!(expiries.is_empty(), "{expiries:?}");
+        quiet.keyring_set("s", "u", "v").unwrap();
+        quiet.keyring_delete("s", "u").unwrap();
+        assert_eq!(quiet.env("x"), None);
+        assert!(quiet.run(&[]).is_err());
     }
 }

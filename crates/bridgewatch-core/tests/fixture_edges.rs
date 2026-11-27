@@ -204,3 +204,26 @@ async fn a_recording_that_cannot_write_a_file_says_which() {
         );
     }
 }
+
+/// A recording whose directory cannot be made says which path.
+#[tokio::test]
+async fn a_recording_into_a_path_under_a_file_says_which_path() {
+    let t = Arc::new(ScriptTransport::new());
+    let client = client_for(
+        &Account::default(),
+        &Secret::new("glpat-FIXTURE"),
+        t,
+        RequestRing::new(4),
+    )
+    .unwrap();
+    let dir = TempDir::new("bw-fixture-under-file");
+    dir.write("file", "x");
+    let out = dir.0.join("file").join("recording");
+    let error = fixture::record(client.as_ref(), &ProjectRef::Id(1), 7, &out, false)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, fixture::RecordError::Io(path, _) if *path == out),
+        "{error:?}"
+    );
+}

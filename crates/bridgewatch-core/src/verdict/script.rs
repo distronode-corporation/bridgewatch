@@ -68,9 +68,6 @@ pub enum ScriptError {
         /// What the script actually returned.
         returned: String,
     },
-    /// The pipeline view could not be handed to the script.
-    #[error("cannot pass the pipeline to the script: {0}")]
-    Marshal(String),
 }
 
 /// A compiled verdict script.
@@ -104,8 +101,8 @@ impl VerdictScript {
     ///
     /// The view is bound as `pipeline`, and also as `p` for brevity.
     pub fn evaluate(&self, view: &PipelineView) -> Result<IconState, ScriptError> {
-        let dynamic =
-            rhai::serde::to_dynamic(view).map_err(|e| ScriptError::Marshal(e.to_string()))?;
+        // A view is plain data (strings, numbers, lists, maps keyed by strings).
+        let dynamic = rhai::serde::to_dynamic(view).expect("a view marshals");
         let mut scope = rhai::Scope::new();
         scope.push_constant("pipeline", dynamic.clone());
         scope.push_constant("p", dynamic);

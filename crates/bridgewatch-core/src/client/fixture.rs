@@ -510,9 +510,6 @@ pub enum RecordError {
     /// A file could not be written.
     #[error("{0}: {1}")]
     Io(PathBuf, #[source] std::io::Error),
-    /// A response could not be re-serialised.
-    #[error("cannot serialise {0}: {1}")]
-    Serialize(String, #[source] serde_json::Error),
 }
 
 fn write_json<T: Serialize>(
@@ -525,8 +522,8 @@ fn write_json<T: Serialize>(
     // typed model drops the personal fields anyway, by construction — but that
     // is an accident of which fields the engine happens to need, and the day
     // somebody adds `commit` to `Job` it would stop being true silently.
-    let mut json =
-        serde_json::to_value(value).map_err(|e| RecordError::Serialize(name.to_string(), e))?;
+    // Every recorded type is plain data, keyed by strings.
+    let mut json = serde_json::to_value(value).expect("a recorded value serialises");
     if let Some(kind) = kind_for_file(name) {
         scrub(&mut json, kind);
     }

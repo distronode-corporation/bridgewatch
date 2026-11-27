@@ -2183,6 +2183,19 @@ mod retry_tests {
         assert!(t.requests().is_empty(), "{:?}", t.requests());
     }
 
+    /// A poller built from ready clients has no retry state, so a retry pass
+    /// is nothing.
+    #[test]
+    fn a_poller_from_ready_clients_retries_nothing() {
+        let mut poller = Poller::with_clients(
+            &config(BOTH),
+            BTreeMap::new(),
+            crate::client::RequestRing::new(1),
+        )
+        .unwrap();
+        assert!(poller.retry_refused().is_empty());
+    }
+
     /// The fakes' remaining methods, so each one is known to answer as its
     /// comment says.
     #[test]

@@ -616,9 +616,8 @@ impl Conn {
         let _slot = self.in_flight.acquire().await;
         let started = std::time::Instant::now();
         let result = self.transport.execute(request).await;
-        if !anonymous {
-            self.observe(&result);
-        }
+        // Only a request that carried the credential says anything about it.
+        (!anonymous).then(|| self.observe(&result));
         let ms = started.elapsed().as_millis() as u64;
         match result {
             Ok(response) => {

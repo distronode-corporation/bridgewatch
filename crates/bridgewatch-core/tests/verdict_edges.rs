@@ -414,4 +414,48 @@ mod small {
             i64::MAX.to_string()
         );
     }
+
+    /// Every unit a span is said in.
+    #[test]
+    fn a_span_reads_in_the_largest_units_it_needs() {
+        let span = bridgewatch_core::health::span;
+        assert_eq!(span(42), "42s");
+        assert_eq!(span(300), "5m");
+        assert_eq!(span(3 * 3600 + 60), "3h 1m");
+        assert_eq!(span(2 * 86_400 + 3600), "2d 1h");
+    }
+
+    /// A prompt that was cancelled and one that would have to be raised
+    /// say different things.
+    #[test]
+    fn both_kinds_of_approval_say_what_happened() {
+        let said = |refused| {
+            bridgewatch_core::token::TokenError::NeedsApproval {
+                service: "bridgewatch:gl".into(),
+                refused,
+            }
+            .to_string()
+        };
+        assert!(said(true).contains("was cancelled or denied"));
+        assert!(!said(false).contains("was cancelled or denied"));
+    }
+
+    /// A script may print and debug; neither reaches anything.
+    #[test]
+    fn a_script_that_prints_and_debugs_still_answers() {
+        let script = bridgewatch_core::verdict::VerdictScript::from_source(
+            "print(\"x\"); debug(\"y\"); \"deployed\"",
+        )
+        .unwrap();
+        let view: bridgewatch_core::verdict::PipelineView =
+            serde_json::from_value(serde_json::json!({
+                "id": 1, "iid": null, "sha": "a", "sha7": "a", "ref": "main", "source": "push",
+                "status": "success", "web_url": null, "state": "deployed", "deploy": "none",
+                "deploy_marker": null, "deploy_failures": [], "failures": [], "warnings": [],
+                "gates": [], "post_deploy_failures": [], "sibling_failures": [], "bridges": [],
+                "parent_jobs": [], "updated_at": null, "created_at": null, "live": false
+            }))
+            .unwrap();
+        assert_eq!(script.evaluate(&view).unwrap(), IconState::Deployed);
+    }
 }

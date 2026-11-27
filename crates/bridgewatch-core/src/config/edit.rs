@@ -51,9 +51,6 @@ pub enum EditError {
     /// A watch id was not found.
     #[error("no watch with id {0:?}")]
     NoSuchWatch(String),
-    /// A value could not be turned into TOML.
-    #[error("cannot serialise value: {0}")]
-    Serialize(String),
 }
 
 /// A scalar or list to write into the document.
@@ -254,7 +251,8 @@ impl ConfigEditor {
 /// file reflows. Inlining `poll = { .. }` keeps the appended entry to one
 /// header, which is also how the shipped example writes it.
 fn watch_to_table(watch: &Watch) -> Result<Table, EditError> {
-    let rendered = toml::to_string(watch).map_err(|e| EditError::Serialize(e.to_string()))?;
+    // A `Watch` is plain data, its tables after its values: TOML can hold it.
+    let rendered = toml::to_string(watch).expect("a watch is TOML");
     // toml's own output is TOML.
     let doc = rendered
         .parse::<DocumentMut>()

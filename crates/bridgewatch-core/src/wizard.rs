@@ -176,11 +176,16 @@ impl WizardError {
     }
 
     fn from_client(error: ClientError, what: impl Into<String>) -> Self {
+        Self::from_client_on(error, what.into())
+    }
+
+    /// [`Self::from_client`], outside the generic, so its arms are one copy.
+    fn from_client_on(error: ClientError, what: String) -> Self {
         match error {
             ClientError::Auth { status, provider } => {
                 WizardError::Unauthorized { status, provider }
             }
-            ClientError::NotFound { .. } => WizardError::NotFound { what: what.into() },
+            ClientError::NotFound { .. } => WizardError::NotFound { what },
             other => WizardError::Client(other),
         }
     }
@@ -2029,10 +2034,9 @@ fn add_minimal_watch(editor: &mut ConfigEditor, watch: &Watch) -> Result<(), Wiz
         &[],
         watch.role,
     );
-    let to_json = |w: &Watch| {
-        serde_json::to_value(w).map_err(|e| WizardError::Edit(EditError::Serialize(e.to_string())))
-    };
-    let (have, default) = (to_json(watch)?, to_json(&reference)?);
+    // A `Watch` is plain data, keyed by strings: it always serialises.
+    let to_json = |w: &Watch| serde_json::to_value(w).expect("a watch serialises");
+    let (have, default) = (to_json(watch), to_json(&reference));
     editor.apply(&[Edit::AddWatch {
         watch: Box::new(watch.clone()),
     }])?;

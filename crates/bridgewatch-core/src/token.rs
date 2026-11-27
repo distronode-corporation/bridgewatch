@@ -1387,7 +1387,9 @@ impl<P: TokenProvider> AskOnce<P> {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeSet<String>> {
-        self.refused.lock().unwrap_or_else(|e| e.into_inner())
+        self.refused
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
