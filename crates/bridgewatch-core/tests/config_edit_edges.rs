@@ -84,12 +84,12 @@ fn a_set_below_a_scalar_is_refused() {
 #[test]
 fn unset_walks_arrays_and_inline_tables_and_says_whether_it_removed_anything() {
     let mut e = editor();
-    assert_eq!(e.unset("watches.first.id").unwrap(), false);
-    assert_eq!(e.unset("watches.9.id").unwrap(), false);
-    assert_eq!(e.unset("ui.theme.colour").unwrap(), false);
-    assert_eq!(e.unset("accounts.gl.show.max_rows.x").unwrap(), false);
-    assert_eq!(e.unset("accounts.gl.show.inner.deep").unwrap(), true);
-    assert_eq!(e.unset("watches.0").unwrap(), true);
+    assert!(!e.unset("watches.first.id").unwrap());
+    assert!(!e.unset("watches.9.id").unwrap());
+    assert!(!e.unset("ui.theme.colour").unwrap());
+    assert!(!e.unset("accounts.gl.show.max_rows.x").unwrap());
+    assert!(e.unset("accounts.gl.show.inner.deep").unwrap());
+    assert!(e.unset("watches.0").unwrap());
     assert_eq!(e.watch_ids(), ["b"]);
 }
 
