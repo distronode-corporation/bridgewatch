@@ -602,26 +602,7 @@ describe("requests that fail", () => {
   });
 });
 
-describe("Finish with a command source", () => {
-  it("writes nothing when the command question is declined at Finish", async () => {
-    const api = fakeApi();
-    await start(api);
-    await useCommand("pass show gitlab");
-    await next();
-    await answerDialog(true);
-    await click('input[name="project"][value="42"]');
-    await next();
-    await next();
-    await click('input[name="marker-mode"][value="none"]');
-    await next();
-    await next();
-    expect(text('[data-slot="token-note"]')).toBe("The token is read by running: pass show gitlab");
-    // Back to the account step to change the command, then forward again.
-    await click('nav[aria-label="Setup steps"] button[aria-label^="Account"]');
-    await type("#wizard-command", "pass show gitlab/ci");
-    await click('nav[aria-label="Setup steps"] button[aria-label^="Review"]').catch(() => {});
-  });
-
+describe("the review step's token note", () => {
   it("says which variable an env source reads", async () => {
     await start(fakeApi());
     await click('input[name="token-mode"][value="env"]');
@@ -659,5 +640,94 @@ describe("a GitHub commit group on an older shell", () => {
     await click('input[name="project"][value="42"]');
     await next();
     expect(text('[data-slot="expect"] [role="alert"]')).toBe("rate limited");
+  });
+});
+
+describe("the CLI token as detections come and go", () => {
+  type Found = { status: "found"; source: { keyring: { service: string; user: string } } };
+  const found = (service: string): Found => ({ status: "found", source: { keyring: { service, user: "" } } });
+  const CUSTOM = { keyring: { service: "my-own-item", user: "me" } };
+
+  async function testedToken(api: FakeApi) {
+    await click('[data-action="test-connection"]');
+    return api.testConnection.mock.calls.at(-1)?.[0].token;
+  }
+
+  it("forgets a detected token the next detection on the same instance no longer finds", async () => {
+    const detect = vi
+      .fn()
+      .mockImplementationOnce(async () => ({ status: "not_found", service: "glab:gitlab.com" }))
+      .mockImplementationOnce(async () => found("glab:gitlab.example.com:token"))
+      .mockImplementation(async () => ({ status: "not_found", service: "glab:gitlab.example.com" }));
+    await start(fakeApi({ detectCliToken: detect }));
+    await click('input[name="instance"][value="self-managed"]');
+    await type("#wizard-base-url", "https://gitlab.example.com");
+    q("#wizard-base-url")!.dispatchEvent(new FocusEvent("blur"));
+    await settle();
+    expect(q('input[name="token-mode"][value="glab"]')).not.toBeNull();
+    q("#wizard-base-url")!.dispatchEvent(new FocusEvent("blur"));
+    await settle();
+    expect(detect).toHaveBeenCalledTimes(3);
+    expect(q('input[name="token-mode"][value="glab"]')).toBeNull();
+  });
+
+  it("leaves a chosen pasted token alone while detections find the CLI item, on this instance and the next", async () => {
+    const detect = vi
+      .fn()
+      .mockImplementationOnce(async () => ({ status: "not_found", service: "glab:gitlab.example.com" }))
+      .mockImplementation(async () => found("glab:gitlab.example.com:token"));
+    const api = fakeApi({ detectCliToken: detect });
+    await start(api, { initial: { account: "work", base_url: "https://gitlab.example.com", token: CUSTOM } });
+    await click('input[name="token-mode"][value="paste"]');
+    // Detected now, but the form is on a pasted token: the file's own item is left as it is.
+    q("#wizard-base-url")!.dispatchEvent(new FocusEvent("blur"));
+    await settle();
+    // And a move to another instance does not drop it either, since it is not the detected one.
+    await type("#wizard-base-url", "https://gitlab.other.example");
+    q("#wizard-base-url")!.dispatchEvent(new FocusEvent("blur"));
+    await settle();
+    // Neither detection took the form off the pasted token the user chose.
+    expect(q<HTMLInputElement>('input[name="token-mode"][value="paste"]')?.checked).toBe(true);
+    await type("#wizard-secret", "pasted-secret-value");
+    expect(await testedToken(api)).toEqual({ own: true });
+  });
+});
+
+describe("a stored sign-in from a file that names no account", () => {
+  it("is looked up under the form's account name", async () => {
+    const api = fakeApi();
+    await start(api, { initial: { base_url: "https://gitlab.com", token: { oauth: true } } });
+    await click('[data-action="test-connection"]');
+    expect(api.testConnection.mock.calls[0][0].account).toBe("gitlab");
+  });
+});
+
+describe("availability answers out of order", () => {
+  it("ignores an older availability question that fails after a newer one answered", async () => {
+    const older = deferred<OAuthAvailability>();
+    const oauth = {
+      availability: vi
+        .fn()
+        .mockImplementationOnce(() => older.promise)
+        .mockImplementation(async () => ({ available: true, builtin: true, needs_client_id: false, host: "gitlab.example.com", install_url: null })),
+      start: vi.fn(),
+      wait: vi.fn(),
+      cancel: vi.fn(),
+      openVerification: vi.fn(),
+      openInstall: vi.fn(),
+      status: vi.fn(async () => null),
+      signOut: vi.fn(),
+      copy: vi.fn(),
+    } as unknown as OAuthApi;
+    await start(fakeApi(), { oauth });
+    await click('input[name="instance"][value="self-managed"]');
+    await type("#wizard-base-url", "https://gitlab.example.com");
+    q("#wizard-base-url")!.dispatchEvent(new FocusEvent("blur"));
+    await settle();
+    expect(q<HTMLInputElement>('input[name="token-mode"][value="oauth"]')?.checked).toBe(true);
+    older.reject(new Error("offline"));
+    await settle();
+    // The failure belonged to the old instance: sign-in stays chosen for this one.
+    expect(q<HTMLInputElement>('input[name="token-mode"][value="oauth"]')?.checked).toBe(true);
   });
 });
