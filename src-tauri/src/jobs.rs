@@ -76,3 +76,69 @@ pub async fn job_action(
     state.request_poll(PollNow::JobAction);
     Ok(outcome)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bridgewatch_core::client::RequestRing;
+    use bridgewatch_core::token::{Secret, SystemTokenProvider};
+    use tauri::Manager;
+
+    /// Every way the popover's job can fail to resolve, each in its own
+    /// words, and a job the instance refuses to show or act on: the refusal
+    /// comes back as the command's error, and nothing is polled for it.
+    #[test]
+    fn a_job_resolves_through_its_watch_and_a_refusal_is_the_answer() {
+        let base = crate::wizard::tests::refusing_server(4);
+        let raw = format!(
+            "[accounts.gl]\nbase_url = \"{base}\"\ntoken = {{ env = \"BW_TEST_UNSET\" }}\n\
+             [[watches]]\nid = \"w\"\naccount = \"gl\"\nproject = \"g/p\"\nref = \"main\"\n"
+        );
+        let config = bridgewatch_core::config::parse_str(&raw, std::path::Path::new("x.toml"))
+            .unwrap()
+            .config;
+        let app = tauri::test::mock_app();
+        app.manage(Arc::new(AppState::new(crate::config::Resolved {
+            path: std::path::PathBuf::from("/nonexistent/config.toml"),
+            seeded: false,
+            first_run: false,
+            loaded: None,
+            validation: crate::config::Validation::default(),
+            text: None,
+        })));
+        let state = || app.state::<Arc<AppState>>();
+        fn run<F: std::future::Future>(f: F) -> F::Output {
+            tauri::async_runtime::block_on(f)
+        }
+        let job = format!("{base}/g/p/-/jobs/7");
+        let tail = |watch: &str, url: &str| run(job_log_tail(watch.into(), url.into(), state()));
+
+        assert_eq!(tail("w", &job).unwrap_err(), "no configuration is loaded");
+        state().lock().config = Some(config.clone());
+        assert_eq!(tail("nope", &job).unwrap_err(), "no watch with id \"nope\"");
+        assert!(tail("w", "https://elsewhere.example/g/p/-/jobs/7").is_err());
+        assert_eq!(
+            tail("w", &job).unwrap_err(),
+            "account \"gl\" is not being polled yet; try again in a moment"
+        );
+
+        let account = config.accounts.get("gl").unwrap();
+        let client = bridgewatch_core::poll::client_for_account(
+            "gl",
+            account,
+            Some(Secret::new("not-a-real-token")),
+            Arc::new(SystemTokenProvider),
+            RequestRing::new(4),
+        )
+        .unwrap();
+        state().set_clients([("gl".to_string(), client)].into_iter().collect());
+        assert!(tail("w", &job).is_err(), "the instance refused the log");
+        let acted = run(job_action(
+            "w".into(),
+            job.clone(),
+            JobAction::Retry,
+            state(),
+        ));
+        assert!(acted.is_err(), "the instance refused the retry");
+    }
+}

@@ -741,7 +741,7 @@ fn hide_wizard(app: &AppHandle) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use bridgewatch_core::token::TokenError;
     use std::path::Path;
@@ -1510,7 +1510,7 @@ mod tests {
 
     /// A server on 127.0.0.1 that answers every request 401, for `n`
     /// connections: what an instance says to a token it does not accept.
-    fn refusing_server(n: usize) -> String {
+    pub(crate) fn refusing_server(n: usize) -> String {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
