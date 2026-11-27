@@ -2951,3 +2951,282 @@ async fn a_gitlab_project_gets_no_expect_suggestions_and_no_request() {
     assert!(got.workflows.is_empty());
     assert!(t.seen().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// The answers the tests above do not reach
+// ---------------------------------------------------------------------------
+
+/// A project token whose bot name carries no id still says what it is, and a
+/// token GitLab reports inactive is warned about.
+#[tokio::test]
+async fn a_project_token_with_no_id_in_its_name_and_an_inactive_token_are_warned_about() {
+    let bot = r#"{"id":2,"username":"project__bot","name":"bot","bot":true}"#;
+    let t = Routed::new().route("/user", 200, bot).route(
+        "/personal_access_tokens/self",
+        200,
+        r#"{"id":9,"name":"b","scopes":["read_api"],"expires_at":null,"active":false}"#,
+    );
+    let id = wizard::test_connection(&client(t), Provider::Gitlab)
+        .await
+        .unwrap();
+    assert_eq!(id.token, TokenKind::Project { project_id: None });
+    assert!(
+        id.warnings
+            .iter()
+            .any(|w| w.contains("type the project id or path")),
+        "{:?}",
+        id.warnings
+    );
+    assert!(
+        id.warnings
+            .iter()
+            .any(|w| w == "GitLab reports this token as inactive."),
+        "{:?}",
+        id.warnings
+    );
+}
+
+/// On GitHub a token that reads one repository is told to type it as owner/repo.
+#[tokio::test]
+async fn a_github_token_for_one_repository_is_told_to_type_owner_slash_repo() {
+    let listing = wizard::list_projects(
+        &gh_client(Routed::new()),
+        Provider::Github,
+        &TokenKind::Project { project_id: None },
+        None,
+    )
+    .await
+    .unwrap();
+    match listing {
+        ProjectListing::TypeIdOrPath { reason, .. } => {
+            assert!(reason.contains("owner/repo"), "{reason}")
+        }
+        other => panic!("expected type-it, got {other:?}"),
+    }
+}
+
+/// The one-click list needs an instance it can name the projects by.
+#[tokio::test]
+async fn the_one_click_list_refuses_a_base_url_that_is_not_an_instance() {
+    let err = wizard::recent_projects(
+        &client(Routed::new()),
+        Provider::Gitlab,
+        &TokenKind::Personal,
+        "gitlab.com",
+    )
+    .await
+    .unwrap_err();
+    match err {
+        WizardError::Input(issue) => {
+            assert_eq!(issue.step, WizardStep::Account);
+            assert_eq!(issue.field, "base_url");
+        }
+        other => panic!("expected an input error, got {other:?}"),
+    }
+}
+
+/// The deploy step on the pipelines and children the tests above do not
+/// record: no push to learn from, a jobs or bridges read that fails, a trigger
+/// with no child, a child in the parent's own project, and a child read that
+/// fails at the first level (the step's error) or deeper (that branch unread).
+mod deploy_step_edges {
+    use super::*;
+
+    const ONE_JOB: &str = r#"[{"id":1,"name":"deploy","stage":"deploy","status":"success"}]"#;
+
+    fn suggest(t: &Arc<Routed>) -> Result<wizard::MarkerSuggestions, WizardError> {
+        futures_executor(wizard::suggest_deploy_markers(
+            &client(t.clone()),
+            &ProjectRef::Id(1),
+            "main",
+            None,
+        ))
+    }
+
+    fn futures_executor<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
+
+    #[test]
+    fn with_no_push_the_newest_non_schedule_pipeline_is_read() {
+        let t = Routed::new()
+            .route(
+                "/projects/1/pipelines?",
+                200,
+                r#"[{"id":30,"status":"success","source":"schedule"},{"id":20,"status":"success","source":"web"}]"#,
+            )
+            .route("/projects/1/pipelines/20/jobs", 200, ONE_JOB)
+            .route("/projects/1/pipelines/20/bridges", 200, "[]");
+        assert_eq!(suggest(&t).unwrap().pipeline_id, Some(20));
+    }
+
+    #[test]
+    fn a_jobs_or_bridges_read_that_fails_is_the_steps_error() {
+        let pipelines = r#"[{"id":10,"status":"success","source":"push"}]"#;
+        let jobs_fail = Routed::new()
+            .route("/projects/1/pipelines?", 200, pipelines)
+            .route("/projects/1/pipelines/10/jobs", 500, "{}");
+        assert!(matches!(suggest(&jobs_fail), Err(WizardError::Client(_))));
+        let bridges_fail = Routed::new()
+            .route("/projects/1/pipelines?", 200, pipelines)
+            .route("/projects/1/pipelines/10/jobs", 200, ONE_JOB)
+            .route("/projects/1/pipelines/10/bridges", 500, "{}");
+        assert!(matches!(
+            suggest(&bridges_fail),
+            Err(WizardError::Client(_))
+        ));
+    }
+
+    fn walk(child_status: u16, grandchild_status: u16) -> Arc<Routed> {
+        Routed::new()
+            .route("/projects/1/pipelines?", 200, r#"[{"id":10,"status":"success","source":"push"}]"#)
+            .route("/projects/1/pipelines/10/jobs", 200, ONE_JOB)
+            // A trigger that never created a child, and one whose child is in
+            // this project (no project_id on the downstream pipeline).
+            .route(
+                "/projects/1/pipelines/10/bridges",
+                200,
+                r#"[{"id":2,"name":"trigger:none","status":"failed"},
+                    {"id":3,"name":"trigger:release","status":"success",
+                     "downstream_pipeline":{"id":20,"status":"success"}}]"#,
+            )
+            .route("/projects/1/pipelines/20/jobs", child_status, r#"[{"id":4,"name":"publish","stage":"release","status":"success"}]"#)
+            .route(
+                "/projects/1/pipelines/20/bridges",
+                200,
+                r#"[{"id":5,"name":"trigger:eu","status":"success","downstream_pipeline":{"id":30,"project_id":1,"status":"success"}}]"#,
+            )
+            .route("/projects/1/pipelines/30/jobs", grandchild_status, "[]")
+            .route("/projects/1/pipelines/30/bridges", 200, "[]")
+    }
+
+    #[test]
+    fn a_child_read_that_fails_at_the_first_level_is_the_steps_error() {
+        let t = walk(500, 200);
+        assert!(matches!(suggest(&t), Err(WizardError::Client(_))));
+        assert!(
+            t.seen()
+                .iter()
+                .any(|p| p.starts_with("/projects/1/pipelines/20/jobs")),
+            "{:?}",
+            t.seen()
+        );
+    }
+
+    #[test]
+    fn a_grandchild_read_that_fails_leaves_only_that_branch_unread() {
+        let got = suggest(&walk(200, 500)).unwrap();
+        assert_eq!(got.unread_children, ["trigger:release / trigger:eu"]);
+        let names: Vec<&str> = got.suggestions.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"publish"), "{names:?}");
+    }
+}
+
+/// A name seen first at a lower score is replaced by its better showing.
+#[test]
+fn a_name_seen_first_at_its_worse_is_offered_at_its_best() {
+    let failed = [job("deploy:prod", "deploy", "failed")];
+    let passed = [job("deploy:prod", "deploy", "success")];
+    let ranked = wizard::rank_deploy_markers(&[
+        MarkerScope {
+            label: "",
+            jobs: &failed,
+        },
+        MarkerScope {
+            label: "trigger:web",
+            jobs: &passed,
+        },
+    ]);
+    assert_eq!(ranked.len(), 1);
+    assert_eq!(ranked[0].status, "success");
+    assert_eq!(ranked[0].pipeline, "trigger:web");
+}
+
+/// With two events to follow, the runs are not narrowed to one, and a refused
+/// read is the step's error naming the repository.
+#[tokio::test]
+async fn expect_suggestions_are_not_narrowed_for_two_events_and_a_refusal_is_an_error() {
+    let t = Routed::new().route(
+        "/repos/acme-corp/monorepo/actions/runs",
+        200,
+        r#"{"total_count":0,"workflow_runs":[]}"#,
+    );
+    let sources = ["push".to_string(), "schedule".to_string()];
+    let repo = ProjectRef::Path("acme-corp/monorepo".into());
+    wizard::suggest_expected_workflows(&gh_client(t.clone()), &repo, "main", &sources)
+        .await
+        .unwrap();
+    assert!(
+        t.seen().iter().all(|p| !p.contains("event=")),
+        "{:?}",
+        t.seen()
+    );
+
+    let refused = Routed::new().route("/repos/acme-corp/monorepo/actions/runs", 500, "{}");
+    let err = wizard::suggest_expected_workflows(&gh_client(refused), &repo, "main", &sources)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WizardError::Client(_)), "{err}");
+}
+
+#[test]
+fn a_watch_id_folds_every_run_of_punctuation_into_one_dash() {
+    assert_eq!(
+        wizard::suggest_watch_id("acme/web.app", "feat//x..y"),
+        "web-app-feat-x-y"
+    );
+}
+
+/// A file the wizard is asked to edit that does not hold: a value of the
+/// wrong type (fatal on load) and a watch that does not validate are both
+/// refused as invalid, with the loader's own words.
+#[test]
+fn an_existing_file_that_would_not_load_is_refused_as_invalid() {
+    let wrong_type = "[log]\nlevel = 5\n";
+    match wizard::build_config(&answers(), Some(wrong_type)) {
+        Err(WizardError::Invalid(d)) => assert_eq!(d.len(), 1),
+        other => panic!("expected invalid, got {other:?}"),
+    }
+    let bad_watch = "[accounts.other]\ntoken = { env = \"T\" }\n[[watches]]\nid = \" \"\naccount = \"other\"\nproject = 1\n";
+    match wizard::build_config(&answers(), Some(bad_watch)) {
+        Err(WizardError::Invalid(d)) => {
+            assert!(d.iter().any(|x| x.message.contains("id is empty")), "{d:?}")
+        }
+        other => panic!("expected invalid, got {other:?}"),
+    }
+}
+
+/// The same project and branch listed twice in one-click answers is one watch.
+#[test]
+fn a_one_click_project_listed_twice_is_one_watch() {
+    let q = wizard::QuickWatch {
+        project: ProjectRef::Id(7),
+        path: "acme/web".into(),
+        ref_name: "main".into(),
+        deploy_markers: Vec::new(),
+        listed_by: wizard::ListedBy {
+            provider: Provider::Gitlab,
+            origin: "https://gitlab.com".into(),
+        },
+    };
+    let a = WizardAnswers {
+        project: None,
+        watches: vec![q.clone(), q],
+        ..answers()
+    };
+    let built = wizard::build_config(&a, None).unwrap();
+    let c = load(&built.toml);
+    assert_eq!(
+        c.watches
+            .iter()
+            .filter(|w| w.project == ProjectRef::Id(7))
+            .count(),
+        1,
+        "{}",
+        built.toml
+    );
+}
