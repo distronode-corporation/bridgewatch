@@ -173,3 +173,56 @@ fn a_one_click_watch_is_checked_like_a_step_by_step_one() {
             .any(|(_, f, m)| f == "watches" && m.starts_with("acme/web: ") && !m.contains("empty"))
     );
 }
+
+/// A re-run over the wizard's own file changes the watch it wrote in place:
+/// its account, project (by path), branch, sources and live interval.
+#[test]
+fn a_rerun_changes_the_watch_it_wrote_in_place() {
+    use bridgewatch_core::wizard::build_config;
+    let first = build_config(&answers(), None).unwrap().toml;
+    let changed = WizardAnswers {
+        account: "work".into(),
+        project: Some(ProjectRef::Path("acme/web".into())),
+        ref_name: "develop".into(),
+        sources: vec!["web".into()],
+        live_secs: Some(9),
+        ..answers()
+    };
+    let built = build_config(&changed, Some(&first)).unwrap();
+    let config = bridgewatch_core::config::parse_str(&built.toml, std::path::Path::new("c.toml")).unwrap().config;
+    let w = config.watches.iter().find(|w| w.id == "app-main").expect("the same watch");
+    let before = bridgewatch_core::config::parse_str(&first, std::path::Path::new("c.toml")).unwrap().config;
+    assert_eq!(config.watches.len(), before.watches.len(), "changed in place, not added: {}", built.toml);
+    assert_eq!(w.account, "work");
+    assert_eq!(w.project, ProjectRef::Path("acme/web".into()));
+    assert_eq!(w.ref_pattern, "develop");
+    assert_eq!(w.sources, ["web"]);
+    assert_eq!(w.poll.live_secs, 9);
+}
+
+/// A file that does not parse cannot be edited, and the wizard says so on
+/// the existing-config path rather than writing over it.
+#[test]
+fn an_existing_file_that_is_not_toml_is_not_written_over() {
+    use bridgewatch_core::wizard::build_config;
+    let err = build_config(&answers(), Some("[accounts\nbroken")).unwrap_err();
+    assert_eq!(err.to_failure().kind, bridgewatch_core::wizard::FailureKind::ExistingConfig, "{err}");
+}
+
+/// What each error is called over IPC, which decides what the wizard shows.
+#[test]
+fn every_error_has_its_failure_kind_and_only_an_invalid_file_carries_diagnostics() {
+    use bridgewatch_core::client::ClientError;
+    use bridgewatch_core::config::{Diagnostic, Severity};
+    use bridgewatch_core::wizard::{FailureKind, WizardError};
+    let not_found = WizardError::NotFound { what: "project acme/web".into() }.to_failure();
+    assert_eq!(not_found.kind, FailureKind::NotFound);
+    let network = WizardError::Client(ClientError::Server { status: 502 }).to_failure();
+    assert_eq!(network.kind, FailureKind::Network);
+    let diagnostic = Diagnostic { severity: Severity::Error, path: "watches".into(), message: "bad".into(), span: None };
+    let invalid = WizardError::Invalid(vec![diagnostic.clone()]).to_failure();
+    assert_eq!(invalid.kind, FailureKind::Invalid);
+    assert_eq!(invalid.diagnostics.len(), 1);
+    assert_eq!(invalid.diagnostics[0].message, diagnostic.message);
+    assert!(network.diagnostics.is_empty());
+}
