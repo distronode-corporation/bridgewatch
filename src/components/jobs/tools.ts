@@ -43,7 +43,8 @@ export interface JobToolsApi {
  * `lib/ipc` without these two would otherwise fail at IMPORT of every view
  * that lists jobs, not at the one call that needs them.
  */
-export const SHELL_API: JobToolsApi = {
+// Required: every command is there, so a tools API without `copy` falls back to this one's.
+export const SHELL_API: Required<JobToolsApi> = {
   logTail: (watch, url) => jobLogTail(watch, url),
   action: (watch, url, action) => jobAction(watch, url, action),
   copy: (text) => copyText(text),

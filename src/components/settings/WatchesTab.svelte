@@ -47,12 +47,12 @@ SPDX-License-Identifier: Apache-2.0
   /**
    * The watch's keys in groups named after their config tables (Source, Rows,
    * Polling, Child pipelines, Deploy, Jobs, Notifications): 24 flat fields read
-   * as one undifferentiated form. A key no group claims would vanish, so it
-   * goes to Source; `panes.test.ts` fails on it before it ever gets here.
+   * as one undifferentiated form. A key no group claims would vanish, and
+   * `panes.test.ts` fails on it before it ever gets here.
    */
   const grouped = WATCH_GROUPS.map((group) => ({
     group,
-    entries: fields.filter((e) => (watchGroup(e.path) ?? "Source") === group),
+    entries: fields.filter((e) => watchGroup(e.path) === group),
   }));
 
   /**

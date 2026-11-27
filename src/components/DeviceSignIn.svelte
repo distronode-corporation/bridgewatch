@@ -109,20 +109,21 @@ SPDX-License-Identifier: Apache-2.0
     }
   }
 
-  async function stop() {
-    const s = started;
+  // Cancel is drawn only while a code is waiting, and passes that sign-in.
+  async function stop(s: StartedSignIn) {
     generation++;
     started = null;
     phase = "idle";
-    if (s) await api.cancel(s.id).catch(() => {});
+    await api.cancel(s.id).catch(() => {});
   }
 
-  async function copy() {
-    if (started) copied = await api.copy(started.user_code);
+  // The Copy and Open buttons are drawn only while a code is waiting, and pass that sign-in.
+  async function copy(s: StartedSignIn) {
+    copied = await api.copy(s.user_code);
   }
 
-  async function open() {
-    if (started) await api.openVerification(started.id).catch(() => {});
+  async function open(s: StartedSignIn) {
+    await api.openVerification(s.id).catch(() => {});
   }
 
   onDestroy(() => {
@@ -139,6 +140,7 @@ SPDX-License-Identifier: Apache-2.0
 
 <div class="device-sign-in flex flex-col gap-2" data-slot="device-sign-in">
   {#if phase === "waiting" && started}
+    {@const waiting = started}
     <p class="m-0 text-[13px]/[18px]">
       Enter this code at <span class="font-mono">{shortUrl(started.verification_uri)}</span>:
     </p>
@@ -148,15 +150,15 @@ SPDX-License-Identifier: Apache-2.0
         data-slot="user-code"
         aria-label="Your sign-in code">{started.user_code}</output
       >
-      <Button variant="outline" size="sm" onclick={() => void copy()} data-action="copy-code">
+      <Button variant="outline" size="sm" onclick={() => void copy(waiting)} data-action="copy-code">
         {copied ? "Copied" : "Copy"}
       </Button>
     </div>
     <div class="flex flex-wrap items-center gap-2">
-      <Button size="sm" onclick={() => void open()} data-action="open-verification">
+      <Button size="sm" onclick={() => void open(waiting)} data-action="open-verification">
         Open {shortUrl(started.verification_uri)}
       </Button>
-      <Button variant="ghost" size="sm" onclick={() => void stop()} data-action="cancel-sign-in">Cancel</Button>
+      <Button variant="ghost" size="sm" onclick={() => void stop(waiting)} data-action="cancel-sign-in">Cancel</Button>
     </div>
     <p class="text-muted-foreground m-0 text-xs" aria-live="polite" data-slot="sign-in-waiting">
       <!-- The count is for the eye: announced, it would repeat the sentence on every poll. -->

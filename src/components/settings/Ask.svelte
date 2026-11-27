@@ -92,7 +92,8 @@ SPDX-License-Identifier: Apache-2.0
   function confirm() {
     if (!complete) return;
     const answers: Record<string, string> = {};
-    for (const field of fields) answers[field.name] = (values[field.name] ?? "").trim();
+    // `complete` holds, so every field has a value: no `?? ""` needed here.
+    for (const field of fields) answers[field.name] = values[field.name].trim();
     onconfirm(answers);
   }
 

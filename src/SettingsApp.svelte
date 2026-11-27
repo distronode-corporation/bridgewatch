@@ -91,7 +91,9 @@ SPDX-License-Identifier: Apache-2.0
     document.getElementById(`tab-${PANES[to].id}`)?.focus();
   }
 
-  const paneLabel = $derived(PANES.find((p) => p.id === pane)?.label ?? "");
+  // Every pane is in PANES, so a lookup with no fallback.
+  const PANE_LABELS = Object.fromEntries(PANES.map((p) => [p.id, p.label])) as Record<Pane, string>;
+  const paneLabel = $derived(PANE_LABELS[pane]);
 
   let config = $state<unknown>(null);
   let jobOrder = $state<string[][]>([]);
@@ -431,7 +433,7 @@ SPDX-License-Identifier: Apache-2.0
              looks configured and 404s on every tick. -->
         <Ask
           title="New watch"
-          message={`It will use the account "${accountNames()[0] ?? ""}", the branch "main", and start as a secondary.`}
+          message={`It will use the account "${accountNames()[0]}", the branch "main", and start as a secondary.`}
           fields={[
             { name: "id", label: "Watch id", placeholder: "main-push" },
             { name: "project", label: "Project", placeholder: "group/project or owner/repo" },

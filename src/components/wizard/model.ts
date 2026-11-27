@@ -454,7 +454,8 @@ function hostOf(url: string): string | null {
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
-    return parsed.host || null;
+    // An http(s) URL always has a host (the parser refuses one without), so no `|| null`.
+    return parsed.host;
   } catch {
     return null;
   }
@@ -468,7 +469,8 @@ function hostOf(url: string): string | null {
 export function suggestAccountName(baseUrl: string, provider: Provider = "gitlab"): string {
   let host = (hostOf(baseUrl) ?? "").toLowerCase();
   if (provider === "github" && host.startsWith("api.")) host = host.slice(4);
-  const first = host.split(/[.:]/)[0] ?? "";
+  // split() always returns at least one element, so [0] needs no fallback.
+  const first = host.split(/[.:]/)[0];
   const clean = first.replace(/[^A-Za-z0-9_-]/g, "");
   return clean || provider;
 }
@@ -484,7 +486,8 @@ export function projectRefFor(provider: Provider, project: { id: number; path: s
 
 /** `suggest_watch_id`: `<project>-<ref>`, lowercased, non-word runs as one `-`. */
 export function suggestWatchId(projectPath: string, refName: string): string {
-  const last = projectPath.split("/").pop() ?? projectPath;
+  // The last path segment; slice needs no fallback, unlike split().pop(), which never returned undefined here.
+  const last = projectPath.slice(projectPath.lastIndexOf("/") + 1);
   return `${last}-${refName}`
     .toLowerCase()
     .replace(/[^a-z0-9_]/g, "-")

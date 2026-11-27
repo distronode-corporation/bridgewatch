@@ -5,19 +5,29 @@ import { compile, parse } from "svelte/compiler";
 import { describe, expect, it } from "vitest";
 
 /**
- * vitest.config.ts leaves exactly one node out of the coverage report: the
- * `?? ''` the Svelte compiler writes around a template `{expression}` (see
- * vitest.svelte-generated.ts). These tests hold that match to the compiler's
- * output and nothing else: it matches no node anywhere in the hand-written
- * source, markup included, and it matches every fallback the compiler writes.
+ * vitest.config.ts leaves three shapes of Svelte compiler output out of the
+ * coverage report (see vitest.svelte-generated.ts): the `?? ''` around a
+ * template `{expression}`, the dev-mode `$$ownership_validator.binding` check,
+ * and the `x !== (x = value)` attribute cache. These tests hold each match to
+ * the compiler's output and nothing else: none matches a node anywhere in the
+ * hand-written source, markup included, and each matches what the compiler writes.
  */
 
-// The matcher lives beside vitest.config.ts, in the node tsconfig project; a
-// computed specifier keeps this project's tsc from type-checking it a second time.
+type Kind = "function" | "statement" | "branch";
+
+// The matchers live beside vitest.config.ts, in the node tsconfig project; a
+// computed specifier keeps this project's tsc from type-checking them a second time.
 const matcherPath = "../../vitest.svelte-generated.ts";
-const { isSvelteTemplateFallback } = (await import(/* @vite-ignore */ matcherPath)) as {
-  isSvelteTemplateFallback: (node: object, type: "branch") => boolean;
-};
+const { isSvelteTemplateFallback, isSvelteOwnershipBinding, isSvelteAttributeCache, ignoreSvelteGenerated } =
+  (await import(/* @vite-ignore */ matcherPath)) as {
+    isSvelteTemplateFallback: (node: object, type: Kind) => boolean;
+    isSvelteOwnershipBinding: (node: object) => boolean;
+    isSvelteAttributeCache: (node: object, type: Kind) => boolean;
+    ignoreSvelteGenerated: (node: object, type: Kind) => boolean | "ignore-this-and-nested-nodes";
+  };
+
+/** Whether any of the three matches the node, as the coverage report asks it, for any kind. */
+const anyMatch = (node: object) => (["function", "statement", "branch"] as const).some((kind) => ignoreSvelteGenerated(node, kind));
 
 // Vite reads the tree at transform time (no node:fs here; see ipc.test.ts).
 const tree = import.meta.glob(["/src/**/*.ts", "/src/**/*.svelte", "!/src/**/__fixtures__/**"], {
@@ -61,7 +71,7 @@ function astOf(file: string, source: string): unknown {
   return parse(file.endsWith(".svelte") ? source : `<script lang="ts">${source}<\/script>`, { modern: true });
 }
 
-describe("the coverage report's one ignored node", () => {
+describe("the coverage report's ignored compiler output", () => {
   const files = Object.keys(tree);
 
   it("walks the real tree", () => {
@@ -75,14 +85,14 @@ describe("the coverage report's one ignored node", () => {
     expect(nodes(ast).filter((n) => (n as { type: string }).type === "LogicalExpression")).toHaveLength(2);
   });
 
-  it("matches no node in the hand-written source, markup and scripts alike", () => {
+  it("matches no hand-written node with any of the three, markup and scripts alike", () => {
     const matched = files.flatMap((file) =>
       nodes(astOf(file, tree[file]))
-        .filter((node) => isSvelteTemplateFallback(node, "branch"))
+        .filter(anyMatch)
         .map(() => file),
     );
     expect(matched).toEqual([]);
-  });
+  }, 60_000); // It parses every file under src/, which takes seconds on a loaded machine.
 
   it("would match a hand-written fallback in single quotes, which is why the test above walks the source", () => {
     const ast = astOf("x.svelte", `<script lang="ts">const a = b ?? '';<\/script>`);
@@ -114,6 +124,40 @@ describe("the coverage report's one ignored node", () => {
         (n) => (n as { type: string }).type === "LogicalExpression",
       );
       expect(isSvelteTemplateFallback(node, "branch"), code).toBe(false);
+    }
+  });
+
+  it("matches the ownership check the compiler writes for a binding into a child, and only that", () => {
+    const { js } = compile(
+      `<script lang="ts">import Child from "./Child.svelte"; let { draft = $bindable() }: { draft: { x: string } } = $props();<\/script>
+       <Child bind:value={draft.x} />`,
+      { filename: "Probe.svelte", generate: "client", dev: true },
+    );
+    const written = js.code.split("$$ownership_validator.binding(").length - 1;
+    expect(written).toBe(1);
+    const matched = nodes(parseJs(js.code)).filter((node) => isSvelteOwnershipBinding(node));
+    expect(matched).toHaveLength(written);
+    // The mutation call wraps the real assignment, so it stays measured.
+    expect(js.code).toContain("$$ownership_validator.mutation(");
+    const mutation = nodes(parseJs("$$ownership_validator.mutation('draft', [], draft(x = 1, true), 1, 1);"));
+    expect(mutation.filter((node) => isSvelteOwnershipBinding(node))).toEqual([]);
+    expect(ignoreSvelteGenerated(matched[0], "statement")).toBe("ignore-this-and-nested-nodes");
+  });
+
+  it("matches the attribute cache the compiler writes for an option's value, as a branch only", () => {
+    const { js } = compile(
+      `<script lang="ts">let { values }: { values: string[] } = $props();<\/script>
+       <select>{#each values as v (v)}<option value={v}>{v}</option>{/each}</select>`,
+      { filename: "Probe.svelte", generate: "client" },
+    );
+    const written = (js.code.match(/if \((\w+) !== \(\1 = /g) ?? []).length;
+    expect(written).toBeGreaterThanOrEqual(1);
+    const caches = nodes(parseJs(js.code)).filter((node) => isSvelteAttributeCache(node, "branch"));
+    expect(caches).toHaveLength(written);
+    expect(isSvelteAttributeCache(caches[0], "statement")).toBe(false);
+    // Hand-written look-alikes: another variable, or no assignment.
+    for (const code of ["if (a !== (b = c)) d();", "if (a !== b) d();", "if (a === (a = c)) d();"]) {
+      expect(nodes(parseJs(code)).filter((node) => isSvelteAttributeCache(node, "branch")), code).toEqual([]);
     }
   });
 });

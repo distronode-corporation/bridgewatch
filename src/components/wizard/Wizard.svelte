@@ -345,8 +345,8 @@ SPDX-License-Identifier: Apache-2.0
     void refreshAvailability();
   }
 
+  // Called from the provider radio's change, so `provider` is never the current one.
   function providerChanged(provider: Provider) {
-    if (draft.provider === provider) return;
     const before = draft.tokenMode;
     switchProvider(draft, provider);
     // A pick the switch undid (a CLI token, a sign-in) is no pick any more.
@@ -725,10 +725,9 @@ SPDX-License-Identifier: Apache-2.0
         return `The token is read from $${draft.envVar.trim()} when bridgewatch starts.`;
       case "command":
         return `The token is read by running: ${formatCommand(parseCommand(draft.commandText))}`;
-      case "oauth":
-        return `The sign-in is kept in the system keychain for "${draft.account.trim()}" and renews itself; this file only says to sign in.`;
+      // "oauth", the last of the five token modes.
       default:
-        return null;
+        return `The sign-in is kept in the system keychain for "${draft.account.trim()}" and renews itself; this file only says to sign in.`;
     }
   });
 
@@ -868,8 +867,8 @@ SPDX-License-Identifier: Apache-2.0
     }
   }
 
+  // Back is disabled on the first step, so there is always a step before this one.
   function back() {
-    if (index === 0) return;
     let target = index - 1;
     while (draft.quick && target > 0 && QUICK_SKIPS.has(STEPS[target].id)) target--;
     void goTo(target);
