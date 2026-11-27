@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The end of a job's log, fetched on demand and cleaned for display; and what
 //! the job actions (retry, play) answer with.
 //!

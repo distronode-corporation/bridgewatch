@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Commit titles on pipeline rows (`Poller::with_commit_titles`), on GitLab,
 //! where each title is a request of its own, against a scripted transport with
 //! hand-written answers in the documented shapes:
@@ -227,4 +231,87 @@ fn a_title_is_its_first_line_cut_to_a_row() {
         bridgewatch_core::model::first_line("\n  \n Subject \nbody"),
         Some("Subject".into())
     );
+}
+
+// Every path of `fill_titles` in this one binary: llvm-cov's summary credits
+// an async fn with its best single binary's copy.
+
+/// A title that cannot be read (here, not JSON) is left off and not asked
+/// for again.
+#[tokio::test]
+async fn an_unreadable_title_is_left_off_and_not_asked_again() {
+    let t = Arc::new(ScriptTransport::new());
+    let mut poller = poller(&t, 5, true);
+    for n in 1..=5 {
+        t.reply(&format!("/repository/commits/{}", sha(n)), 200, "not json");
+    }
+    for _ in 0..5 {
+        let tick = poller.tick().await;
+        assert!(
+            tick.snapshot.watches[0]
+                .rows
+                .iter()
+                .all(|r| r.title.is_none())
+        );
+    }
+    let asked = t
+        .requests()
+        .iter()
+        .filter(|r| r.url.contains("/repository/commits/"))
+        .count();
+    assert_eq!(asked, 5, "each unreadable title is asked for once");
+}
+
+/// A GitHub run carries its title, so it is kept and nothing is asked.
+#[tokio::test]
+async fn a_title_the_row_already_carries_is_kept_without_a_request() {
+    let raw = r#"
+[accounts.gh]
+provider = "github"
+token = { env = "TOK" }
+
+[[watches]]
+id = "web"
+account = "gh"
+project = "acme/web"
+ref = "main"
+"#;
+    let config = bridgewatch_core::config::parse_str(raw, std::path::Path::new("gh.toml"))
+        .expect("loads")
+        .config;
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/actions/runs?",
+        200,
+        r#"{"total_count":1,"workflow_runs":[{"id":4001,"run_number":1,"head_sha":"0f1e2d3c4b5a69788796a5b4c3d2e1f00fedcba9","head_branch":"main","status":"completed","conclusion":"success","event":"push","display_title":"Fix the thing","html_url":"https://github.com/acme/web/actions/runs/4001","created_at":"2026-11-01T10:00:00Z","updated_at":"2026-11-01T10:05:00Z"}]}"#,
+    );
+    t.reply(
+        "/actions/runs/4001/jobs",
+        200,
+        r#"{"total_count":0,"jobs":[]}"#,
+    );
+    let ring = RequestRing::new(50);
+    let clients: BTreeMap<String, Arc<dyn CiClient>> = config
+        .accounts
+        .iter()
+        .map(|(name, account)| {
+            let client = bridgewatch_core::client::client_for(
+                account,
+                &Secret::new("ghp_FIXTURE"),
+                t.clone(),
+                ring.clone(),
+            )
+            .expect("a client");
+            (name.clone(), client)
+        })
+        .collect();
+    let mut poller = Poller::with_clients(&config, clients, ring)
+        .expect("builds")
+        .with_commit_titles(true);
+    let tick = poller.tick().await;
+    assert_eq!(
+        tick.snapshot.watches[0].rows[0].title.as_deref(),
+        Some("Fix the thing")
+    );
+    assert!(!t.requests().iter().any(|r| r.url.contains("/commits/")));
 }

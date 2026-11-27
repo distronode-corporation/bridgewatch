@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Token health: whether an account's credential is about to stop working, or
 //! already has, and why (2.0 F3).
 //!
@@ -103,7 +107,10 @@ pub struct CredentialProbe(std::sync::Arc<std::sync::Mutex<Observed>>);
 
 impl CredentialProbe {
     fn with<R>(&self, f: impl FnOnce(&mut Observed) -> R) -> R {
-        let mut held = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&mut held)
     }
 

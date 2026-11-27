@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: The .deb and .rpm depend on secret-tool
 description: The staged .deb depends on libsecret-tools and the .rpm requires /usr/bin/secret-tool.
 
@@ -16,7 +20,11 @@ runs:
         echo "deb Depends: $depends"
         grep -qw libsecret-tools <<<"$depends" || { echo "::error::the .deb does not depend on libsecret-tools"; exit 1; }
         # `rpm` is on both 22.04 images today; installed if a future image drops it.
-        command -v rpm >/dev/null || { sudo apt-get update && sudo apt-get install -y rpm; }
+        # Only the Ubuntu archives: see linux-tauri-deps for why packages.microsoft.com goes.
+        command -v rpm >/dev/null || {
+          { sudo grep -lrs --null packages.microsoft.com /etc/apt/sources.list.d/ || true; } | xargs -0r sudo rm -f --
+          sudo apt-get update && sudo apt-get install -y rpm
+        }
         requires="$(rpm -qpR staging/*.rpm)"
         echo "rpm Requires:"
         echo "$requires"

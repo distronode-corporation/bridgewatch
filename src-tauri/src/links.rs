@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The one door to the user's browser.
 //!
 //! Every URL the app opens goes through [`open`]: the popover's pipeline and
@@ -30,7 +34,7 @@
 
 use bridgewatch_core::client::github;
 use bridgewatch_core::config::{Account, Config, Provider};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
@@ -105,14 +109,21 @@ fn same_origin(base: &Url, url: &Url) -> bool {
 }
 
 /// Open `candidate` in the default browser if [`check`] allows it.
-pub fn open(app: &AppHandle, candidate: &str, config: Option<&Config>) -> Result<(), String> {
+///
+/// Generic over the runtime so a test can reach the refusal with Tauri's mock
+/// one; the app itself only ever passes its own `AppHandle`.
+pub fn open<R: Runtime>(
+    app: &AppHandle<R>,
+    candidate: &str,
+    config: Option<&Config>,
+) -> Result<(), String> {
     open_trusting(app, candidate, config, &[])
 }
 
 /// [`open`], also trusting the hosts of `extra` for this call only. See
 /// [`check_with`].
-pub fn open_trusting(
-    app: &AppHandle,
+pub fn open_trusting<R: Runtime>(
+    app: &AppHandle<R>,
     candidate: &str,
     config: Option<&Config>,
     extra: &[Account],
@@ -143,6 +154,17 @@ mod tests {
         bridgewatch_core::config::parse_str(&raw, Path::new("x.toml"))
             .expect("fixture parses")
             .config
+    }
+
+    /// A refused link never reaches the opener: the caller is told why.
+    #[test]
+    fn a_refused_link_is_not_handed_to_the_browser() {
+        let app = tauri::test::mock_app();
+        let cfg = config(&["https://gitlab.com"]);
+        let err = open(app.handle(), "https://evil.example/x", Some(&cfg)).unwrap_err();
+        assert!(err.starts_with("not opened: "), "{err}");
+        let err = open(app.handle(), "file:///etc/passwd", None).unwrap_err();
+        assert!(err.starts_with("not opened: "), "{err}");
     }
 
     #[test]

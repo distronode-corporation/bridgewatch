@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: Stage this leg's bundles
 description: Copy the leg's .dmg/.deb/.rpm/.AppImage into staging/ and assert the count.
 

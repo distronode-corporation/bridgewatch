@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Download one public release asset, riding out the gateway errors GitHub's
 # download endpoints answer with now and then.
 #

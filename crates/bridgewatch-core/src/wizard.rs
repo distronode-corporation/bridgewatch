@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The first-run setup wizard's logic, with no UI in it.
 //!
 //! Every step of the wizard is a function here, so the shell only renders and
@@ -176,11 +180,16 @@ impl WizardError {
     }
 
     fn from_client(error: ClientError, what: impl Into<String>) -> Self {
+        Self::from_client_on(error, what.into())
+    }
+
+    /// [`Self::from_client`], outside the generic, so its arms are one copy.
+    fn from_client_on(error: ClientError, what: String) -> Self {
         match error {
             ClientError::Auth { status, provider } => {
                 WizardError::Unauthorized { status, provider }
             }
-            ClientError::NotFound { .. } => WizardError::NotFound { what: what.into() },
+            ClientError::NotFound { .. } => WizardError::NotFound { what },
             other => WizardError::Client(other),
         }
     }
@@ -1942,7 +1951,7 @@ fn new_watch(
     ref_name: &str,
     sources: &[String],
     role: Role,
-) -> Result<Watch, WizardError> {
+) -> Watch {
     let value = serde_json::json!({
         "id": id,
         "account": account,
@@ -1952,7 +1961,7 @@ fn new_watch(
         "role": role,
     });
     // Every key a watch requires, each of its type, so this always deserialises.
-    Ok(serde_json::from_value(value).expect("a watch from its required keys"))
+    serde_json::from_value(value).expect("a watch from its required keys")
 }
 
 /// The live poll interval a new GitHub watch starts at, in seconds.
@@ -2028,11 +2037,10 @@ fn add_minimal_watch(editor: &mut ConfigEditor, watch: &Watch) -> Result<(), Wiz
         &watch.ref_pattern,
         &[],
         watch.role,
-    )?;
-    let to_json = |w: &Watch| {
-        serde_json::to_value(w).map_err(|e| WizardError::Edit(EditError::Serialize(e.to_string())))
-    };
-    let (have, default) = (to_json(watch)?, to_json(&reference)?);
+    );
+    // A `Watch` is plain data, keyed by strings: it always serialises.
+    let to_json = |w: &Watch| serde_json::to_value(w).expect("a watch serialises");
+    let (have, default) = (to_json(watch), to_json(&reference));
     editor.apply(&[Edit::AddWatch {
         watch: Box::new(watch.clone()),
     }])?;
@@ -2223,7 +2231,7 @@ fn build_config_inner(
                     &answers.ref_name,
                     &answers.sources,
                     role,
-                )?;
+                );
                 watch.deploy_markers = answers.deploy_markers.clone();
                 apply_poll_defaults(&mut watch, answers);
                 if let Some(live) = answers.live_secs {
@@ -2361,7 +2369,7 @@ fn build_config_inner(
                     &answers.ref_name,
                     &["schedule".to_string()],
                     Role::Secondary,
-                )?;
+                );
                 // Stays cheap until something breaks, as the shipped example does.
                 // Not on a GitHub watch that shows one row per run: `only_when` is a
                 // bridge filter, a run has no bridges, and `config::validate` warns
@@ -2381,7 +2389,7 @@ fn build_config_inner(
             let id = format!("{}-preflight", answers.watch_id);
             if !covered && !taken(&id) {
                 let mut watch =
-                    new_watch(&id, &answers.account, &project, glob, &[], Role::Secondary)?;
+                    new_watch(&id, &answers.account, &project, glob, &[], Role::Secondary);
                 // A row per preflight, no dive: one request a tick.
                 watch.dive.bridges = String::new();
                 apply_poll_defaults(&mut watch, answers);
@@ -2395,7 +2403,7 @@ fn build_config_inner(
             &mut new_watches,
             &mut added,
             &mut already_watched,
-        )?;
+        );
     }
 
     // --- preferences ----------------------------------------------------
@@ -2494,7 +2502,7 @@ fn add_quick_watches(
     new_watches: &mut Vec<Watch>,
     added: &mut Vec<String>,
     already_watched: &mut Vec<String>,
-) -> Result<Option<String>, WizardError> {
+) -> Option<String> {
     let empty = Config::default();
     let config = current.unwrap_or(&empty);
     let mut taken: std::collections::HashSet<String> =
@@ -2544,7 +2552,7 @@ fn add_quick_watches(
             &q.ref_name,
             &answers.sources,
             role,
-        )?;
+        );
         watch.deploy_markers = q.deploy_markers.clone();
         apply_poll_defaults(&mut watch, answers);
         if let Some(live) = answers.live_secs {
@@ -2558,7 +2566,7 @@ fn add_quick_watches(
         added.push(id);
         new_watches.push(watch);
     }
-    Ok(secondary_because)
+    secondary_because
 }
 
 #[cfg(test)]

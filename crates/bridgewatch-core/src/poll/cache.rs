@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The pipeline cache.
 //!
 //! A settled pipeline's jobs cannot change, so re-fetching them every minute is

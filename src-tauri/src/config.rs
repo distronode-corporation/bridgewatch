@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Finding, seeding, validating and hot-reloading `config.toml`.
 //!
 //! The file is the source of truth, so everything here is careful about two
@@ -407,10 +411,9 @@ mod tests {
     fn a_watch_that_cannot_start_says_which_directory_and_why() {
         // #52: the failure used to be `None`, logged as a fixed string.
         let dir = scratch("watch-missing").join("not-there");
-        let err = match watch(&dir.join("config.toml"), || {}) {
-            Ok(_) => panic!("watching a directory that does not exist succeeded"),
-            Err(e) => e,
-        };
+        let err = watch(&dir.join("config.toml"), || {})
+            .err()
+            .expect("watching a directory that does not exist fails");
         assert!(
             err.starts_with(&format!("watching {}: ", dir.display())),
             "{err}"
@@ -506,5 +509,51 @@ mod tests {
         assert!(v.ok);
         // No deploy markers on a primary watch is a warning, not an error.
         assert!(!v.diagnostics.is_empty());
+    }
+
+    /// A diagnostic the core could not place is shown without a position.
+    #[test]
+    fn a_diagnostic_with_no_span_has_no_line_or_column() {
+        let d = bridgewatch_core::config::Diagnostic {
+            severity: bridgewatch_core::config::Severity::Error,
+            path: "ui".into(),
+            message: "no place".into(),
+            span: None,
+        };
+        let view = DiagnosticView::new(&d, "anything");
+        assert_eq!((view.line, view.col), (None, None));
+    }
+
+    /// A path that names a directory is read as an error in its own words,
+    /// for loading and for a save alike, and `resolve` reads the path given.
+    #[test]
+    fn a_config_path_that_is_a_directory_is_an_error_not_a_first_run() {
+        let dir = scratch("config-is-dir");
+        let resolved = resolve_at(&dir, &dir.join("elsewhere.toml"));
+        assert!(!resolved.validation.ok);
+        assert!(
+            resolved.validation.diagnostics[0]
+                .message
+                .starts_with("could not read "),
+            "{:?}",
+            resolved.validation.diagnostics
+        );
+        assert!(matches!(
+            write_if_unchanged(&dir, "", "x"),
+            Err(WriteError::Io(_))
+        ));
+        let file = dir.join("given.toml");
+        std::fs::write(&file, EXAMPLE_CONFIG).unwrap();
+        assert!(resolve(Some(&file)).validation.ok);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The root has no parent directory to watch.
+    #[test]
+    fn a_watch_of_the_root_says_it_has_no_parent() {
+        let err = watch(Path::new("/"), || {})
+            .err()
+            .expect("no parent to watch");
+        assert!(err.ends_with("has no parent directory to watch"), "{err}");
     }
 }

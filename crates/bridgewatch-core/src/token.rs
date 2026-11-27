@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Resolving a token from the source named in the configuration.
 //!
 //! bridgewatch never stores a token in its config file and never logs one. A
@@ -1363,7 +1367,35 @@ impl TokenProvider for Quiet<'_> {
 #[derive(Clone)]
 pub struct AskOnce<P> {
     inner: P,
-    refused: std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+    refused: Refusals,
+}
+
+/// The entries whose prompt was cancelled or denied, shared by an
+/// [`AskOnce`]'s clones. Not generic, so its rules are one copy.
+#[derive(Clone, Default)]
+struct Refusals(std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>);
+
+impl Refusals {
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeSet<String>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// A read whose prompt was cancelled or denied is remembered.
+    fn after_read(&self, service: &str, read: &Result<String, TokenError>) {
+        if let Err(TokenError::NeedsApproval { refused: true, .. }) = read {
+            self.lock().insert(service.to_string());
+        }
+    }
+
+    /// A write or a delete that worked is a person's action on that entry:
+    /// it may be asked about again.
+    fn after_change(&self, service: &str, changed: &Result<(), TokenError>) {
+        if changed.is_ok() {
+            self.lock().remove(service);
+        }
+    }
 }
 
 impl<P: TokenProvider> AskOnce<P> {
@@ -1387,7 +1419,7 @@ impl<P: TokenProvider> AskOnce<P> {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeSet<String>> {
-        self.refused.lock().unwrap_or_else(|e| e.into_inner())
+        self.refused.lock()
     }
 }
 
@@ -1400,9 +1432,7 @@ impl<P: TokenProvider> TokenProvider for AskOnce<P> {
             });
         }
         let read = self.inner.keyring_get(service, user);
-        if let Err(TokenError::NeedsApproval { refused: true, .. }) = &read {
-            self.lock().insert(service.to_string());
-        }
+        self.refused.after_read(service, &read);
         read
     }
 
@@ -1414,17 +1444,13 @@ impl<P: TokenProvider> TokenProvider for AskOnce<P> {
     /// (and its access list), so the entry may be asked about again.
     fn keyring_set(&self, service: &str, user: &str, secret: &str) -> Result<(), TokenError> {
         let written = self.inner.keyring_set(service, user, secret);
-        if written.is_ok() {
-            self.lock().remove(service);
-        }
+        self.refused.after_change(service, &written);
         written
     }
 
     fn keyring_delete(&self, service: &str, user: &str) -> Result<(), TokenError> {
         let deleted = self.inner.keyring_delete(service, user);
-        if deleted.is_ok() {
-            self.lock().remove(service);
-        }
+        self.refused.after_change(service, &deleted);
         deleted
     }
 
@@ -1477,6 +1503,27 @@ mod tests {
         security_lookup_args,
     };
 
+    /// Only a cancelled or denied prompt is remembered, and only a write or
+    /// a delete that worked forgets it.
+    #[test]
+    fn refusals_are_remembered_and_forgotten_by_what_happened() {
+        let refusals = super::Refusals::default();
+        let refused = || TokenError::NeedsApproval {
+            service: "s".into(),
+            refused: true,
+        };
+        refusals.after_read("s", &Ok("token".into()));
+        assert!(refusals.lock().is_empty());
+        refusals.after_read("s", &Err(refused()));
+        refusals.after_change("s", &Err(TokenError::Empty));
+        assert!(
+            refusals.lock().contains("s"),
+            "a failed write forgets nothing"
+        );
+        refusals.after_change("s", &Ok(()));
+        assert!(refusals.lock().is_empty());
+    }
+
     /// The empty account is looked up with the platform's tool, by the service's
     /// name, and its first line is the token: checked through a runner that
     /// echoes the command it was given.
@@ -1526,10 +1573,10 @@ mod tests {
     fn a_keychain_lookup_that_hangs_is_killed_and_says_so_rather_than_no_entry() {
         let started = std::time::Instant::now();
         let err = lookup("sleep 30", 150).expect_err("a hung lookup is an error");
+        let waited = started.elapsed();
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "killed at the deadline, not waited out: {:?}",
-            started.elapsed()
+            waited < std::time::Duration::from_secs(5),
+            "killed at the deadline, not waited out: {waited:?}"
         );
         assert!(
             matches!(&err, TokenError::Store { service, message }

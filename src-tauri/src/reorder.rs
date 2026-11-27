@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Moving a `[[watches]]` entry up or down without disturbing anything else.
 //!
 //! ⛔ This is the one place the shell manipulates TOML itself, and it should
@@ -202,5 +206,21 @@ theme_css = ""
         let down = move_watch(DOC, "first", 1).unwrap().unwrap();
         let back = move_watch(&down, "first", -1).unwrap().unwrap();
         assert_eq!(back, DOC);
+    }
+
+    /// A document with no watches has nothing to move; and a watch whose
+    /// sub-tables include an array of tables, beside an implicit table that
+    /// holds no position of its own, moves with all of it.
+    #[test]
+    fn nested_arrays_and_implicit_tables_move_with_their_watch() {
+        assert!(move_watch("[ui]\ntheme_css = \"\"\n", "a", 1).is_err());
+        let raw = "[[watches]]\nid = \"a\"\n[[watches.steps]]\nname = \"x\"\n\
+                   [watches.notify.extra]\non = true\n\
+                   [[watches]]\nid = \"b\"\n";
+        let out = move_watch(raw, "b", -1).unwrap().expect("a move");
+        assert_eq!(ids(&out), ["b", "a"]);
+        let a = out.find("id = \"a\"").unwrap();
+        assert!(out[a..].contains("[[watches.steps]]"), "{out}");
+        assert!(out[a..].contains("[watches.notify.extra]"), "{out}");
     }
 }

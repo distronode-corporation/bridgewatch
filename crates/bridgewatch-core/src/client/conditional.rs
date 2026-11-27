@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Conditional requests: remember each response's `ETag`, send it back as
 //! `If-None-Match`, and answer a `304 Not Modified` with the body it confirms.
 //!
@@ -182,10 +186,10 @@ impl Store {
             .entries
             .iter()
             .min_by_key(|(_, slot)| slot.used)
-            .map(|(key, _)| key.clone());
-        if let Some(key) = oldest {
-            self.remove(&key);
-        }
+            .map(|(key, _)| key.clone())
+            // Only `put` evicts, and only while the store holds an entry.
+            .expect("an entry to evict");
+        self.remove(&oldest);
     }
 }
 

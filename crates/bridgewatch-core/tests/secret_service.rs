@@ -48,3 +48,28 @@ fn a_quiet_read_finds_an_unlocked_item_and_says_when_there_is_none() {
     ));
     item.delete().expect("the item is removed");
 }
+
+/// With no session bus to reach, a quiet read is a store error in the
+/// Secret Service's own words, never "no entry". Run in a child process,
+/// because the bus address is read from the environment.
+#[test]
+fn a_quiet_read_with_no_session_bus_is_a_store_error() {
+    if std::env::var_os("BW_NO_BUS_CHILD").is_some() {
+        let read = SystemTokenProvider.keyring_get_quiet("bw-test:no-bus", "token");
+        assert!(matches!(read, Err(TokenError::Store { .. })), "{read:?}");
+        return;
+    }
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "a_quiet_read_with_no_session_bus_is_a_store_error",
+        ])
+        .env("BW_NO_BUS_CHILD", "1")
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/nonexistent/bridgewatch-bus",
+        )
+        .status()
+        .unwrap();
+    assert!(status.success());
+}

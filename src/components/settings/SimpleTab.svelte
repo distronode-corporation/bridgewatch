@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   import { entriesFor, type Tab } from "../../lib/settings/registry";
   import { getAt } from "../../lib/settings/values";

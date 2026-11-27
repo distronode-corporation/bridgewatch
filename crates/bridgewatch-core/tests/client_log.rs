@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The promise that a token never reaches a log line.
 //!
 //! ⛔ A FILE, AND A PROCESS, OF ITS OWN. An integration test file is one test

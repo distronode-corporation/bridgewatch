@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Reads that may not ask, and telling a refused prompt from any other
 //! failure of the credential store.
 //!
@@ -183,17 +187,27 @@ struct Found {
 fn secret_service_search(service: &str, user: &str) -> Result<Found, String> {
     use secret_service::{EncryptionType, blocking::SecretService};
 
-    let ss = SecretService::connect(EncryptionType::Dh).map_err(|e| e.to_string())?;
+    let ss = SecretService::connect(EncryptionType::Dh).map_err(said)?;
     let attributes = std::collections::HashMap::from([("service", service), ("username", user)]);
-    let found = ss.search_items(attributes).map_err(|e| e.to_string())?;
+    let found = ss.search_items(attributes).map_err(said)?;
     let unlocked = found
         .unlocked
         .first()
-        .map(|item| item.get_secret().map_err(|e| e.to_string()));
+        .map(|item| item.get_secret().map_err(said));
     Ok(Found {
         unlocked,
         locked: !found.locked.is_empty(),
     })
+}
+
+/// A Secret Service error in its own words: one function for every call, so
+/// one failure (say, no session bus) is the whole of its coverage.
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+))]
+fn said(error: secret_service::Error) -> String {
+    error.to_string()
 }
 
 /// What a search's answer means: the token, "ask first", or no entry. The

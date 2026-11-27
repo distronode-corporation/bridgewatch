@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The device authorization grant, and refreshing what it produced.
 //!
 //! Three requests, all a form `POST` with `Accept: application/json`, all
@@ -514,17 +518,18 @@ pub async fn complete_sign_in(
     now: u64,
 ) -> Result<(TokenSet, SignedIn), OAuthError> {
     let mut set = reply.into_set(account, client_id, now, None, None);
-    if let Ok(client) = client_for(
+    // Every provider has a client; `client_for` is where one without fails.
+    let client = client_for(
         &super::bearer_account(account),
         &set.access_token,
         api_transport,
         RequestRing::new(1),
-    ) {
-        match client.current_user().await {
-            Ok(user) => set.login = Some(user.username),
-            Err(e) => {
-                tracing::warn!(account = account_name, error = %e, "signed in, but could not ask who")
-            }
+    )
+    .expect("a client for every provider");
+    match client.current_user().await {
+        Ok(user) => set.login = Some(user.username),
+        Err(e) => {
+            tracing::warn!(account = account_name, error = %e, "signed in, but could not ask who")
         }
     }
     store::save(account_name, &set, store_provider)?;

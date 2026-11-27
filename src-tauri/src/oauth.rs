@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! "Sign in with GitHub" / "Sign in with GitLab": the shell's half.
 //!
 //! Every decision is the core's (`bridgewatch_core::oauth`). What lives here
@@ -114,7 +118,10 @@ pub struct SignIns {
 
 impl SignIns {
     fn with_flows<R>(&self, f: impl FnOnce(&mut HashMap<String, Flow>) -> R) -> R {
-        f(&mut self.flows.lock().unwrap_or_else(|e| e.into_inner()))
+        f(&mut self
+            .flows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
     }
 }
 

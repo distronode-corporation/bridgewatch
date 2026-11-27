@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 "use strict";
 
 // Shared by the tests: a scratch directory of their own (packaging/npm/test/.scratch,

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The wizard validates twice: in the webview, so a mistake is named on the
 //! page that has it, and in the core, which is the authority. The two must
 //! agree, and nothing held them to it: the webview's watch-id rule drifted

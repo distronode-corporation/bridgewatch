@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! A signed-in account's credential at runtime: fresh on every request.
 //!
 //! [`OAuthTransport`] sits between an ordinary client and the real transport.
@@ -137,7 +141,10 @@ impl OAuthSession {
 
     /// The held sign-in's login and end, as last held. No lock is waited on.
     pub fn note(&self) -> crate::health::SignInNote {
-        self.note.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.note
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Who is signed in: the stored sign-in is read first if no request has
@@ -156,7 +163,10 @@ impl OAuthSession {
             Some(_) => set.refresh_expires_at,
             None => set.expires_at,
         };
-        *self.note.lock().unwrap_or_else(|e| e.into_inner()) = crate::health::SignInNote {
+        *self
+            .note
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = crate::health::SignInNote {
             ends_at: ends_at.and_then(|at| i64::try_from(at).ok()),
             login: set.login.clone(),
         };

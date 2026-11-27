@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """keyring.py status|lock|unlock: the run's throwaway login collection, on the private bus.
 
 Run through `harness.sh keyring ...`, which puts it on the session's bus. `unlock` uses

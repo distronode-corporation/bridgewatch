@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Showing, sizing and placing the two windows.
 //!
 //! Both are declared in `tauri.conf.json` with `visible: false`. Creating them

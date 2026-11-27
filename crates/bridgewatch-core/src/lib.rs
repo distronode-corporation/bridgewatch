@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! bridgewatch's engine: a bridge-aware model of GitLab CI.
 //!
 //! Every other GitLab tray monitor defines "status" as the newest pipeline on a

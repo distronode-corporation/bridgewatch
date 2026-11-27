@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Tiny X11 driver over ctypes (no xdotool here). Uses $DISPLAY.
 
 xt.py list                       windows with name, geometry, map state

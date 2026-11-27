@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Table-driven verdicts over recorded fixtures of real pipelines.
 //!
 //! Each `tests/fixtures/<name>/expected.json` names the icon state, the bridge

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! `bridgewatch auth`: sign in, sign out and see who is signed in, for an
 //! account whose token source is `token = { oauth = .. }`.
 //!
@@ -256,15 +260,16 @@ pub fn status(
     for name in &names {
         let account = &config.accounts[name];
         let host = oauth::Endpoints::for_account(account).host;
-        if let TokenSource::Own(true) = account.token {
-            let (usable, line) = own_line(name, account, store_provider, expiries.get(name), now);
-            all_signed_in &= usable;
-            writeln!(out, "{name} ({host}): {line}")?;
-            continue;
-        }
-        // Only signing-in and own accounts are listed (above).
-        let TokenSource::Oauth(source) = &account.token else {
-            continue;
+        let source = match &account.token {
+            TokenSource::Oauth(source) => source,
+            // `listed` admits only a sign-in and an own token: this is the own one.
+            _ => {
+                let (usable, line) =
+                    own_line(name, account, store_provider, expiries.get(name), now);
+                all_signed_in &= usable;
+                writeln!(out, "{name} ({host}): {line}")?;
+                continue;
+            }
         };
         match store::load(name, store_provider) {
             Ok(Some(set)) => {
@@ -376,7 +381,9 @@ impl<'a> ReadOnce<'a> {
         &self,
     ) -> std::sync::MutexGuard<'_, std::collections::HashMap<(String, String), Option<String>>>
     {
-        self.seen.lock().unwrap_or_else(|e| e.into_inner())
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -740,6 +747,12 @@ pub(crate) mod tests {
         }
     }
 
+    /// The one sleep every login test shares: a fn item, so it is one type and
+    /// one copy of the generic `login`.
+    fn no_sleep(_: Duration) -> std::future::Ready<()> {
+        std::future::ready(())
+    }
+
     const BUILTIN: BuiltinClients = BuiltinClients {
         github_com: Some("Iv23liEXAMPLE"),
         github_app_slug: Some("bridgewatch"),
@@ -789,7 +802,7 @@ pub(crate) mod tests {
             transport.clone(),
             &store,
             &BUILTIN,
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             1_000,
             &mut out,
@@ -824,7 +837,7 @@ pub(crate) mod tests {
             Arc::new(ScriptTransport::new()),
             &Memory::default(),
             &BUILTIN,
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             0,
             &mut Vec::new(),
@@ -844,7 +857,7 @@ pub(crate) mod tests {
             Arc::new(ScriptTransport::new()),
             &Memory::default(),
             &BUILTIN,
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             0,
             &mut Vec::new(),
@@ -866,7 +879,7 @@ pub(crate) mod tests {
             transport.clone(),
             &Memory::default(),
             &BuiltinClients::default(),
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             0,
             &mut Vec::new(),
@@ -901,7 +914,7 @@ pub(crate) mod tests {
             t,
             &Memory::default(),
             &BUILTIN,
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             0,
             &mut Vec::new(),
@@ -928,7 +941,7 @@ pub(crate) mod tests {
             scripted_github_sign_in(),
             &store,
             &BUILTIN,
-            |_| std::future::ready(()),
+            no_sleep,
             std::future::pending(),
             1_000,
             &mut Vec::new(),
@@ -1445,6 +1458,11 @@ pub(crate) mod tests {
             1,
             "one keyring read for the whole run"
         );
+        // The fake's other halves pass straight through.
+        store.keyring_set("s", "u", "v").unwrap();
+        store.keyring_delete("s", "u").unwrap();
+        assert_eq!(store.env("x"), None);
+        assert!(store.run(&[]).is_err());
     }
 
     /// A sign-in inside 72 h of its end says to sign in again.
@@ -1494,5 +1512,457 @@ pub(crate) mod tests {
         assert_eq!(span(28_800), "8h 0m");
         assert_eq!(span(59), "59s");
         assert_eq!(span(15_897_600), "184d 0h");
+    }
+
+    // -----------------------------------------------------------------------
+    // The edges: a stdout that stops taking writes, every own-token answer,
+    // each sign-in line, and the read-once wrapper
+    // -----------------------------------------------------------------------
+
+    /// A stdout that takes its first `n` writes and refuses the rest, as a
+    /// closed pipe does.
+    struct FailsAfter(usize);
+
+    impl Write for FailsAfter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            match self.0.checked_sub(1) {
+                Some(left) => {
+                    self.0 = left;
+                    Ok(buf.len())
+                }
+                None => Err(std::io::ErrorKind::BrokenPipe.into()),
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Fail every write of `run` in turn, until it gets through: a refused
+    /// write at any point is an error, never a panic and never a success.
+    fn every_write_may_fail(mut run: impl FnMut(&mut FailsAfter) -> Outcome) {
+        for n in 0.. {
+            let mut out = FailsAfter(n);
+            match run(&mut out) {
+                Ok(_) => return,
+                Err(f) => assert!(format!("{:#}", f.error).contains("pipe"), "{n}: {f:?}"),
+            }
+            assert!(n < 10_000, "never got through");
+        }
+    }
+
+    /// [`scripted_github_sign_in`], except that `/user` cannot be read.
+    fn scripted_sign_in_without_user() -> Arc<ScriptTransport> {
+        let t = Arc::new(ScriptTransport::new());
+        t.reply(
+            "/login/device/code",
+            200,
+            r#"{"device_code":"D","user_code":"U","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}"#,
+        );
+        t.reply(
+            "/login/oauth/access_token",
+            200,
+            r#"{"access_token":"ghu_A","token_type":"bearer","scope":""}"#,
+        );
+        t.reply("api.github.com/user", 500, "{}");
+        t
+    }
+
+    #[tokio::test]
+    async fn a_login_whose_output_is_refused_is_an_error_at_every_line() {
+        for n in 0.. {
+            let store = Memory::default();
+            let mut out = FailsAfter(n);
+            let done = login(
+                &github(),
+                "gh",
+                scripted_sign_in_without_user(),
+                &store,
+                &BUILTIN,
+                no_sleep,
+                std::future::pending(),
+                1_000,
+                &mut out,
+            )
+            .await;
+            if done.is_ok() {
+                break;
+            }
+            assert!(n < 10_000, "never got through");
+        }
+        for n in 0.. {
+            let store = Memory::default();
+            let mut out = FailsAfter(n);
+            let done = login(
+                &github(),
+                "gh",
+                scripted_github_sign_in(),
+                &store,
+                &BUILTIN,
+                no_sleep,
+                std::future::pending(),
+                1_000,
+                &mut out,
+            )
+            .await;
+            if done.is_ok() {
+                break;
+            }
+            assert!(n < 10_000, "never got through");
+        }
+    }
+
+    #[test]
+    fn logout_and_status_whose_output_is_refused_are_errors_at_every_line() {
+        every_write_may_fail(|out| logout(&github(), "gh", &Memory::default(), out));
+        every_write_may_fail(|out| {
+            status(
+                &config("[accounts.env]\ntoken = { env = \"GL\" }\n"),
+                None,
+                &Memory::default(),
+                &BUILTIN,
+                &Expiries::new(),
+                0,
+                out,
+            )
+        });
+        let lines = mixed();
+        every_write_may_fail(|out| status(&lines.0, None, &lines.1, &BUILTIN, &lines.2, NOW, out));
+    }
+
+    /// 2026-11-18 00:00 UTC.
+    const NOW: u64 = 1_795_132_800;
+
+    /// One account for each answer an own token and a sign-in can give.
+    fn mixed() -> (Config, Memory, Expiries) {
+        let own = [
+            ("far", OwnExpiry::At(NOW as i64 + 90 * 86_400)),
+            ("now", OwnExpiry::At(NOW as i64)),
+            ("never", OwnExpiry::Never),
+            ("unstated", OwnExpiry::NotStated),
+            ("revoked", OwnExpiry::Refused(Refusal::Revoked)),
+            ("ended", OwnExpiry::Refused(Refusal::SignInEnded)),
+            ("invalid", OwnExpiry::Refused(Refusal::Invalid)),
+            ("unread", OwnExpiry::AcceptedUnread),
+            ("error", OwnExpiry::Unread("503".into())),
+        ];
+        let mut raw = String::new();
+        let store = Memory::default();
+        let secret = bridgewatch_core::token::Secret::new("glpat-SECRET");
+        let mut expiries = Expiries::new();
+        for (name, expiry) in own {
+            raw.push_str(&format!(
+                "[accounts.{name}]\nbase_url = \"https://gitlab.example.com\"\ntoken = {{ own = true }}\n"
+            ));
+            token::set_own_token(name, "https://gitlab.example.com", &secret, &store).unwrap();
+            expiries.insert(name.to_string(), expiry);
+        }
+        // A token saved for another server, on a base that is not a URL.
+        raw.push_str("[accounts.elsewhere]\nbase_url = \"not a url\"\ntoken = { own = true }\n");
+        token::set_own_token("elsewhere", "https://gitlab.com", &secret, &store).unwrap();
+        // Sign-ins: no client id, no expiry and no refresh, an end passed,
+        // one issued by another instance, and one never made.
+        raw.push_str(
+            "[accounts.moved]\nbase_url = \"https://gitlab.example.com\"\ntoken = { oauth = { client_id = \"gitlab-app-id\" } }\n\
+             [accounts.unsigned]\ntoken = { oauth = true }\n\
+             [accounts.noid]\nbase_url = \"https://gitlab.example.com\"\ntoken = { oauth = true }\n\
+             [accounts.plain]\ntoken = { oauth = true }\n\
+             [accounts.over]\ntoken = { oauth = true }\n",
+        );
+        let mut plain = issued_by("https://gitlab.com", "gitlab-app-id");
+        plain.expires_at = None;
+        plain.refresh_token = None;
+        plain.scopes = Vec::new();
+        plain.login = None;
+        store::save("noid", &plain, &store).unwrap();
+        store::save("plain", &plain, &store).unwrap();
+        store::save("moved", &plain, &store).unwrap();
+        let mut over = issued_by("https://gitlab.com", "gitlab-app-id");
+        over.refresh_expires_at = Some(NOW - 60);
+        store::save("over", &over, &store).unwrap();
+        (config(&raw), store, expiries)
+    }
+
+    #[test]
+    fn status_says_what_each_own_token_and_sign_in_answer_means() {
+        let (config, store, expiries) = mixed();
+        let mut out = Vec::new();
+        let code = status(&config, None, &store, &BUILTIN, &expiries, NOW, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, exit::ERROR, "{text}");
+        let line = |name: &str| {
+            text.lines()
+                .find(|l| l.starts_with(&format!("{name} (")))
+                .expect("a line per account")
+                .to_string()
+        };
+        assert!(line("far").contains("it expires in 90d 0h"), "{text}");
+        assert!(line("now").contains("it expires now"), "{text}");
+        assert!(line("never").ends_with("it does not expire"), "{text}");
+        assert!(
+            line("unstated").contains("GitHub stated no usable expiry"),
+            "{text}"
+        );
+        assert!(line("revoked").contains("it was revoked"), "{text}");
+        assert!(line("ended").contains("it has expired"), "{text}");
+        assert!(
+            line("invalid").contains("it is not accepted (401)"),
+            "{text}"
+        );
+        assert!(line("unread").contains("the server accepts it"), "{text}");
+        assert!(line("error").contains("could not be read (503)"), "{text}");
+        assert!(
+            line("noid").contains("needs that server's own application"),
+            "{text}"
+        );
+        assert!(
+            line("plain").contains(
+                "an unknown user; the access token does not expire; scopes: none reported"
+            ),
+            "{text}"
+        );
+        assert!(line("over").contains("the sign-in ended at"), "{text}");
+        assert!(line("elsewhere").contains("not an http(s) URL"), "{text}");
+        assert!(
+            line("moved").contains("run bridgewatch auth login --account moved"),
+            "{text}"
+        );
+        assert!(line("unsigned").contains("not signed in"), "{text}");
+        assert!(!text.contains("glpat-SECRET"), "{text}");
+    }
+
+    #[test]
+    fn status_with_nothing_to_list_says_how_an_account_gets_on_the_list() {
+        let mut out = Vec::new();
+        let code = status(
+            &config("[accounts.env]\ntoken = { env = \"GL\" }\n"),
+            None,
+            &Memory::default(),
+            &BUILTIN,
+            &Expiries::new(),
+            0,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(code, exit::OK);
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .starts_with("No account signs in")
+        );
+    }
+
+    /// A store that asks before every read and refuses or fails on demand.
+    struct Odd {
+        asks: bool,
+    }
+
+    impl TokenProvider for Odd {
+        fn keyring_get(&self, service: &str, _: &str) -> Result<String, TokenError> {
+            Err(TokenError::Store {
+                service: service.into(),
+                message: "the keychain is locked".into(),
+            })
+        }
+        fn keyring_get_quiet(&self, service: &str, user: &str) -> Result<String, TokenError> {
+            match self.asks {
+                true => Err(TokenError::NeedsApproval {
+                    service: service.into(),
+                    refused: false,
+                }),
+                false => self.keyring_get(service, user),
+            }
+        }
+        fn keyring_set(&self, _: &str, _: &str, _: &str) -> Result<(), TokenError> {
+            Ok(())
+        }
+        fn keyring_delete(&self, _: &str, _: &str) -> Result<(), TokenError> {
+            Ok(())
+        }
+        fn env(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn run(&self, _: &[String]) -> Result<String, TokenError> {
+            Err(TokenError::Empty)
+        }
+    }
+
+    /// An entry that needs a prompt is not read by a status, and a store
+    /// that fails is said in its own words, for an own token and a sign-in.
+    #[test]
+    fn status_over_a_store_that_asks_or_fails_says_so() {
+        let config = config(
+            "[accounts.own]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n\
+             [accounts.si]\ntoken = { oauth = true }\n",
+        );
+        for (asks, says) in [
+            (true, "needs your approval"),
+            (false, "the keychain is locked"),
+        ] {
+            let mut out = Vec::new();
+            let code = status(
+                &config,
+                None,
+                &Odd { asks },
+                &BUILTIN,
+                &Expiries::new(),
+                0,
+                &mut out,
+            )
+            .unwrap();
+            let text = String::from_utf8(out).unwrap();
+            assert_eq!(code, exit::ERROR, "{text}");
+            assert!(text.lines().next().unwrap().contains(says), "{text}");
+            assert!(text.contains("si (gitlab.com): "), "{text}");
+        }
+        let odd = Odd { asks: false };
+        assert!(odd.keyring_set("s", "u", "v").is_ok());
+        assert!(odd.keyring_delete("s", "u").is_ok());
+        assert_eq!(odd.env("x"), None);
+        assert!(odd.run(&[]).is_err());
+    }
+
+    /// The read-once wrapper remembers a value and an absence, never a
+    /// failure, forgets an address it writes or deletes, and passes the rest
+    /// through.
+    #[test]
+    fn read_once_remembers_values_and_absences_and_forgets_what_it_writes() {
+        let memory = Memory::default();
+        let once = ReadOnce::new(&memory);
+        assert!(matches!(
+            once.keyring_get("s", "u"),
+            Err(TokenError::NoEntry { .. })
+        ));
+        memory.keyring_set("s", "u", "v").unwrap();
+        let remembered = matches!(
+            once.keyring_get_quiet("s", "u"),
+            Err(TokenError::NoEntry { .. })
+        );
+        assert!(remembered, "the absence was remembered");
+        once.keyring_set("s", "u", "w").unwrap();
+        assert_eq!(once.keyring_get("s", "u").unwrap(), "w");
+        once.keyring_delete("s", "u").unwrap();
+        assert!(once.keyring_get("s", "u").is_err());
+        assert_eq!(once.env("x"), None);
+        assert!(once.run(&[]).is_err());
+
+        let failing = Odd { asks: false };
+        let once = ReadOnce::new(&failing);
+        for _ in 0..2 {
+            assert!(matches!(
+                once.keyring_get("s", "u"),
+                Err(TokenError::Store { .. })
+            ));
+        }
+    }
+
+    /// A server that asks for slower polling is waited out, and a sign-in
+    /// whose `/user` cannot be read is stored without a login and says so.
+    #[tokio::test]
+    async fn a_slowed_sign_in_whose_user_cannot_be_read_says_who_could_not_be_asked() {
+        let _log = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_test_writer()
+                .finish(),
+        );
+        let t = Arc::new(ScriptTransport::new());
+        t.reply(
+            "/login/device/code",
+            200,
+            r#"{"device_code":"D","user_code":"U","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}"#,
+        );
+        t.reply("/login/oauth/access_token", 200, r#"{"error":"slow_down"}"#);
+        t.reply(
+            "/login/oauth/access_token",
+            200,
+            r#"{"access_token":"ghu_A","token_type":"bearer","scope":""}"#,
+        );
+        t.reply("api.github.com/user", 500, "{}");
+        let mut out = Vec::new();
+        let code = login(
+            &github(),
+            "gh",
+            t,
+            &Memory::default(),
+            &BUILTIN,
+            no_sleep,
+            std::future::pending(),
+            1_000,
+            &mut out,
+        )
+        .await
+        .expect("signs in");
+        assert_eq!(code, exit::OK);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("Who you are could not be asked"), "{text}");
+    }
+
+    /// The expiry lookup's other answers: a token that resolves no further,
+    /// a transport that cannot be built, GitHub stating nothing, and a
+    /// server error that says nothing about the token.
+    #[tokio::test]
+    async fn every_expiry_answer_is_read_as_what_it_says() {
+        /// Answers a quiet read, refuses one that may ask.
+        struct QuietOnly(Memory);
+        impl TokenProvider for QuietOnly {
+            fn keyring_get(&self, service: &str, _: &str) -> Result<String, TokenError> {
+                Err(TokenError::Store {
+                    service: service.into(),
+                    message: "locked".into(),
+                })
+            }
+            fn keyring_get_quiet(&self, service: &str, user: &str) -> Result<String, TokenError> {
+                self.0.keyring_get(service, user)
+            }
+            fn keyring_set(&self, s: &str, u: &str, v: &str) -> Result<(), TokenError> {
+                self.0.keyring_set(s, u, v)
+            }
+            fn keyring_delete(&self, s: &str, u: &str) -> Result<(), TokenError> {
+                self.0.keyring_delete(s, u)
+            }
+            fn env(&self, n: &str) -> Option<String> {
+                self.0.env(n)
+            }
+            fn run(&self, a: &[String]) -> Result<String, TokenError> {
+                self.0.run(a)
+            }
+        }
+        let secret = bridgewatch_core::token::Secret::new("tok-FIXTURE");
+        let config = config(
+            "[accounts.gh]\nprovider = \"github\"\ntoken = { own = true }\n\n\
+             [accounts.lab]\nbase_url = \"https://gitlab.example.com\"\ntoken = { own = true }\n",
+        );
+        let memory = Memory::default();
+        token::set_own_token("gh", "https://api.github.com", &secret, &memory).unwrap();
+        token::set_own_token("lab", "https://gitlab.example.com", &secret, &memory).unwrap();
+
+        let t = Arc::new(ScriptTransport::new());
+        t.reply("/user", 200, r#"{"login":"octocat","id":1}"#);
+        t.reply("/personal_access_tokens/self", 500, "{}");
+        let transport = t.clone();
+        let ok = move |_: &Account| Ok(transport.clone() as Arc<dyn Transport>);
+        let expiries = own_expiries(&config, None, &memory, &ok).await;
+        assert!(
+            matches!(expiries.get("gh"), Some(OwnExpiry::NotStated)),
+            "{expiries:?}"
+        );
+        assert!(
+            matches!(expiries.get("lab"), Some(OwnExpiry::Unread(_))),
+            "{expiries:?}"
+        );
+
+        let broken = |_: &Account| Err(ClientError::Transport("no TLS".into()));
+        let expiries = own_expiries(&config, Some("lab"), &memory, &broken).await;
+        assert!(matches!(expiries.get("lab"), Some(OwnExpiry::Unread(e)) if e.contains("no TLS")));
+
+        let quiet = QuietOnly(Memory::default());
+        token::set_own_token("lab", "https://gitlab.example.com", &secret, &quiet.0).unwrap();
+        let expiries = own_expiries(&config, Some("lab"), &quiet, &broken).await;
+        assert!(expiries.is_empty(), "{expiries:?}");
+        quiet.keyring_set("s", "u", "v").unwrap();
+        quiet.keyring_delete("s", "u").unwrap();
+        assert_eq!(quiet.env("x"), None);
+        assert!(quiet.run(&[]).is_err());
     }
 }

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The noise controls: one "failing" per pipeline, "fixed again", and folding
 //! a burst into one notification.
 

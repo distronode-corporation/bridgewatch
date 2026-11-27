@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The audit line a write leaves, and the promise that neither it nor a log
 //! tail's requests carry a credential or a signed URL's signature.
 //!

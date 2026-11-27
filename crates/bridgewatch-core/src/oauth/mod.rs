@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! "Sign in with GitHub" and "Sign in with GitLab": the OAuth 2.0 device
 //! authorization grant, the stored token set, and the credential that keeps
 //! itself fresh.

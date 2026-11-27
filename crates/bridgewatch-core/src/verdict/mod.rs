@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The verdict engine: pure functions from recorded API responses to the view
 //! model the GUI renders and the CLI prints.
 //!
@@ -496,13 +500,12 @@ pub fn evaluate_pipeline(
         jobs: &detail.jobs,
     }];
     for (id, live) in &dived {
-        if let Some(jobs) = detail.child_jobs.get(id) {
-            scopes.push(deploy::JobScope {
-                pipeline_id: *id,
-                pipeline_live: *live,
-                jobs,
-            });
-        }
+        // `dived_pipelines` lists only the children whose jobs are held.
+        scopes.push(deploy::JobScope {
+            pipeline_id: *id,
+            pipeline_live: *live,
+            jobs: &detail.child_jobs[id],
+        });
     }
 
     let any_dead_bridge = all_bridges.iter().any(|b| b.verdict == "dead");

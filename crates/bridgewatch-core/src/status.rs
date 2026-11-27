@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The status vocabulary shared by pipelines, jobs and bridges, plus the
 //! classification of a job into the class the verdict engine reasons about.
 //!

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Signing in with GitHub and GitLab, and keeping the sign-in fresh.
 //!
 //! ⛔ Nothing here reaches a network or a keychain. Every request is answered
@@ -1827,4 +1831,695 @@ fn resolving_a_sign_in_needs_an_application_and_a_readable_entry() {
         matches!(err, TokenError::Store { ref service, .. } if *service == store::service("gl")),
         "{err}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The device flow's edges: answers that are not the sign-in's
+// ---------------------------------------------------------------------------
+
+fn github_endpoints() -> Endpoints {
+    Endpoints::for_account(&oauth_account(Provider::Github, None, Some("c")))
+}
+
+async fn wait_on(t: &ScriptTransport) -> Result<oauth::device::TokenReplyView, OAuthError> {
+    let device = oauth::start(t, &github_endpoints(), "c").await?;
+    oauth::wait_for_token(
+        t,
+        &github_endpoints(),
+        "c",
+        &device,
+        |_| std::future::ready(()),
+        std::future::pending(),
+        &mut |_| {},
+    )
+    .await
+}
+
+/// Asking for a device code: no answer at all, a rate limit, a server error
+/// and a redirect are the network's, a refusal says its code or its status,
+/// and a body that is not JSON is described without being quoted.
+#[tokio::test]
+async fn a_device_code_request_that_is_not_answered_with_a_code_says_why() {
+    let t = ScriptTransport::new();
+    assert!(matches!(
+        oauth::start(&t, &github_endpoints(), "c").await,
+        Err(OAuthError::Client(ClientError::Transport(_)))
+    ));
+    let answers: [(HttpResponse, &str); 6] = [
+        (
+            HttpResponse {
+                retry_after: Some(9),
+                ..HttpResponse::plain(429, "")
+            },
+            "RateLimited",
+        ),
+        (HttpResponse::plain(503, ""), "Server"),
+        (HttpResponse::plain(302, ""), "Redirect"),
+        (
+            HttpResponse::plain(400, r#"{"error":"unauthorized_client"}"#),
+            "unauthorized_client",
+        ),
+        (HttpResponse::plain(404, "nope"), "HTTP 404"),
+        (
+            HttpResponse::plain(200, "{\"device_code\":"),
+            "Eof at line 1",
+        ),
+    ];
+    for (answer, says) in answers {
+        let t = ScriptTransport::new();
+        t.reply_with("/login/device/code", answer);
+        let error = oauth::start(&t, &github_endpoints(), "c")
+            .await
+            .unwrap_err();
+        assert!(format!("{error:?}").contains(says), "{says}: {error:?}");
+        assert!(!format!("{error:?}").contains("device_code"), "{error:?}");
+    }
+}
+
+/// A poll's answer that is not JSON is a refusal when the status says so and
+/// a decode error when it does not; a 2xx with neither a token nor an error
+/// is refused too; and a rate-limited poll waits longer before the next.
+#[tokio::test]
+async fn a_poll_that_is_neither_a_token_nor_a_known_code_ends_the_wait() {
+    for (status, body, says) in [
+        (400, "<html>", "HTTP 400"),
+        (200, "<html>", "Decode"),
+        (200, "{}", "HTTP 200"),
+    ] {
+        let t = ScriptTransport::new();
+        t.reply("/login/device/code", 200, GH_DEVICE);
+        t.reply("/login/oauth/access_token", status, body);
+        let error = wait_on(&t).await.unwrap_err();
+        assert!(format!("{error:?}").contains(says), "{says}: {error:?}");
+    }
+
+    let t = ScriptTransport::new();
+    t.reply("/login/device/code", 200, GH_DEVICE);
+    t.reply("/login/oauth/access_token", 429, "");
+    t.reply("/login/oauth/access_token", 200, GH_TOKEN);
+    let device = oauth::start(&t, &github_endpoints(), "c").await.unwrap();
+    let slept = Arc::new(Mutex::new(Vec::new()));
+    let reply = oauth::wait_for_token(
+        &t,
+        &github_endpoints(),
+        "c",
+        &device,
+        recording_sleep(slept.clone()),
+        std::future::pending(),
+        &mut |_| {},
+    )
+    .await
+    .expect("the second poll is approved");
+    assert_eq!(
+        *slept.lock().unwrap(),
+        vec![5, 10],
+        "a rate limit waits longer"
+    );
+    assert_eq!(format!("{reply:?}"), "TokenReplyView(<redacted>)");
+}
+
+/// A refresh the network failed is the network's; a bare 4xx is "sign in
+/// again"; anything else that is not JSON is a decode error.
+#[tokio::test]
+async fn a_refresh_that_is_not_a_token_answer_says_which_kind_of_failure() {
+    let refresh = Secret::new("ghr_REFRESH0001");
+    for (status, body, says) in [
+        (503, "", "Server"),
+        (401, "<html>", "SignInAgain"),
+        (200, "<html>", "Decode"),
+    ] {
+        let t = ScriptTransport::new();
+        t.reply("/login/oauth/access_token", status, body);
+        let error = oauth::refresh(&t, &github_endpoints(), "c", &refresh)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:?}").contains(says), "{says}: {error:?}");
+    }
+}
+
+/// Every error has the word the UI chooses its sentence by, and each refusal
+/// a person can act on carries its advice.
+#[test]
+fn every_sign_in_error_has_its_kind_and_a_refusal_its_advice() {
+    let host = || "github.com".to_string();
+    let words: Vec<&str> = [
+        OAuthError::Expired,
+        OAuthError::Denied { host: host() },
+        OAuthError::Cancelled,
+        OAuthError::NoClientId("none".into()),
+        OAuthError::SignInAgain { code: "x".into() },
+        OAuthError::NotSignedIn,
+        OAuthError::Refused {
+            host: host(),
+            code: "x".into(),
+        },
+        OAuthError::Client(ClientError::Transport("x".into())),
+        OAuthError::Decode {
+            host: host(),
+            message: "x".into(),
+        },
+        OAuthError::Store("x".into()),
+    ]
+    .iter()
+    .map(OAuthError::kind)
+    .collect();
+    assert_eq!(
+        words,
+        [
+            "expired",
+            "denied",
+            "cancelled",
+            "no_client_id",
+            "sign_in_again",
+            "sign_in_again",
+            "error",
+            "error",
+            "error",
+            "error"
+        ]
+    );
+    for (code, says) in [
+        ("invalid_client", "Confidential"),
+        ("incorrect_client_credentials", "Confidential"),
+        ("unauthorized_client", "Confidential"),
+        ("invalid_scope", "allow the scope"),
+        ("unsupported_grant_type", "17.9"),
+    ] {
+        let text = OAuthError::Refused {
+            host: host(),
+            code: code.into(),
+        }
+        .to_string();
+        assert!(text.contains(says), "{code}: {text}");
+    }
+    assert_eq!(
+        OAuthError::Refused {
+            host: host(),
+            code: "other".into()
+        }
+        .to_string(),
+        "github.com refused the sign-in (other)"
+    );
+    assert_eq!(oauth::sanitize_code("\"\\ "), "unknown_error");
+}
+
+#[test]
+fn an_empty_client_id_is_refused_and_a_hint_without_an_app_slug_is_generic() {
+    let mut account = oauth_account(Provider::Github, None, Some("   "));
+    let error = oauth::client_id_for(&account, &source(&account), &REGISTERED).unwrap_err();
+    assert!(
+        error.to_string().starts_with("client_id is empty"),
+        "{error}"
+    );
+
+    account = oauth_account(Provider::Github, None, None);
+    let no_slug = BuiltinClients {
+        github_app_slug: None,
+        ..REGISTERED
+    };
+    let hint = oauth::not_found_hint(&account, &no_slug).unwrap();
+    assert!(hint.starts_with("signed in through a GitHub App"), "{hint}");
+}
+
+// ---------------------------------------------------------------------------
+// The session's and the store's edges
+// ---------------------------------------------------------------------------
+
+/// A subscriber listening at every level, so a log line's fields are
+/// evaluated.
+fn listening() -> tracing::subscriber::DefaultGuard {
+    tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish(),
+    )
+}
+
+/// A memory store that can be told to refuse reads, writes or deletes.
+#[derive(Default)]
+struct Refusing {
+    inner: MemoryStore,
+    reads: bool,
+    writes: bool,
+    deletes: bool,
+}
+
+impl Refusing {
+    fn refused(service: &str) -> TokenError {
+        TokenError::Store {
+            service: service.into(),
+            message: "the keychain is locked".into(),
+        }
+    }
+}
+
+impl token::TokenProvider for Refusing {
+    fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
+        match self.reads {
+            true => Err(Self::refused(service)),
+            false => self.inner.keyring_get(service, user),
+        }
+    }
+    fn keyring_set(&self, service: &str, user: &str, secret: &str) -> Result<(), TokenError> {
+        match self.writes {
+            true => Err(Self::refused(service)),
+            false => self.inner.keyring_set(service, user, secret),
+        }
+    }
+    fn keyring_delete(&self, service: &str, user: &str) -> Result<(), TokenError> {
+        match self.deletes {
+            true => Err(Self::refused(service)),
+            false => self.inner.keyring_delete(service, user),
+        }
+    }
+    fn env(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn run(&self, _: &[String]) -> Result<String, TokenError> {
+        Err(TokenError::Empty)
+    }
+}
+
+fn gl_set(access: &str, refresh: Option<&str>, expires_at: Option<u64>) -> TokenSet {
+    set(access, refresh, expires_at, "https://gitlab.com")
+}
+
+#[test]
+fn a_store_that_refuses_or_was_written_by_a_newer_build_is_a_store_error() {
+    let locked = Refusing {
+        reads: true,
+        ..Refusing::default()
+    };
+    assert!(matches!(
+        store::load("gl", &locked),
+        Err(OAuthError::Store(_))
+    ));
+    let newer = gl_set("gl-A", None, None)
+        .to_json()
+        .replace("\"version\":1", "\"version\":99");
+    assert!(newer.contains("\"version\":99"), "{newer}");
+    let error = TokenSet::from_json(&newer).unwrap_err();
+    assert!(
+        error.to_string().contains("newer bridgewatch (layout 99)"),
+        "{error}"
+    );
+}
+
+/// A rename to itself or from nothing changes nothing; a rename moves the
+/// sign-in; and a store that refuses any step says so.
+#[test]
+fn a_sign_in_is_renamed_by_writing_the_new_entry_before_removing_the_old() {
+    let memory = MemoryStore::new();
+    assert!(!store::rename("a", "a", memory.as_ref()).unwrap());
+    assert!(!store::rename("a", "b", memory.as_ref()).unwrap());
+    store::save("a", &gl_set("gl-A", None, None), memory.as_ref()).unwrap();
+    assert!(store::rename("a", "b", memory.as_ref()).unwrap());
+    assert!(store::load("a", memory.as_ref()).unwrap().is_none());
+    assert_eq!(stored(&memory, "b").access_token.expose(), "gl-A");
+
+    for refuse in ["reads", "writes", "deletes"] {
+        let flaky = Refusing::default();
+        store::save("a", &gl_set("gl-A", None, None), &flaky).unwrap();
+        let flaky = Refusing {
+            reads: refuse == "reads",
+            writes: refuse == "writes",
+            deletes: refuse == "deletes",
+            ..flaky
+        };
+        assert!(
+            matches!(store::rename("a", "b", &flaky), Err(OAuthError::Store(_))),
+            "{refuse}"
+        );
+    }
+}
+
+/// Neither the session nor its transport prints a credential.
+#[tokio::test]
+async fn a_session_and_its_transport_debug_without_a_credential() {
+    let memory = MemoryStore::new();
+    store::save("gl", &gl_set("gl-SECRET", None, None), memory.as_ref()).unwrap();
+    let clock = Clock::at(2_000);
+    let t = Arc::new(ScriptTransport::new());
+    let (session, _) = gitlab_session(t.clone(), &memory, &clock);
+    session.access_token().await.unwrap();
+    assert_eq!(session.login().await.as_deref(), Some("alice"));
+    let text = format!("{session:?} {:?}", OAuthTransport::new(t, session.clone()));
+    assert!(
+        text.contains("OAuthSession") && text.contains("OAuthTransport"),
+        "{text}"
+    );
+    assert!(!text.contains("gl-SECRET"), "{text}");
+}
+
+/// Only a GitLab sign-in can lack the scope to write, and one not read yet
+/// is given the benefit of the doubt.
+#[tokio::test]
+async fn may_write_is_true_unless_a_gitlab_sign_in_lacks_the_api_scope() {
+    let memory = MemoryStore::new();
+    let clock = Clock::at(2_000);
+    let (session, _) = gitlab_session(Arc::new(ScriptTransport::new()), &memory, &clock);
+    assert!(session.may_write().await, "nothing read yet");
+
+    let account = oauth_account(Provider::Github, None, None);
+    let github = OAuthSession::new(
+        "gh",
+        &account,
+        &source(&account),
+        &REGISTERED,
+        Arc::new(ScriptTransport::new()),
+        memory.clone(),
+    )
+    .unwrap();
+    assert!(github.may_write().await);
+}
+
+/// A store that cannot be read is no sign-in, said in the log.
+#[tokio::test]
+async fn a_store_that_cannot_be_read_is_sign_in_again() {
+    let _log = listening();
+    let locked = Arc::new(Refusing {
+        reads: true,
+        ..Refusing::default()
+    });
+    let account = oauth_account(Provider::Gitlab, None, None);
+    let session = OAuthSession::new(
+        "gl",
+        &account,
+        &source(&account),
+        &REGISTERED,
+        Arc::new(ScriptTransport::new()),
+        locked,
+    )
+    .unwrap();
+    assert!(matches!(
+        session.access_token().await,
+        Err(ClientError::SignInAgain {
+            never_signed_in: true,
+            ..
+        })
+    ));
+    // Nothing held, nothing stored: a rejection cannot be retried either.
+    assert!(matches!(
+        session.after_rejection(&Secret::new("x")).await,
+        Err(ClientError::SignInAgain {
+            never_signed_in: true,
+            ..
+        })
+    ));
+}
+
+/// After a 401: a token somebody already replaced is the answer; a token
+/// that cannot be renewed is dead, and stays dead without another request.
+#[tokio::test]
+async fn a_rejected_token_without_a_refresh_token_is_dead_until_signed_in_again() {
+    let memory = MemoryStore::new();
+    store::save("gl", &gl_set("gl-A", None, None), memory.as_ref()).unwrap();
+    let clock = Clock::at(1_000_000);
+    let t = Arc::new(ScriptTransport::new());
+    let (session, _) = gitlab_session(t.clone(), &memory, &clock);
+    let held = session.access_token().await.unwrap();
+    assert_eq!(
+        session
+            .after_rejection(&Secret::new("gl-OLDER"))
+            .await
+            .unwrap()
+            .map(|s| s.expose().to_string()),
+        Some("gl-A".to_string())
+    );
+    for _ in 0..2 {
+        assert!(matches!(
+            session.after_rejection(&held).await,
+            Err(ClientError::SignInAgain {
+                never_signed_in: false,
+                ..
+            })
+        ));
+    }
+    assert!(t.requests().is_empty(), "nothing was sent");
+}
+
+/// A token near its end with nothing to renew it is still used while it
+/// lasts; one whose refresh failed on the network is too, unless it was
+/// rejected, when the network's error is the answer.
+#[tokio::test]
+async fn a_token_that_cannot_be_renewed_yet_is_used_while_it_lasts() {
+    let _log = listening();
+    let memory = MemoryStore::new();
+    let clock = Clock::at(10_000);
+    store::save("gl", &gl_set("gl-A", None, Some(10_060)), memory.as_ref()).unwrap();
+    let t = Arc::new(ScriptTransport::new());
+    let (session, _) = gitlab_session(t.clone(), &memory, &clock);
+    assert_eq!(session.access_token().await.unwrap().expose(), "gl-A");
+
+    let memory = MemoryStore::new();
+    store::save(
+        "gl",
+        &gl_set("gl-B", Some("gl-REFRESH-B"), Some(10_060)),
+        memory.as_ref(),
+    )
+    .unwrap();
+    t.reply("/oauth/token", 503, "");
+    t.reply("/oauth/token", 503, "");
+    let (session, _) = gitlab_session(t.clone(), &memory, &clock);
+    let held = session.access_token().await.unwrap();
+    assert_eq!(held.expose(), "gl-B");
+    assert!(matches!(
+        session.after_rejection(&held).await,
+        Err(ClientError::Server { status: 503 })
+    ));
+}
+
+/// A transport that, as the refresh goes out, has another process save a
+/// newer sign-in and then answers that the refresh token was spent.
+#[derive(Debug)]
+struct Raced {
+    memory: Arc<MemoryStore>,
+}
+
+#[async_trait::async_trait]
+impl Transport for Raced {
+    async fn execute(&self, _: HttpRequest) -> Result<HttpResponse, ClientError> {
+        store::save(
+            "gl",
+            &gl_set("gl-NEWER", Some("gl-REFRESH-N"), Some(1_000_000)),
+            self.memory.as_ref(),
+        )
+        .unwrap();
+        Ok(HttpResponse::plain(400, r#"{"error":"invalid_grant"}"#))
+    }
+}
+
+/// ⛔ A refusal that a second process's refresh explains is not "sign in
+/// again": the newer sign-in it stored is adopted.
+#[tokio::test]
+async fn a_refresh_refused_because_another_process_refreshed_adopts_its_sign_in() {
+    let memory = MemoryStore::new();
+    store::save(
+        "gl",
+        &gl_set("gl-A", Some("gl-REFRESH-A"), Some(10_000)),
+        memory.as_ref(),
+    )
+    .unwrap();
+    let clock = Clock::at(20_000);
+    let (session, _) = gitlab_session(
+        Arc::new(Raced {
+            memory: memory.clone(),
+        }),
+        &memory,
+        &clock,
+    );
+    assert_eq!(session.access_token().await.unwrap().expose(), "gl-NEWER");
+}
+
+/// A poll the network redirected is retried at the same pace: only a rate
+/// limit or a server error slows the next one.
+#[tokio::test]
+async fn a_redirected_poll_is_retried_without_slowing_down() {
+    let t = ScriptTransport::new();
+    t.reply("/login/device/code", 200, GH_DEVICE);
+    t.reply("/login/oauth/access_token", 302, "");
+    t.reply("/login/oauth/access_token", 200, GH_TOKEN);
+    let device = oauth::start(&t, &github_endpoints(), "c").await.unwrap();
+    let slept = Arc::new(Mutex::new(Vec::new()));
+    oauth::wait_for_token(
+        &t,
+        &github_endpoints(),
+        "c",
+        &device,
+        recording_sleep(slept.clone()),
+        std::future::pending(),
+        &mut |_| {},
+    )
+    .await
+    .expect("the second poll is approved");
+    assert_eq!(*slept.lock().unwrap(), vec![5, 5]);
+}
+
+/// A refresh answered with JSON that is neither a token nor an error code
+/// is "sign in again", named by its status.
+#[tokio::test]
+async fn a_refresh_answered_with_an_empty_object_is_sign_in_again_by_status() {
+    let t = ScriptTransport::new();
+    t.reply("/login/oauth/access_token", 400, "{}");
+    let error = oauth::refresh(&t, &github_endpoints(), "c", &Secret::new("ghr_R"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, OAuthError::SignInAgain { code } if code == "HTTP 400"),
+        "{error:?}"
+    );
+}
+
+/// A stored sign-in for another instance is not used, and the log says why.
+#[tokio::test]
+async fn a_stored_sign_in_for_another_instance_is_sign_in_again() {
+    let _log = listening();
+    let memory = MemoryStore::new();
+    store::save(
+        "gl",
+        &set("gl-A", None, None, "https://gitlab.example.com"),
+        memory.as_ref(),
+    )
+    .unwrap();
+    let clock = Clock::at(2_000);
+    let (session, _) = gitlab_session(Arc::new(ScriptTransport::new()), &memory, &clock);
+    assert!(matches!(
+        session.access_token().await,
+        Err(ClientError::SignInAgain { .. })
+    ));
+}
+
+/// A code that has expired before the first poll is said at once, and a
+/// third transient failure in a row ends the wait.
+#[tokio::test]
+async fn a_wait_ends_on_an_expired_code_and_on_the_third_failure_in_a_row() {
+    let t = ScriptTransport::new();
+    t.reply(
+        "/login/device/code",
+        200,
+        r#"{"device_code":"d","user_code":"u","verification_uri":"https://github.com/login/device","expires_in":0,"interval":5}"#,
+    );
+    assert!(matches!(wait_on(&t).await, Err(OAuthError::Expired)));
+
+    let t = ScriptTransport::new();
+    t.reply("/login/device/code", 200, GH_DEVICE);
+    for _ in 0..3 {
+        t.reply("/login/oauth/access_token", 502, "");
+    }
+    assert!(matches!(
+        wait_on(&t).await,
+        Err(OAuthError::Client(ClientError::Server { status: 502 }))
+    ));
+    assert_eq!(t.remaining(), 0, "three polls, then it gave up");
+}
+
+/// A GitHub base that is not a URL keeps its own text as host and origin;
+/// a typed client id makes signing in available anywhere.
+#[test]
+fn an_unparsable_github_base_is_its_own_host_and_a_typed_client_id_is_available() {
+    let account = oauth_account(Provider::Github, Some("not a url"), None);
+    let endpoints = Endpoints::for_account(&account);
+    assert_eq!(endpoints.host, endpoints.origin);
+    let typed = oauth::availability(
+        Provider::Gitlab,
+        "https://gitlab.example.com",
+        Some("app"),
+        &REGISTERED,
+    );
+    assert!(typed.available && typed.needs_client_id);
+    let blank = oauth::availability(
+        Provider::Gitlab,
+        "https://gitlab.example.com",
+        Some("  "),
+        &REGISTERED,
+    );
+    assert!(!blank.available);
+}
+
+// Every path of `wait_for_token` through ONE instantiation of it: it is
+// generic over its sleep and its cancel, each closure is a type of its own,
+// and llvm-cov's summary credits a function with its best single copy.
+
+fn no_sleep(_: Duration) -> std::future::Ready<()> {
+    std::future::ready(())
+}
+
+/// Cancelled after `polls` polls of the cancel future, or never.
+async fn cancel_after(polls: Option<u32>) {
+    match polls {
+        Some(n) => {
+            for _ in 0..n {
+                tokio::task::yield_now().await;
+            }
+        }
+        None => std::future::pending().await,
+    }
+}
+
+async fn wait_through(
+    t: &ScriptTransport,
+    cancel: Option<u32>,
+) -> Result<oauth::device::TokenReplyView, OAuthError> {
+    let device = oauth::start(t, &github_endpoints(), "c").await?;
+    oauth::wait_for_token(
+        t,
+        &github_endpoints(),
+        "c",
+        &device,
+        no_sleep,
+        cancel_after(cancel),
+        &mut |_| {},
+    )
+    .await
+}
+
+#[tokio::test]
+async fn one_instantiation_of_the_wait_takes_every_path() {
+    let t = ScriptTransport::new();
+    t.reply("/login/device/code", 200, GH_DEVICE);
+    for (status, body) in [
+        (200, r#"{"error":"authorization_pending"}"#),
+        (200, r#"{"error":"slow_down"}"#),
+        (429, ""),
+        (302, ""),
+    ] {
+        t.reply("/login/oauth/access_token", status, body);
+    }
+    t.reply("/login/oauth/access_token", 200, GH_TOKEN);
+    assert!(wait_through(&t, None).await.is_ok());
+
+    let t = ScriptTransport::new();
+    t.reply(
+        "/login/device/code",
+        200,
+        r#"{"device_code":"d","user_code":"u","verification_uri":"https://github.com/login/device","expires_in":0,"interval":5}"#,
+    );
+    assert!(matches!(
+        wait_through(&t, None).await,
+        Err(OAuthError::Expired)
+    ));
+
+    let t = ScriptTransport::new();
+    t.reply("/login/device/code", 200, GH_DEVICE);
+    for _ in 0..3 {
+        t.reply("/login/oauth/access_token", 502, "");
+    }
+    assert!(matches!(
+        wait_through(&t, None).await,
+        Err(OAuthError::Client(ClientError::Server { status: 502 }))
+    ));
+
+    for polls in [0, 1] {
+        let t = ScriptTransport::new();
+        t.reply("/login/device/code", 200, GH_DEVICE);
+        t.reply("/login/oauth/access_token", 200, GH_TOKEN);
+        assert!(
+            matches!(
+                wait_through(&t, Some(polls)).await,
+                Err(OAuthError::Cancelled)
+            ),
+            "{polls}"
+        );
+    }
 }

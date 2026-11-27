@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Noticing that the machine slept, without asking the operating system.
 //!
 //! A poll loop sleeps on the monotonic clock, and [`Instant`] **excludes
@@ -248,11 +252,8 @@ mod tests {
         let jump = watch.woke().await;
         jumped.await.unwrap();
         assert_eq!(jump, Duration::from_secs(3600));
-        assert!(
-            started.elapsed() <= CHECK_EVERY * 4,
-            "{:?}",
-            started.elapsed()
-        );
+        let waited = started.elapsed();
+        assert!(waited <= CHECK_EVERY * 4, "{waited:?}");
     }
 
     #[tokio::test(start_paused = true)]

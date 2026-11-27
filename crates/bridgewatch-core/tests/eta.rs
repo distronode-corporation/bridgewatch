@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Deploy ETA: how long a deploy usually takes, learned from the watch's own
 //! history, and shown only while it is still worth showing.
 

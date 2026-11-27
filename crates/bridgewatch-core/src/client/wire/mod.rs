@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The shapes the providers' APIs really return.
 //!
 //! One module per provider, each one decode-only: a wire type exists to be

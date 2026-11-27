@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The GitLab endpoints bridgewatch uses, and nothing else.
 //!
 //! The poller's five are all `GET` under `{base_url}{api_path}/projects/{project}`.

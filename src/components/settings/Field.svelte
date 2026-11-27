@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   import type { Edit, Provider } from "../../lib/types";
   import { inapplicableNote, type RegistryEntry } from "../../lib/settings/registry";

@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Download a RELEASED bridgewatch CLI and check it against a pinned digest.
 #
 #   bash .github/scripts/fetch-released-cli.sh <target> <out-dir>

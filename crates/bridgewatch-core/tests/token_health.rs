@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! F3: "my builds" (`mine = true`) and token health, against hand-written
 //! answers in the documented API shapes. No network, no keychain: a script
 //! answers every request, and an in-memory store holds every credential.
@@ -1026,4 +1030,284 @@ async fn a_user_refusal_survives_the_expiry_lookups_ignored_401() {
         paths(&t)
     );
     assert_eq!(token_notes(&tick).len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Every path of `Poller::tick` in this one binary: llvm-cov's summary credits
+// an async fn with its best single binary's copy, so the paths have to meet
+// here rather than across binaries.
+// ---------------------------------------------------------------------------
+
+/// One tick over a watch with no account, a refused account, and a deploy
+/// that teaches a sample, saving to a ledger and a history that cannot be
+/// written, with a subscriber listening: every error is said, nothing is
+/// written, and the sample is still learned in memory.
+#[tokio::test]
+async fn one_tick_over_every_kind_of_watch_says_each_and_survives_unwritable_files() {
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .finish(),
+    );
+    const RAW: &str = r#"
+        [accounts.lab]
+        token = { env = "TOK" }
+
+        [accounts.own]
+        base_url = "https://gitlab.example.com"
+        token = { own = true }
+
+        [[watches]]
+        id = "dep"
+        account = "lab"
+        project = 1
+        deploy_markers = ["deploy"]
+
+        [[watches]]
+        id = "refused"
+        account = "own"
+        project = 2
+        role = "secondary"
+
+        [[watches]]
+        id = "lost"
+        account = "ghost"
+        project = 3
+        role = "secondary"
+        "#;
+    let t = Arc::new(ScriptTransport::new());
+    t.reply(
+        "/personal_access_tokens/self",
+        200,
+        r#"{"id":9,"name":"bw","scopes":["read_api"],"expires_at":null,"active":true}"#,
+    );
+    t.reply(
+        "/projects/1/pipelines?",
+        200,
+        r#"[{"id":7,"iid":7,"project_id":1,"sha":"0123456789abcdef0123456789abcdef01234567","ref":"main","status":"success","source":"push","created_at":"2026-11-01T10:00:00Z","updated_at":"2026-11-01T10:10:00Z"}]"#,
+    );
+    t.reply(
+        "/pipelines/7/jobs",
+        200,
+        r#"[{"id":70,"name":"deploy","stage":"deploy","status":"success","allow_failure":false,"started_at":"2026-11-01T10:05:00Z","finished_at":"2026-11-01T10:10:00Z"}]"#,
+    );
+    t.reply("/pipelines/7/bridges", 200, "[]");
+    let blocker =
+        std::env::temp_dir().join(format!("bw-token-health-blocker-{}", std::process::id()));
+    std::fs::write(&blocker, "not a directory").unwrap();
+    let clock = Clock::at(wall());
+    let mut poller = poller(RAW, &Memory::default(), &t, &clock)
+        .with_ledger(blocker.join("ledger.json"))
+        .with_eta_history(blocker.join("eta.json"));
+    assert_eq!(poller.refused_accounts(), ["own"]);
+    let tick = poller.tick().await;
+    let _ = std::fs::remove_file(&blocker);
+
+    let error = |id: &str| {
+        tick.snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.error.clone())
+    };
+    assert_eq!(error("dep"), None);
+    assert!(
+        error("refused")
+            .unwrap_or_default()
+            .starts_with("account own:")
+    );
+    assert_eq!(error("lost").as_deref(), Some("unknown account \"ghost\""));
+    assert_eq!(poller.eta_history().samples("dep"), [600]);
+    assert!(
+        health(&tick, "own").is_none(),
+        "a refused account sent nothing"
+    );
+}
+
+/// What a transport does with one request.
+#[derive(Debug, Clone)]
+enum Act {
+    Answer(u16, &'static str),
+    Hang,
+}
+
+/// Answers by path fragment, each in turn, the last repeating.
+#[derive(Debug)]
+struct Acting(Mutex<Vec<(&'static str, Vec<Act>)>>);
+
+#[async_trait::async_trait]
+impl bridgewatch_core::client::Transport for Acting {
+    async fn execute(
+        &self,
+        request: bridgewatch_core::client::HttpRequest,
+    ) -> Result<HttpResponse, bridgewatch_core::client::ClientError> {
+        let act = {
+            let mut routes = self.0.lock().unwrap();
+            let (_, acts) = routes
+                .iter_mut()
+                .find(|(fragment, _)| request.url.contains(fragment))
+                .expect("a routed request");
+            if acts.len() > 1 {
+                acts.remove(0)
+            } else {
+                acts[0].clone()
+            }
+        };
+        match act {
+            Act::Answer(status, body) => Ok(HttpResponse::plain(status, body)),
+            Act::Hang => std::future::pending().await,
+        }
+    }
+}
+
+/// ⛔ A tick whose future is dropped mid-poll records a watch's failure in
+/// its backoff but never stores the view it would have shown. The next tick
+/// defers that watch and must show what it has: nothing for a watch never
+/// seen, the older view for one seen before, and no panic either way.
+#[tokio::test]
+async fn a_tick_dropped_mid_poll_leaves_the_next_one_showing_what_it_has() {
+    const RAW: &str = r#"
+        [accounts.lab]
+        token = { env = "TOK" }
+
+        [[watches]]
+        id = "fails"
+        account = "lab"
+        project = 1
+
+        [[watches]]
+        id = "slow"
+        account = "lab"
+        project = 2
+        role = "secondary"
+        "#;
+    for seen_before in [false, true] {
+        let fails = if seen_before {
+            vec![Act::Answer(200, "[]"), Act::Answer(500, "{}")]
+        } else {
+            vec![Act::Answer(500, "{}")]
+        };
+        let slow = if seen_before {
+            vec![Act::Answer(200, "[]"), Act::Hang, Act::Answer(200, "[]")]
+        } else {
+            vec![Act::Hang, Act::Answer(200, "[]")]
+        };
+        let transport = Arc::new(Acting(Mutex::new(vec![
+            (
+                "/personal_access_tokens/self",
+                vec![Act::Answer(
+                    200,
+                    r#"{"id":1,"name":"t","scopes":["read_api"],"expires_at":null,"active":true}"#,
+                )],
+            ),
+            ("/projects/1/", fails),
+            ("/projects/2/", slow),
+        ])));
+        let mut poller =
+            Poller::from_config_per_account_on(&config(RAW), &Memory::default(), transport)
+                .expect("the poller builds");
+        if seen_before {
+            assert_eq!(poller.tick().await.snapshot.watches.len(), 2);
+        }
+        let dropped =
+            tokio::time::timeout(std::time::Duration::from_millis(200), poller.tick()).await;
+        assert!(
+            dropped.is_err(),
+            "the slow watch held the tick until it was dropped"
+        );
+
+        let tick = poller.tick().await;
+        let fails = tick.snapshot.watches.iter().find(|w| w.id == "fails");
+        assert_eq!(fails.is_some(), seen_before, "{:?}", tick.snapshot.watches);
+        assert!(fails.is_none_or(|w| w.error.is_none()));
+        assert!(tick.snapshot.watches.iter().any(|w| w.id == "slow"));
+    }
+}
+
+/// ⛔ A list failure shows the last stored view. After a cancelled tick
+/// evicted a marked row from the cache, that view still names the row, and
+/// learning its deploy time must skip it rather than panic.
+#[tokio::test]
+async fn a_fallback_view_naming_an_evicted_marked_row_is_skipped_when_learning() {
+    const RAW: &str = r#"
+        [accounts.lab]
+        token = { env = "TOK" }
+
+        [[watches]]
+        id = "dep"
+        account = "lab"
+        project = 1
+        deploy_markers = ["deploy"]
+
+        [[watches]]
+        id = "slow"
+        account = "lab"
+        project = 2
+        role = "secondary"
+        "#;
+    let row = |id: u64| -> &'static str {
+        Box::leak(
+            format!(
+                r#"[{{"id":{id},"iid":{id},"project_id":1,"sha":"0123456789abcdef0123456789abcdef01234567","ref":"main","status":"success","source":"push","created_at":"2026-11-01T10:00:00Z","updated_at":"2026-11-01T10:05:00Z"}}]"#
+            )
+            .into_boxed_str(),
+        )
+    };
+    let transport = Arc::new(Acting(Mutex::new(vec![
+        (
+            "/personal_access_tokens/self",
+            vec![Act::Answer(
+                200,
+                r#"{"id":1,"name":"t","scopes":["read_api"],"expires_at":null,"active":true}"#,
+            )],
+        ),
+        // The marker finished at no stated time: no sample, so never learned.
+        (
+            "/pipelines/7/jobs",
+            vec![Act::Answer(
+                200,
+                r#"[{"id":70,"name":"deploy","stage":"deploy","status":"success","allow_failure":false}]"#,
+            )],
+        ),
+        ("/pipelines/8/jobs", vec![Act::Answer(200, "[]")]),
+        ("/bridges", vec![Act::Answer(200, "[]")]),
+        (
+            "/projects/1/pipelines?",
+            vec![
+                Act::Answer(200, row(7)),
+                Act::Answer(200, row(8)),
+                Act::Answer(500, "{}"),
+            ],
+        ),
+        (
+            "/projects/2/pipelines?",
+            vec![Act::Answer(200, "[]"), Act::Hang, Act::Answer(200, "[]")],
+        ),
+    ])));
+    let mut poller =
+        Poller::from_config_per_account_on(&config(RAW), &Memory::default(), transport)
+            .expect("the poller builds");
+    let first = poller.tick().await;
+    let dep = |tick: &Tick| {
+        tick.snapshot
+            .watches
+            .iter()
+            .find(|w| w.id == "dep")
+            .cloned()
+    };
+    assert!(dep(&first).unwrap().rows[0].deploy_marker.is_some());
+    let dropped = tokio::time::timeout(std::time::Duration::from_millis(200), poller.tick()).await;
+    assert!(
+        dropped.is_err(),
+        "the slow watch held the tick until it was dropped"
+    );
+    let third = poller.tick().await;
+    let shown = dep(&third).expect("the dep watch is shown");
+    assert!(shown.error.is_some(), "the list failed");
+    assert_eq!(
+        shown.rows[0].id, 7,
+        "the last stored view, naming the evicted row"
+    );
+    assert!(poller.eta_history().samples("dep").is_empty());
 }

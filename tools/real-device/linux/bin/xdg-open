@@ -1,4 +1,9 @@
 #!/bin/sh
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Stub: record the call, open nothing.
 printf '%s %s\n' "$(date -u +%H:%M:%S.%3NZ)" "$*" >> "${BWH_LOG:?}/xdg-open.log"
 exit 0

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The IPC surface. Everything the two windows can ask the shell to do.
 //!
 //! The rule the whole packet is built on: **no business logic lives here or in
@@ -1104,6 +1108,57 @@ mod tests {
         std::fs::write(&big, vec![b' '; THEME_CSS_MAX_BYTES as usize + 1]).unwrap();
         assert!(read_stylesheet(&big).is_err());
         assert!(read_stylesheet(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The commands that take only the managed state, through Tauri's mock
+    /// runtime: a first paint, a refresh and a popover open, the text tab's
+    /// read and check, the theme, and the tab Settings was asked to open.
+    #[test]
+    fn the_state_only_commands_answer_from_the_managed_state() {
+        use tauri::Manager;
+        let dir = std::env::temp_dir().join(format!("bw-state-cmds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let css = dir.join("theme.css");
+        std::fs::write(&css, ":root{}").unwrap();
+        let path = dir.join("config.toml");
+        let text = crate::config::EXAMPLE_CONFIG.replace(
+            "theme_css = \"\"",
+            &format!("theme_css = {:?}", css.display().to_string()),
+        );
+        assert_ne!(
+            text,
+            crate::config::EXAMPLE_CONFIG,
+            "the example sets theme_css"
+        );
+        std::fs::write(&path, &text).unwrap();
+        let resolved = crate::config::resolve(Some(&path));
+        assert!(
+            resolved.validation.ok,
+            "{:?}",
+            resolved.validation.diagnostics
+        );
+        let app = tauri::test::mock_app();
+        app.manage(Arc::new(AppState::new(resolved)));
+        let state = || app.state::<Arc<AppState>>();
+
+        assert!(get_snapshot(state()).watches.is_empty());
+        assert!(refresh_now(state()));
+        assert!(!popover_opened(state()), "inside the rate gate");
+        assert_eq!(read_config_text(state()).unwrap(), text);
+        assert!(validate_config_text(text.clone(), state()).ok);
+        assert!(!validate_config_text("[[watches]".into(), state()).ok);
+        assert_eq!(read_theme_css(state()).as_deref(), Some(":root{}"));
+        state().lock().settings_tab = Some("accounts".into());
+        assert_eq!(take_settings_tab(state()).as_deref(), Some("accounts"));
+        assert_eq!(take_settings_tab(state()), None);
+
+        // A theme that is not a stylesheet is no theme, and none is none.
+        std::fs::write(&path, text.replace("theme.css", "theme.txt")).unwrap();
+        state().lock().config = crate::config::resolve(Some(&path)).loaded.map(|l| l.config);
+        assert_eq!(read_theme_css(state()), None);
+        state().lock().config = None;
+        assert_eq!(read_theme_css(state()), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

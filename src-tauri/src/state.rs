@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! What the shell knows between ticks, and how the two halves ask each other
 //! for work.
 //!
@@ -458,5 +462,32 @@ mod tests {
         let state = state_with("");
         state.record_tick(Duration::MAX);
         assert!(state.status(false, (false, false)).next_poll_secs.is_none());
+    }
+
+    /// What the popover asks the state for, before and after a tick: the
+    /// status with a next poll, the snapshot, the configuration, the clients
+    /// and the refused list, and the notification pause.
+    #[test]
+    fn the_state_answers_what_the_popover_asks() {
+        let state = state_with("");
+        let status = state.status(true, (true, false));
+        assert!(status.launch_at_login);
+        assert_eq!(status.next_poll_secs, None);
+        assert!(status.needs_approval.is_empty(), "nothing was refused");
+        state.record_tick(Duration::from_secs(60));
+        assert!(state.status(false, (false, false)).next_poll_secs.unwrap() <= 60);
+        assert!(state.snapshot().watches.is_empty());
+        assert!(state.config().is_none());
+        assert!(state.client("gl").is_none());
+        state.set_clients(BTreeMap::new());
+        assert!(state.client("gl").is_none());
+        state.with_quiet(|q| q.pause_until_resumed());
+        assert!(
+            state
+                .status(false, (false, false))
+                .notifications_paused
+                .is_some()
+        );
+        state.request_reload();
     }
 }

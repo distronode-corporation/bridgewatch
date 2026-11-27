@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! bridgewatch's tray application.
 //!
 //! A thin shell: it owns windows, a tray icon and the OS integrations, and

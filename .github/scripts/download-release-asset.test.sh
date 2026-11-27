@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Tests for download-release-asset.sh against a loopback stand-in that answers a
 # scripted sequence of statuses. Needs bash, curl and python3; no network.
 #
