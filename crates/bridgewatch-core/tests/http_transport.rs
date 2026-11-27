@@ -155,6 +155,30 @@ fn a_machine_with_no_ca_roots_cannot_build_a_transport() {
             panic!("a transport built with no CA roots");
         };
         assert!(message.contains("CA certificates"), "{message}");
+        // Nor can a client for an account be built, or a poller over one.
+        let account = bridgewatch_core::config::Account::default();
+        let store: std::sync::Arc<dyn bridgewatch_core::token::TokenProvider> =
+            std::sync::Arc::new(bridgewatch_core::token::SystemTokenProvider);
+        let built = bridgewatch_core::poll::client_for_account(
+            "gl",
+            &account,
+            Some(bridgewatch_core::token::Secret::new("glpat-x")),
+            store,
+            RequestRing::new(1),
+        );
+        assert!(built.is_err());
+        let config: bridgewatch_core::Config = toml::from_str(
+            "[accounts.gl]\ntoken = { env = \"BW_NEVER_SET\" }\n[[watches]]\nid = \"w\"\naccount = \"gl\"\nproject = 1\n",
+        )
+        .unwrap();
+        let poller = bridgewatch_core::poll::Poller::from_config_per_account(
+            &config,
+            &bridgewatch_core::token::SystemTokenProvider,
+        );
+        assert!(
+            poller.is_err(),
+            "a transport that cannot be built is not a token refusal"
+        );
         return;
     }
     let dir = std::env::temp_dir().join(format!("bw-no-roots-{}", std::process::id()));

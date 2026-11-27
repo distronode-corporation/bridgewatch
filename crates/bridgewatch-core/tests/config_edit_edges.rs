@@ -136,3 +136,18 @@ fn a_watch_edit_on_an_unknown_id_is_no_such_watch() {
 fn a_file_with_no_watches_has_none_to_find() {
     assert_eq!(ConfigEditor::new("").unwrap().watch_index("a"), None);
 }
+
+/// A watch from the settings window is JSON, which can carry an interval no
+/// TOML integer can hold: adding it is an error, never a panic.
+#[test]
+fn a_watch_with_an_interval_toml_cannot_hold_is_refused() {
+    let raw = "[accounts.gl]\ntoken = { env = \"T\" }\n[[watches]]\nid = \"a\"\naccount = \"gl\"\nproject = 1\n";
+    let mut watch = bridgewatch_core::config::parse_lenient(raw, std::path::Path::new("t.toml"))
+        .unwrap()
+        .0
+        .watches
+        .remove(0);
+    watch.poll.live_secs = u64::MAX;
+    let error = editor().add_watch(&watch).unwrap_err();
+    assert!(matches!(error, EditError::Serialize(_)), "{error:?}");
+}

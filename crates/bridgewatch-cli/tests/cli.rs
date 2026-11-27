@@ -2218,24 +2218,33 @@ fn fixture_record_defaults_its_account_and_refuses_what_it_cannot_use() {
 
 #[test]
 fn fixture_scrub_says_which_directory_it_cannot_read_or_write() {
+    // ⚠ Mode bits deny only an unprivileged account: root reads and writes
+    // through them, so each case first checks the denial holds here.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         // A directory that cannot be listed.
         let shut = TempDir::new("scrub-shut");
         std::fs::set_permissions(&shut.0, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = std::fs::read_dir(&shut.0).is_err();
         let out = run(bin().args(["fixture", "scrub", "--check"]).arg(&shut.0));
         std::fs::set_permissions(&shut.0, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(code(&out), 70, "{}", stderr(&out));
-        assert!(stderr(&out).contains("cannot scrub"), "{}", stderr(&out));
+        if denied {
+            assert_eq!(code(&out), 70, "{}", stderr(&out));
+            assert!(stderr(&out).contains("cannot scrub"), "{}", stderr(&out));
+        }
 
+        // A file that needs a change and cannot be written.
         let dir = TempDir::new("scrub-readonly");
         let file = dir.write("jobs.json", "[1]");
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let denied = std::fs::OpenOptions::new().write(true).open(&file).is_err();
         let out = run(bin().args(["fixture", "scrub"]).arg(&dir.0));
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert_eq!(code(&out), 70, "{}", stderr(&out));
-        assert!(stderr(&out).contains("cannot scrub"), "{}", stderr(&out));
+        if denied {
+            assert_eq!(code(&out), 70, "{}", stderr(&out));
+            assert!(stderr(&out).contains("cannot scrub"), "{}", stderr(&out));
+        }
     }
 }
 
@@ -2261,10 +2270,12 @@ fn a_write_asked_on_a_terminal_is_sent_only_on_a_yes() {
     let (base, seen) = routed(vec![("/jobs/7/retry", vec![ok("{}")])]);
     let dir = TempDir::new("loopback-asked");
     let config = loopback_config(&dir, &base, "");
+    // Quoted for the shell, so a checkout path with a space in it still works.
+    let quote = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
     let command = format!(
         "{} --config {} retry {base}/acme/web/-/jobs/7",
-        env!("CARGO_BIN_EXE_bridgewatch"),
-        config.display()
+        quote(env!("CARGO_BIN_EXE_bridgewatch")),
+        quote(&config.display().to_string())
     );
     let answer = |reply: &[u8]| -> String {
         let mut script = Command::new("script");

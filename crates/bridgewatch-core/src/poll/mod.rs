@@ -643,23 +643,21 @@ impl Poller {
                     });
                 }
                 Turn::SitOut => {
-                    // Only an error defers a watch, and the poll that saw it
-                    // left a view.
-                    let view = state
-                        .last_view
-                        .as_ref()
-                        .expect("a deferred watch has a view");
-                    // The error that deferred it is on that view.
-                    let e = view
-                        .error
-                        .as_ref()
-                        .expect("a deferred watch's view says why");
-                    errors.push(format!("{}: {e}", state.watch.id));
-                    // Nothing was fetched, but time still passed: the
-                    // elapsed half of an estimate is re-read.
-                    let mut view = view.clone();
-                    annotate_eta(&self.eta, state, &mut view, now);
-                    views.push(view);
+                    // ⚠ Usually the view the failing poll left, error and all.
+                    // A tick dropped mid-poll (its future cancelled) records the
+                    // failure in the policy but never stores the view, so the
+                    // watch may have none yet, or only an older one without the
+                    // error: shown as it is, never assumed.
+                    if let Some(view) = &state.last_view {
+                        if let Some(e) = &view.error {
+                            errors.push(format!("{}: {e}", state.watch.id));
+                        }
+                        // Nothing was fetched, but time still passed: the
+                        // elapsed half of an estimate is re-read.
+                        let mut view = view.clone();
+                        annotate_eta(&self.eta, state, &mut view, now);
+                        views.push(view);
+                    }
                 }
                 Turn::Poll => {
                     // A Poll turn is only given to a watch whose account has a client.

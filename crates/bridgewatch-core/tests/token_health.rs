@@ -1120,3 +1120,103 @@ async fn one_tick_over_every_kind_of_watch_says_each_and_survives_unwritable_fil
         "a refused account sent nothing"
     );
 }
+
+/// What a transport does with one request.
+#[derive(Debug, Clone)]
+enum Act {
+    Answer(u16, &'static str),
+    Hang,
+}
+
+/// Answers by path fragment, each in turn, the last repeating.
+#[derive(Debug)]
+struct Acting(Mutex<Vec<(&'static str, Vec<Act>)>>);
+
+#[async_trait::async_trait]
+impl bridgewatch_core::client::Transport for Acting {
+    async fn execute(
+        &self,
+        request: bridgewatch_core::client::HttpRequest,
+    ) -> Result<HttpResponse, bridgewatch_core::client::ClientError> {
+        let act = {
+            let mut routes = self.0.lock().unwrap();
+            let (_, acts) = routes
+                .iter_mut()
+                .find(|(fragment, _)| request.url.contains(fragment))
+                .expect("a routed request");
+            if acts.len() > 1 {
+                acts.remove(0)
+            } else {
+                acts[0].clone()
+            }
+        };
+        match act {
+            Act::Answer(status, body) => Ok(HttpResponse::plain(status, body)),
+            Act::Hang => std::future::pending().await,
+        }
+    }
+}
+
+/// ⛔ A tick whose future is dropped mid-poll records a watch's failure in
+/// its backoff but never stores the view it would have shown. The next tick
+/// defers that watch and must show what it has: nothing for a watch never
+/// seen, the older view for one seen before, and no panic either way.
+#[tokio::test]
+async fn a_tick_dropped_mid_poll_leaves_the_next_one_showing_what_it_has() {
+    const RAW: &str = r#"
+        [accounts.lab]
+        token = { env = "TOK" }
+
+        [[watches]]
+        id = "fails"
+        account = "lab"
+        project = 1
+
+        [[watches]]
+        id = "slow"
+        account = "lab"
+        project = 2
+        role = "secondary"
+        "#;
+    for seen_before in [false, true] {
+        let fails = if seen_before {
+            vec![Act::Answer(200, "[]"), Act::Answer(500, "{}")]
+        } else {
+            vec![Act::Answer(500, "{}")]
+        };
+        let slow = if seen_before {
+            vec![Act::Answer(200, "[]"), Act::Hang, Act::Answer(200, "[]")]
+        } else {
+            vec![Act::Hang, Act::Answer(200, "[]")]
+        };
+        let transport = Arc::new(Acting(Mutex::new(vec![
+            (
+                "/personal_access_tokens/self",
+                vec![Act::Answer(
+                    200,
+                    r#"{"id":1,"name":"t","scopes":["read_api"],"expires_at":null,"active":true}"#,
+                )],
+            ),
+            ("/projects/1/", fails),
+            ("/projects/2/", slow),
+        ])));
+        let mut poller =
+            Poller::from_config_per_account_on(&config(RAW), &Memory::default(), transport)
+                .expect("the poller builds");
+        if seen_before {
+            assert_eq!(poller.tick().await.snapshot.watches.len(), 2);
+        }
+        let dropped =
+            tokio::time::timeout(std::time::Duration::from_millis(200), poller.tick()).await;
+        assert!(
+            dropped.is_err(),
+            "the slow watch held the tick until it was dropped"
+        );
+
+        let tick = poller.tick().await;
+        let fails = tick.snapshot.watches.iter().find(|w| w.id == "fails");
+        assert_eq!(fails.is_some(), seen_before, "{:?}", tick.snapshot.watches);
+        assert!(fails.is_none_or(|w| w.error.is_none()));
+        assert!(tick.snapshot.watches.iter().any(|w| w.id == "slow"));
+    }
+}

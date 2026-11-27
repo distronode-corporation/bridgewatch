@@ -523,7 +523,17 @@ fn write_json<T: Serialize>(
     // is an accident of which fields the engine happens to need, and the day
     // somebody adds `commit` to `Job` it would stop being true silently.
     // Every recorded type is plain data, keyed by strings.
-    let mut json = serde_json::to_value(value).expect("a recorded value serialises");
+    let json = serde_json::to_value(value).expect("a recorded value serialises");
+    write_value(dir, name, json, files)
+}
+
+/// [`write_json`]'s body, outside the generic, so one copy takes every path.
+fn write_value(
+    dir: &Path,
+    name: &str,
+    mut json: serde_json::Value,
+    files: &mut Vec<String>,
+) -> Result<(), RecordError> {
     if let Some(kind) = kind_for_file(name) {
         scrub(&mut json, kind);
     }

@@ -51,6 +51,9 @@ pub enum EditError {
     /// A watch id was not found.
     #[error("no watch with id {0:?}")]
     NoSuchWatch(String),
+    /// A value could not be turned into TOML.
+    #[error("cannot serialise value: {0}")]
+    Serialize(String),
 }
 
 /// A scalar or list to write into the document.
@@ -250,13 +253,14 @@ impl ConfigEditor {
 /// watch's `[watches.poll]` lands in the middle of the *first* watch and the
 /// file reflows. Inlining `poll = { .. }` keeps the appended entry to one
 /// header, which is also how the shipped example writes it.
+/// `watch` as a TOML document. ⚠ It can fail: a watch from the settings
+/// window is JSON, which can carry an integer TOML cannot (above `i64::MAX`).
+fn rendered(watch: &Watch) -> Result<DocumentMut, Box<dyn std::error::Error>> {
+    Ok(toml::to_string(watch)?.parse::<DocumentMut>()?)
+}
+
 fn watch_to_table(watch: &Watch) -> Result<Table, EditError> {
-    // A `Watch` is plain data, its tables after its values: TOML can hold it.
-    let rendered = toml::to_string(watch).expect("a watch is TOML");
-    // toml's own output is TOML.
-    let doc = rendered
-        .parse::<DocumentMut>()
-        .expect("toml's output parses");
+    let doc = rendered(watch).map_err(|e| EditError::Serialize(e.to_string()))?;
     let mut table = doc.as_table().clone();
     inline_sub_tables(&mut table);
     table.set_implicit(false);
