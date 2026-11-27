@@ -66,6 +66,10 @@ function render(rows: [string, string][]) {
       host.querySelectorAll<HTMLButtonElement>('.row button[title="move up"]')[index].click();
       flushSync();
     },
+    moveDown: (index: number) => {
+      host.querySelectorAll<HTMLButtonElement>('.row button[title="move down"]')[index].click();
+      flushSync();
+    },
   };
 }
 
@@ -155,5 +159,57 @@ describe("KeyValueField", () => {
         { op: "set", path: 'watches.0.jobs."verify:*"', value: { string: "warning" } },
       ],
     ]);
+  });
+});
+
+describe("KeyValueField edits that write nothing", () => {
+  const rows: [string, string][] = [
+    ["verify:*", "warning"],
+    ["deploy:origins", "blocking"],
+  ];
+
+  it("writes nothing when a cell is set to the value it already has", () => {
+    const view = render(rows);
+    change(view.picks()[0], "warning");
+    flushSync();
+    expect(view.edits).toEqual([]);
+  });
+
+  it("does not move the first row up or the last row down", () => {
+    const view = render(rows);
+    view.moveUp(0);
+    view.moveDown(1);
+    expect(view.edits).toEqual([]);
+    view.moveDown(0);
+    expect(view.edits).toHaveLength(1);
+  });
+
+  it("keeps a new row's value in the draft until the row has a key", () => {
+    const view = render(rows);
+    view.add();
+    change(view.picks()[2], "gate");
+    flushSync();
+    expect(view.edits).toEqual([]);
+    expect(view.picks()[2].value).toBe("gate");
+  });
+});
+
+describe("KeyValueField without a list of values", () => {
+  it("adds a row whose value is free text, starting empty", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    component = mount(KeyValueField, {
+      target: host,
+      props: { entry: entry("icon.states.*"), path: "icon.states", rows: [], keyPlaceholder: "state", onedit: () => {} },
+    });
+    flushSync();
+    host.querySelector<HTMLButtonElement>("button.add")!.click();
+    flushSync();
+    const cells = [...host.querySelectorAll<HTMLInputElement>(".row input[type=text]")];
+    expect(cells.map((c) => [c.placeholder, c.value])).toEqual([
+      ["state", ""],
+      ["", ""],
+    ]);
+    expect(host.querySelector(".row select")).toBeNull();
   });
 });

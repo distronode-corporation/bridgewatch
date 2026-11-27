@@ -28,7 +28,10 @@
   const signInFields = fields.filter((e) => accountGroup(e.path) === "Sign-in");
   const serverFields = fields.filter((e) => accountGroup(e.path) === "Server");
   // A key no group claims is shown under Advanced rather than lost; `panes.test.ts` fails on it first.
-  const advancedFields = fields.filter((e) => !["Sign-in", "Server"].includes(accountGroup(e.path) ?? ""));
+  const advancedFields = fields.filter((e) => {
+    const group = accountGroup(e.path);
+    return group !== "Sign-in" && group !== "Server";
+  });
   let newName = $state("");
   /** GitLab first and the default, so adding an account works as it always did. */
   let newProvider = $state<Provider>("gitlab");
@@ -61,8 +64,8 @@
     if (!change) return onedit(edits);
     const to: Provider =
       change.op === "set" && "string" in change.value && change.value.string === "github" ? "github" : "gitlab";
+    // A provider select only fires on a change, so `from` and `to` differ (providerSwitch adds nothing if not).
     const from = providerOf(accountAt(name));
-    if (from === to) return onedit(edits);
     const { edits: extra, note } = providerSwitch(name, accountAt(name), from, to);
     const notes = { ...switchNotes };
     delete notes[name];
@@ -77,10 +80,9 @@
    * application there. Asked when the account is added, so the answer is the
    * provider actually chosen. No sign-in commands, or no answer: no.
    */
-  async function builtinSignIn(provider: Provider): Promise<boolean> {
-    if (!oauth) return false;
+  async function builtinSignIn(api: OAuthApi, provider: Provider): Promise<boolean> {
     try {
-      return (await oauth.availability(provider, defaultBaseUrl(provider), null)).builtin;
+      return (await api.availability(provider, defaultBaseUrl(provider), null)).builtin;
     } catch {
       return false;
     }
@@ -96,7 +98,7 @@
     // Sign-in where it works with nothing to type, as the wizard preselects
     // it, else bridgewatch's own entry. The Token source below changes either.
     // Without sign-in commands nothing is awaited, so the write is as immediate as it always was.
-    const signIn = oauth ? await builtinSignIn(provider) : false;
+    const signIn = oauth ? await builtinSignIn(oauth, provider) : false;
     const token: Edit = signIn
       ? { op: "set", path: concretePath("accounts.*.token.oauth", name), value: { boolean: true } }
       : { op: "set", path: concretePath("accounts.*.token.own", name), value: { boolean: true } };

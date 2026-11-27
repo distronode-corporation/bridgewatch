@@ -261,3 +261,35 @@ describe("AccountsTab, the card (L2)", () => {
     expect(host.querySelector("section.account")!.getAttribute("aria-labelledby")).toBe(heading.id);
   });
 });
+
+describe("AccountsTab, the second click and the account's own fields", () => {
+  it("adds one account however fast Add is clicked twice, while the sign-in question is out", async () => {
+    let answer!: (a: OAuthAvailability) => void;
+    const oauth = {
+      availability: vi.fn(() => new Promise<OAuthAvailability>((resolve) => (answer = resolve))),
+    } as unknown as OAuthApi;
+    const h = render({ accounts: {} }, oauth);
+    const input = host.querySelector<HTMLInputElement>('.add input[type="text"]')!;
+    input.value = "work";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    const add = [...host.querySelectorAll<HTMLButtonElement>(".add button")].find((b) => /Add account/.test(b.textContent ?? ""))!;
+    // Both clicks land before Svelte re-renders the button as disabled.
+    add.click();
+    add.click();
+    answer({ builtin: false } as OAuthAvailability);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+    expect(oauth.availability).toHaveBeenCalledTimes(1);
+    expect(h.edits).toHaveLength(1);
+  });
+
+  it("writes an advanced field's change as is, and an emptied field as a removal", () => {
+    const h = render({ accounts: { work: { base_url: "https://gitlab.example.com", api_path: "/api/v4" } } });
+    const advanced = [...host.querySelectorAll<HTMLInputElement>("input[type=text]")].find((i) => i.value === "/api/v4")!;
+    advanced.value = "";
+    advanced.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+    expect(h.edits).toEqual([[{ op: "unset", path: "accounts.work.api_path" }]]);
+  });
+});
