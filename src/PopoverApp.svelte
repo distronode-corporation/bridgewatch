@@ -201,7 +201,8 @@
       // Nothing drawn (`display: none`) reports a zero rect at the origin.
       if (r.height <= 0) continue;
       if (r.top < top) [top, first] = [r.top, child];
-      if (r.bottom > bottom) [bottom, last] = [r.bottom, child];
+      // The rows are stacked in a column, so each drawn one ends below the one before.
+      [bottom, last] = [r.bottom, child];
     }
     const style = getComputedStyle(list);
     const px = (value: string) => parseFloat(value) || 0;
