@@ -176,6 +176,8 @@ jobs:
       # throwaway password. This leg only; no other job needs one.
       - name: Install a Secret Service
         run: |
+          # Only the Ubuntu archives: see linux-tauri-deps for why packages.microsoft.com goes.
+          { sudo grep -lrs --null packages.microsoft.com /etc/apt/sources.list.d/ || true; } | xargs -0r sudo rm -f --
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends gnome-keyring dbus-daemon
 
@@ -623,6 +625,8 @@ jobs:
         env:
           RELEASED_CLI: ${{ steps.released.outputs.cli }}
         run: |
+          # Only the Ubuntu archives: see linux-tauri-deps for why packages.microsoft.com goes.
+          { sudo grep -lrs --null packages.microsoft.com /etc/apt/sources.list.d/ || true; } | xargs -0r sudo rm -f --
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends dbus gnome-keyring libsecret-tools
           bash .github/scripts/bound-token-probe.sh cli-out/bridgewatch "$RELEASED_CLI"
