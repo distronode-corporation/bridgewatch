@@ -5,7 +5,7 @@ import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import type { OAuthApi, OAuthAvailability } from "../../lib/oauth";
-import type { ConfirmRequest, ProjectListing, RecentListing, WizardApi, WizardPreview, WizardSaveResult } from "./api";
+import type { NeedsConfirm, ProjectListing, RecentListing, WizardApi, WizardPreview, WizardSaveResult } from "./api";
 import Wizard from "./Wizard.svelte";
 
 /**
@@ -42,7 +42,7 @@ const RECENT: RecentListing = {
 
 const PREVIEW: WizardPreview = { toml: "x = 1\n", warnings: [], edited_existing: false };
 const SAVED: WizardSaveResult = { ok: true, diagnostics: [], path: "/x/config.toml" };
-const CONFIRM: ConfirmRequest = { id: "q1", changes: ["Run gh auth token."] } as ConfirmRequest;
+const CONFIRM = { id: "q1", changes: ["Run gh auth token."] } as NeedsConfirm["confirm"];
 
 type Api = Required<WizardApi>;
 type FakeApi = { [K in keyof Api]: Mock<Api[K]> };
