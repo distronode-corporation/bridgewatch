@@ -23,27 +23,20 @@
 
 <script lang="ts">
 	import { cn, type WithElementRef } from "$lib/components/ui/utils.js";
-	import type { HTMLAnchorAttributes } from "svelte/elements";
+	import type { HTMLAttributes } from "svelte/elements";
 
 	let {
 		ref = $bindable(null),
-		href,
 		class: className,
 		variant = "default",
 		children,
 		...restProps
-	}: WithElementRef<HTMLAnchorAttributes> & {
+	}: WithElementRef<HTMLAttributes<HTMLSpanElement>> & {
 		variant?: BadgeVariant;
 	} = $props();
 </script>
 
-<svelte:element
-	this={href ? "a" : "span"}
-	bind:this={ref}
-	data-slot="badge"
-	{href}
-	class={cn(badgeVariants({ variant }), className)}
-	{...restProps}
->
+<!-- A span only: shadcn's anchor variant is removed, since the app opens links through the shell, never an href. -->
+<span bind:this={ref} data-slot="badge" class={cn(badgeVariants({ variant }), className)} {...restProps}>
 	{@render children?.()}
-</svelte:element>
+</span>

@@ -4,45 +4,27 @@
 
 	type InputType = Exclude<HTMLInputTypeAttribute, "file">;
 
-	type Props = WithElementRef<
-		Omit<HTMLInputAttributes, "type"> &
-			({ type: "file"; files?: FileList } | { type?: InputType; files?: undefined })
-	>;
+	// No file input: shadcn's `type: "file"` branch is removed, since no field in the app takes a file.
+	type Props = WithElementRef<Omit<HTMLInputAttributes, "type"> & { type?: InputType }>;
 
 	let {
 		ref = $bindable(null),
 		value = $bindable(),
 		type,
-		files = $bindable(),
 		class: className,
 		"data-slot": dataSlot = "input",
 		...restProps
 	}: Props = $props();
 </script>
 
-{#if type === "file"}
-	<input
-		bind:this={ref}
-		data-slot={dataSlot}
-		class={cn(
-			"bg-input/50 border-transparent focus-visible:border-ring focus-visible:ring-ring aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 h-8 rounded-2xl border px-2.5 py-1 text-[13px]/[18px] transition-[color,box-shadow] duration-200 file:h-6 file:text-[13px]/[18px] file:font-medium focus-visible:ring-2 aria-invalid:ring-3 w-full min-w-0 outline-none file:inline-flex file:border-0 file:bg-transparent file:text-foreground placeholder:text-muted-foreground disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
-			className
-		)}
-		type="file"
-		bind:files
-		bind:value
-		{...restProps}
-	/>
-{:else}
-	<input
-		bind:this={ref}
-		data-slot={dataSlot}
-		class={cn(
-			"bg-input/50 border-transparent focus-visible:border-ring focus-visible:ring-ring aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 h-8 rounded-2xl border px-2.5 py-1 text-[13px]/[18px] transition-[color,box-shadow] duration-200 file:h-6 file:text-[13px]/[18px] file:font-medium focus-visible:ring-2 aria-invalid:ring-3 w-full min-w-0 outline-none file:inline-flex file:border-0 file:bg-transparent file:text-foreground placeholder:text-muted-foreground disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
-			className
-		)}
-		{type}
-		bind:value
-		{...restProps}
-	/>
-{/if}
+<input
+	bind:this={ref}
+	data-slot={dataSlot}
+	class={cn(
+		"bg-input/50 border-transparent focus-visible:border-ring focus-visible:ring-ring aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 h-8 rounded-2xl border px-2.5 py-1 text-[13px]/[18px] transition-[color,box-shadow] duration-200 file:h-6 file:text-[13px]/[18px] file:font-medium focus-visible:ring-2 aria-invalid:ring-3 w-full min-w-0 outline-none file:inline-flex file:border-0 file:bg-transparent file:text-foreground placeholder:text-muted-foreground disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
+		className
+	)}
+	{type}
+	bind:value
+	{...restProps}
+/>
