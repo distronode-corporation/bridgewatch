@@ -114,3 +114,47 @@ describe("Ask, going away", () => {
     expect(document.activeElement).toBe(elsewhere);
   });
 });
+
+describe("Ask from the keyboard", () => {
+  const fields = [
+    { name: "id", label: "Watch id", placeholder: "main-push" },
+    { name: "project", label: "Project" },
+  ];
+
+  function type(input: HTMLInputElement, text: string) {
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+  }
+
+  const press = (target: EventTarget, key: string) => {
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    flushSync();
+  };
+
+  it("confirms with Enter from a field once every field is filled, trimmed", () => {
+    const onconfirm = vi.fn();
+    render({ fields, onconfirm });
+    const [id, project] = [...host.querySelectorAll<HTMLInputElement>("input")];
+    expect(project.placeholder).toBe("");
+    type(id, " web ");
+    press(id, "Enter");
+    expect(onconfirm).not.toHaveBeenCalled();
+    type(project, " acme/web ");
+    press(project, "Enter");
+    expect(onconfirm).toHaveBeenCalledWith({ id: "web", project: "acme/web" });
+  });
+
+  it("ignores Enter outside a field, and any other key", () => {
+    const onconfirm = vi.fn();
+    const oncancel = vi.fn();
+    render({ fields: [fields[0]], onconfirm, oncancel });
+    type(host.querySelector("input")!, "web");
+    press(host.querySelector("button.cancel")!, "Enter");
+    press(host.querySelector("input")!, "a");
+    expect(onconfirm).not.toHaveBeenCalled();
+    expect(oncancel).not.toHaveBeenCalled();
+    press(host.querySelector("input")!, "Escape");
+    expect(oncancel).toHaveBeenCalledTimes(1);
+  });
+});

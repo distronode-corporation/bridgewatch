@@ -79,8 +79,8 @@ SPDX-License-Identifier: Apache-2.0
    */
   function editCell(index: number, column: 0 | 1, value: string) {
     const next = draft.slice();
+    // Called only from a row's own inputs, so the row at `index` exists.
     const row = next[index];
-    if (!row) return;
     next[index] = column === 0 ? [value, row[1]] : [row[0], value];
     draft = next;
     // A row with no key is not in the file at all: it is kept here, and written
@@ -103,9 +103,8 @@ SPDX-License-Identifier: Apache-2.0
 <div class={["kv", ROW]}>
   <div class={ROW_TEXT}>
     <div class={["label", FIELD_LABEL]}>{entry.label}</div>
-    {#if entry.hint}
-      <div class={["hint", HINT]}>{entry.hint}</div>
-    {/if}
+    <!-- Unconditional: both table entries (watches.*.jobs.*, icon.states.*) carry a hint. -->
+    <div class={["hint", HINT]}>{entry.hint}</div>
   </div>
   <div class={["rows flex flex-col gap-1", WIDTH_FULL]}>
     {#each draft as row, index (index)}

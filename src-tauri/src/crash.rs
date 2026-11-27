@@ -373,4 +373,134 @@ mod tests {
             assert!(!reporter.is_sending(), "{dsn:?}");
         }
     }
+
+    /// The values a build carries, from the release workflow's variables or
+    /// their absence.
+    #[test]
+    fn a_builds_address_and_label_are_what_it_was_given() {
+        assert_eq!(non_empty(Some("  ")), None);
+        assert_eq!(non_empty(Some(" x ")), Some("x"));
+        // Whatever this build was given: the global reporter has an address
+        // exactly when the build's parses, and a build label is never empty.
+        let parses = baked_dsn().is_some_and(|d| d.parse::<sentry::types::Dsn>().is_ok());
+        assert_eq!(global().has_address(), parses);
+        assert!(!baked_build().is_empty());
+    }
+
+    /// What an event may carry: home paths, in values and keys, lose the
+    /// user name, and the user, host name and request are dropped.
+    #[test]
+    fn an_event_is_scrubbed_of_who_and_where_before_it_leaves() {
+        let mut event = Event {
+            message: Some("panicked at /home/alice/src/main.rs".into()),
+            server_name: Some("alices-laptop".into()),
+            user: Some(sentry::protocol::User {
+                username: Some("alice".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        event.extra.insert(
+            "/Users/bob/key".into(),
+            serde_json::json!(["/home/carol/x", 1, null]),
+        );
+        let scrubbed = scrub_event(event).expect("an event scrubs");
+        assert_eq!(
+            scrubbed.message.as_deref(),
+            Some("panicked at /home/<user>/src/main.rs")
+        );
+        assert!(scrubbed.user.is_none() && scrubbed.server_name.is_none());
+        assert_eq!(
+            scrubbed.extra.get("/Users/<user>/key"),
+            Some(&serde_json::json!(["/home/<user>/x", 1, null]))
+        );
+    }
+
+    /// Run the test `name` again in a child, with `env`: a reporter with an
+    /// address installs sentry's global client, which is the process's own.
+    #[cfg(target_os = "linux")]
+    fn in_child(name: &str, env: &[(&str, &std::ffi::OsStr)]) {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", &format!("crash::tests::{name}")])
+            .env("BW_CRASH_CHILD", "1");
+        for (key, value) in env {
+            child.env(key, value);
+        }
+        let out = child.output().unwrap();
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{said}");
+    }
+
+    /// With an address: a no is recorded and starts nothing, a yes starts
+    /// one client however often it is said, an event goes through the scrub
+    /// while the answer is yes and is dropped once it is no, and shutting
+    /// down closes the client. The address refuses, so nothing leaves.
+    ///
+    /// Linux only: on macOS a debug build's `debug-images` integration
+    /// overflows inside findshlibs while it lists the loaded images.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_reporter_with_an_address_reports_only_while_the_answer_is_yes() {
+        if std::env::var_os("BW_CRASH_CHILD").is_none() {
+            in_child(
+                "a_reporter_with_an_address_reports_only_while_the_answer_is_yes",
+                &[],
+            );
+            return;
+        }
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let reporter = Reporter::new(
+            Some(&format!("http://public@127.0.0.1:{port}/1")),
+            release_name("0.0.0", "test"),
+        );
+        assert!(reporter.has_address());
+        reporter.set_consent(false);
+        assert!(!reporter.has_client());
+        reporter.set_consent(true);
+        reporter.set_consent(true);
+        assert!(reporter.has_client() && reporter.is_sending());
+        sentry::capture_message("/home/alice is in this", sentry::Level::Info);
+        reporter.set_consent(false);
+        sentry::capture_message("not sent", sentry::Level::Info);
+        reporter.shutdown();
+        assert!(!reporter.has_client());
+    }
+
+    /// ⛔ On Linux, with no CA roots the report client cannot be built, and
+    /// the transport then sends nothing rather than falling back to one that
+    /// `SSL_VERIFY` can weaken.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn with_no_ca_roots_the_transport_sends_nothing() {
+        if std::env::var_os("BW_CRASH_CHILD").is_none() {
+            let dir =
+                std::env::temp_dir().join(format!("bw-crash-no-roots-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let empty = dir.join("empty.pem");
+            std::fs::write(&empty, "").unwrap();
+            in_child(
+                "with_no_ca_roots_the_transport_sends_nothing",
+                &[
+                    ("SSL_CERT_FILE", empty.as_os_str()),
+                    ("SSL_CERT_DIR", dir.as_os_str()),
+                ],
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        assert!(report_client().is_err());
+        // `ClientOptions` is non-exhaustive, so it is filled in after it is made.
+        let mut client_options = sentry::ClientOptions::default();
+        client_options.dsn = Some("http://public@127.0.0.1:9/1".parse().unwrap());
+        let transport = sentry::TransportFactory::create_transport_with_options(
+            &VerifyingTransport,
+            sentry::TransportOptions::try_from_client_options(&client_options).unwrap(),
+        );
+        transport.send_envelope(sentry::Envelope::new());
+    }
 }

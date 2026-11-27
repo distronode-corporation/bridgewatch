@@ -94,7 +94,8 @@ SPDX-License-Identifier: Apache-2.0
       ...tools,
       context: workflowRun
         ? `workflow run ${bridge.name}`
-        : `child pipeline ${bridge.child_id === null ? "" : `#${bridge.child_id} `}of ${bridge.name}`,
+        : // Read only by the job list, which a bridge with no child id never renders.
+          `child pipeline #${bridge.child_id} of ${bridge.name}`,
     },
   );
   const bodyId = $derived(`bridge-${pipelineId}-${bridge.name.replace(/[^A-Za-z0-9_-]/g, "_")}`);
@@ -102,10 +103,11 @@ SPDX-License-Identifier: Apache-2.0
   const LINK =
     "text-muted-foreground hover:text-foreground hover:bg-background focus-visible:ring-ring flex size-6 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2";
 
-  function openUrl(event: MouseEvent, url: string | null) {
+  // Each link renders only when its URL is set, so `url` is never null here.
+  function openUrl(event: MouseEvent, url: string) {
     event.preventDefault();
     event.stopPropagation();
-    if (url) onOpen(url);
+    onOpen(url);
   }
 </script>
 
@@ -169,37 +171,40 @@ SPDX-License-Identifier: Apache-2.0
          with the rest. A dead bridge's reason is in the status column. -->
     <span class="links flex w-12 shrink-0 items-center justify-end gap-0.5">
       {#if workflowRun}
-        {#if bridge.web_url ?? bridge.child_url}
+        {@const runUrl = bridge.web_url ?? bridge.child_url}
+        {#if runUrl}
           <a
-            href={bridge.web_url ?? bridge.child_url}
+            href={runUrl}
             class={LINK}
             title="the workflow run"
             aria-label={`Open workflow run ${bridge.name}`}
             data-slot="bridge-run-link"
-            onclick={(event) => openUrl(event, bridge.web_url ?? bridge.child_url)}
+            onclick={(event) => openUrl(event, runUrl)}
             ><ExternalLinkIcon class="size-3.5" aria-hidden="true" /></a
           >
         {/if}
       {:else}
-        {#if bridge.child_url}
+        {@const childUrl = bridge.child_url}
+        {@const jobUrl = bridge.web_url}
+        {#if childUrl}
           <a
-            href={bridge.child_url}
+            href={childUrl}
             class={LINK}
             title="the child pipeline"
             aria-label={`Open the child pipeline of ${bridge.name} in GitLab`}
             data-slot="bridge-child-link"
-            onclick={(event) => openUrl(event, bridge.child_url)}
+            onclick={(event) => openUrl(event, childUrl)}
             ><WorkflowIcon class="size-3.5" aria-hidden="true" /></a
           >
         {/if}
-        {#if bridge.web_url}
+        {#if jobUrl}
           <a
-            href={bridge.web_url}
+            href={jobUrl}
             class={LINK}
             title={neverStarted ? "the expected workflow" : "the trigger job"}
             aria-label={neverStarted ? `Open workflow ${bridge.name}` : `Open trigger job ${bridge.name} in GitLab`}
             data-slot="bridge-job-link"
-            onclick={(event) => openUrl(event, bridge.web_url)}
+            onclick={(event) => openUrl(event, jobUrl)}
             ><ExternalLinkIcon class="size-3.5" aria-hidden="true" /></a
           >
         {/if}

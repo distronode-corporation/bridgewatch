@@ -603,3 +603,18 @@ describe("Popover, degraded cases", () => {
     }
   });
 });
+
+describe("Popover without a clock given", () => {
+  it("renders against the current time", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const component = mount(Popover, { target: host, props: { snapshot } });
+    try {
+      flushSync();
+      expect(host.querySelector("[data-icon-state]")?.getAttribute("data-icon-state")).toBe("deployed_with_failure");
+    } finally {
+      void unmount(component);
+      host.remove();
+    }
+  });
+});
