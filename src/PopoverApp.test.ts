@@ -702,7 +702,7 @@ describe("PopoverApp, the rest of the window's wiring", () => {
   });
 
   it("sends Refresh, Settings and Quit to the shell, and Fix to the text editor", async () => {
-    shell.snapshot = { ...snapshot, errors: [{ severity: "error", path: "", message: "bad", line: 1, col: 1 }] } as Snapshot;
+    shell.snapshot = { ...snapshot, errors: ["bad"] };
     shell.status = { ...status, configOk: false, diagnostics: [{ severity: "error", path: "", message: "bad", line: 1, col: 1 }] };
     await render();
     await Promise.resolve();

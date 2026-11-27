@@ -43,7 +43,7 @@ export default defineConfig({
       // a component. Each match is exact, and src/lib/svelte-generated.test.ts
       // proves none of them matches a hand-written node (vitest.svelte-generated.ts).
       ignoreNode: ignoreSvelteGenerated,
-      thresholds: { statements: 94, branches: 88, functions: 94, lines: 96 },
+      thresholds: { statements: 99, branches: 99, functions: 99, lines: 99 },
     },
   },
 });
