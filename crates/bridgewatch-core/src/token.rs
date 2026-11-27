@@ -1470,15 +1470,19 @@ pub fn clear_own_token(account: &str, provider: &dyn TokenProvider) -> Result<()
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    use super::empty_user_lookup_with;
     use super::{
-        MAX_STDOUT_BYTES, Ran, TokenError, empty_user_lookup_with, lookup_outcome, run_captured,
-        secret_tool_lookup_args, security_lookup_args,
+        MAX_STDOUT_BYTES, Ran, TokenError, lookup_outcome, run_captured, secret_tool_lookup_args,
+        security_lookup_args,
     };
 
     /// The empty account is looked up with the platform's tool, by the service's
     /// name, and its first line is the token: checked through a runner that
     /// echoes the command it was given.
-    #[cfg(all(unix, not(any(target_os = "ios", target_os = "android"))))]
+    // Only the platforms the lookup dispatches to: elsewhere it answers
+    // `Ok(None)` without running anything.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_empty_account_lookup_runs_the_platform_tool_for_the_service() {
         use std::os::unix::process::ExitStatusExt;
@@ -1497,8 +1501,9 @@ mod tests {
         let tool = "security ";
         #[cfg(not(target_os = "macos"))]
         let tool = "secret-tool ";
-        assert!(found.starts_with(tool), "{found}");
-        assert!(found.contains("glab:gitlab.com:token"), "{found}");
+        // No message: what a lookup returns is printed nowhere, even in a test.
+        assert!(found.starts_with(tool));
+        assert!(found.contains("glab:gitlab.com:token"));
     }
 
     fn lookup(script: &str, timeout_ms: u64) -> Result<Option<String>, TokenError> {
