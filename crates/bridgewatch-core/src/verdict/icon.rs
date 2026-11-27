@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The icon-state rules: ordered rules over one pipeline's facts.
 //!
 //! First rule wins. The order is the point — a fleet that deployed and then

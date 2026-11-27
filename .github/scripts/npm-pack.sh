@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Pack the staged packaging/npm and check the result.
 #
 #   bash .github/scripts/npm-pack.sh <version> <out-dir>

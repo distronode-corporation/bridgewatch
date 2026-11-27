@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   /** Step 2: pick from the token's projects, or type an id, path or URL. */
   import { Button } from "$lib/components/ui/button/index.js";

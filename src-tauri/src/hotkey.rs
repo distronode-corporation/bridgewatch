@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The optional global shortcut, `[ui].hotkey`, that shows or hides the popover.
 //!
 //! ⛔ The plugin is added only once a shortcut is configured, never at startup.

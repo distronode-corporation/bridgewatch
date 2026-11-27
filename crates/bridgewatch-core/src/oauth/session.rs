@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! A signed-in account's credential at runtime: fresh on every request.
 //!
 //! [`OAuthTransport`] sits between an ordinary client and the real transport.

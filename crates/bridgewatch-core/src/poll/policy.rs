@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! How often to poll, and how to back away when GitLab says to stop.
 
 use std::time::{Duration, Instant, SystemTime};

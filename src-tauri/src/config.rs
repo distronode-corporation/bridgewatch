@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Finding, seeding, validating and hot-reloading `config.toml`.
 //!
 //! The file is the source of truth, so everything here is careful about two

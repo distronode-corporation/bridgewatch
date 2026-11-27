@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: Install Tauri system dependencies
 description: The apt packages the Tauri shell needs to build and bundle on Linux.
 

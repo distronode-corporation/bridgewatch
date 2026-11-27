@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Signing in with GitHub and GitLab, and keeping the sign-in fresh.
 //!
 //! ⛔ Nothing here reaches a network or a keychain. Every request is answered

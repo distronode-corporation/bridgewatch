@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! A transport that answers from a script: for the tests of anything whose
 //! requests cannot be recorded, above all the OAuth sign-in, which no fixture
 //! can hold because every answer in it is a credential.

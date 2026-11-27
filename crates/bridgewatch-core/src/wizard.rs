@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The first-run setup wizard's logic, with no UI in it.
 //!
 //! Every step of the wizard is a function here, so the shell only renders and

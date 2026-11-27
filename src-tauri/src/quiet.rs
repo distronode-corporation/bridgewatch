@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! "Pause notifications", and what a tick's notifications become on their
 //! way to the OS.
 //!

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The device authorization grant, and refreshing what it produced.
 //!
 //! Three requests, all a form `POST` with `Accept: application/json`, all

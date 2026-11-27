@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Drive the app's StatusNotifierItem menu over dbusmenu, as a tray host would.
 
 tray.py layout            print the menu tree (id, label, enabled, type)

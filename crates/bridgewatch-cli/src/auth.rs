@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! `bridgewatch auth`: sign in, sign out and see who is signed in, for an
 //! account whose token source is `token = { oauth = .. }`.
 //!

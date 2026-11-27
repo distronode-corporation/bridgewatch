@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Human-readable rendering of a [`Snapshot`].
 
 use bridgewatch_core::eta::Eta;

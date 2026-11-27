@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 [package]
 name = "bridgewatch-core"
 description = "Bridge-aware GitLab CI and GitHub Actions pipeline model, verdict engine and poller. No GUI dependencies."

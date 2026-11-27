@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   /** Step 6: the exact config.toml that Finish writes. */
   import * as Alert from "$lib/components/ui/alert/index.js";

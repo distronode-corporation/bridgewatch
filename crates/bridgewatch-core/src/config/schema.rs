@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The typed shape of `config.toml`.
 //!
 //! Every optional key has a default, so a file containing nothing but one

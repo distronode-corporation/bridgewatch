@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Notifications: what is worth interrupting somebody over, and exactly once.
 
 mod support;

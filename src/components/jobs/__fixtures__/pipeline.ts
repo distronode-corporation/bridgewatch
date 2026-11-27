@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * A small, hand-built pipeline for the job-view tests: a parent with jobs in
  * three stages delivered OUT of stage order (GitLab lists newest id first),

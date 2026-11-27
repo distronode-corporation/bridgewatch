@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Resolving a token from the source named in the configuration.
 //!
 //! bridgewatch never stores a token in its config file and never logs one. A

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The optional Rhai hook that replaces the built-in icon-state rules.
 //!
 //! Rules 1 to 7 are the opinion bridgewatch ships with. They will not fit every

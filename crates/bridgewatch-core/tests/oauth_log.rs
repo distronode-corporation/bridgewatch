@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! No secret of a sign-in reaches a log line.
 //!
 //! A whole GitHub sign-in (device code, pending, slow down, approval, `/user`)

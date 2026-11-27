@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Moving a `[[watches]]` entry up or down without disturbing anything else.
 //!
 //! ⛔ This is the one place the shell manipulates TOML itself, and it should

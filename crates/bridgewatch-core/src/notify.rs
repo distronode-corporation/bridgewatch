@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Deciding what is worth interrupting somebody over, and rendering it.
 //!
 //! The core produces [`Notification`] values. Delivering them is the shell's

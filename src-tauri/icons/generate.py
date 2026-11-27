@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Generate bridgewatch's tray icons and its app icon.
 
 Why this is hand-rolled rather than Pillow or an SVG toolchain: every one of

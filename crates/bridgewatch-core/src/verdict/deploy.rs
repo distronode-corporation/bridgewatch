@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Deriving "did this deploy?" from configurable marker jobs.
 //!
 //! GitLab has no notion of a deploy. A pipeline is green or it is not, and on a

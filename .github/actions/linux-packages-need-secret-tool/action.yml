@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: The .deb and .rpm depend on secret-tool
 description: The staged .deb depends on libsecret-tools and the .rpm requires /usr/bin/secret-tool.
 

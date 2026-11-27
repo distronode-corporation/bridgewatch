@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Started by `harness.sh start` inside dbus-run-session, with an environment that holds
 # only the run directory. Starts the private desktop, writes $BWH_RUN/session.env, and
 # waits for `harness.sh stop`.

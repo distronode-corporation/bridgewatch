@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! How long a deploy usually takes, learned from the watch's own history.
 //!
 //! The tray answers "did my push deploy". While it is still running, the next

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! `bridgewatch wait`: block until one commit's pipeline on one watch has a
 //! verdict, then exit with that verdict's code.
 //!

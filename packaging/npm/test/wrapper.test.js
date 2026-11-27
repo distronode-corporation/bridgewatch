@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 "use strict";
 
 // bin/bridgewatch.js: the platform mapping and refusals as pure functions, then the

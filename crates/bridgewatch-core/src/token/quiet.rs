@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Reads that may not ask, and telling a refused prompt from any other
 //! failure of the credential store.
 //!

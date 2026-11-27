@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! `bridgewatch` — the command-line face of the bridge-aware GitLab monitor.
 //!
 //! Everything the tray does, without the tray: a one-shot verdict for scripts

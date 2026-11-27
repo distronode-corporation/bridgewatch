@@ -1,4 +1,10 @@
 /*
+ * SPDX-FileCopyrightText: Distronode Corporation
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
  * The app stylesheet: Tailwind v4 + shadcn-svelte's Rhea style, themed per
  * platform through CSS custom properties.
  *

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * What the frontend knows per provider, in one place: the defaults the core
  * fills in for an account or a watch that does not say, and the names shown

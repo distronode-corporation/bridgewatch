@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # bridgewatch against one GitLab project: a push pipeline that fans out through
 # trigger jobs, an hourly schedule and preflight branches.
 #

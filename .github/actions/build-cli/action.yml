@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: Build the CLI
 description: cargo build the bridgewatch CLI for this leg, fully stripped, into cli-out/bridgewatch, and check what came out.
 

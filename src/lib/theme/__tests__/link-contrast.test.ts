@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { flushSync, mount, unmount } from "svelte";
 import { describe, expect, it } from "vitest";
 

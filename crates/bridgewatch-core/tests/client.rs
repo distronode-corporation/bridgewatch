@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The GitLab client: URL shapes, pagination, status mapping and the request
 //! ring.
 //!

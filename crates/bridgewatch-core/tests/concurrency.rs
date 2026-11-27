@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! A tick's requests run side by side, and nothing it produces may show it.
 //!
 //! ⛔ The poller used to await every request in turn, and the popover's rows,

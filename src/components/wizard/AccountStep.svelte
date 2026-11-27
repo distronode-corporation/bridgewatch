@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   /** Step 1: provider, instance, token source, "Test connection". */
   import { Button } from "$lib/components/ui/button/index.js";

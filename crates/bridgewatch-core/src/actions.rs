@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! One job, named by its URL: which account and project it belongs to, the end
 //! of its log, and the two things that can be done to it (retry, play).
 //!

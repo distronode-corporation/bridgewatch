@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The background task: build a [`Poller`], tick it, and push what comes out at
 //! the tray, the windows and the OS notification centre.
 //!
