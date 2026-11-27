@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Resolving an [`IconState`] to the bytes of a tray image.
 //!
 //! Three things decide which file is used, in this order:

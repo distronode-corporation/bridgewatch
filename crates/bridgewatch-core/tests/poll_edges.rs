@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Distronode Corporation
+
 //! The poller's edges: a verdict script that does not build, a watch on an
 //! account with no client, files that cannot be written, `look_up_commit`'s
 //! refusals, a `mine` watch whose owner cannot be read, a child whose bridges

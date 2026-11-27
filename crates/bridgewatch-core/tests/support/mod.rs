@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Shared helpers for the integration tests.
 //!
 //! Every test drives the real [`Poller`] over a [`FixtureTransport`], so what is

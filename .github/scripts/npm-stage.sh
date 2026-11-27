@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Stage packaging/npm from the three CLI release tarballs.
 #
 #   bash .github/scripts/npm-stage.sh <version> <tarball-dir>

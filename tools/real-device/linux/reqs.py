@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """reqs.py <run-dir> <name>: how many requests a stand-in got, which made-up token each
 carried (by its file name under the run directory, never its value), and the top paths.
 

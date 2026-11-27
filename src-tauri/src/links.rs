@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The one door to the user's browser.
 //!
 //! Every URL the app opens goes through [`open`]: the popover's pipeline and

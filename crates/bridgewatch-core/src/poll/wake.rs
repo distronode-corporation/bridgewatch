@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Noticing that the machine slept, without asking the operating system.
 //!
 //! A poll loop sleeps on the monotonic clock, and [`Instant`] **excludes

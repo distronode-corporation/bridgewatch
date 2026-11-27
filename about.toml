@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # cargo-about: the licence texts of every Rust crate in the shipped app, written to
 # THIRD-PARTY-LICENSES-rust.txt by scripts/third-party-licenses.sh and bundled by the
 # release workflow. See that script for how it is run.

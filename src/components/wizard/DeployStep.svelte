@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   /** Step 4: which job marks a deploy, suggested from the ref's latest pipeline, or none. */
   import { Button } from "$lib/components/ui/button/index.js";

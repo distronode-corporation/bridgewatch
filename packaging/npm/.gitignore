@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Put here by .github/workflows/release.yml just before `npm pack`; never committed.
 /vendor/
 /LICENSE

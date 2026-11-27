@@ -1,5 +1,7 @@
 # Contributing to bridgewatch
 
+New here? Issues labelled [good first issue](https://github.com/distronode-corporation/bridgewatch/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22) are small, well scoped and need no access beyond this repository.
+
 ## Layout
 
 ```
@@ -21,8 +23,10 @@ scripts/                   record-fixture.sh, check-version.py and
 tools/real-device/         The release checks on real devices (CHECKS.md) and the Linux
                            harness that runs the real app on a private X display with a
                            throwaway keyring (see its README.md).
-licenses/, about.toml      The cargo-about template and config for the Rust half of
+about.hbs, about.toml      The cargo-about template and config for the Rust half of
                            the third-party licence texts the release bundles.
+LICENSES/, REUSE.toml      This repository's own licence texts and the REUSE metadata for
+                           files without an SPDX header (`reuse lint` checks both).
 ```
 
 ## Setup

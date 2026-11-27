@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 export { default as BridgeJobs } from "./BridgeJobs.svelte";
 export { default as JobList } from "./JobList.svelte";
 export { default as PipelineJobs } from "./PipelineJobs.svelte";

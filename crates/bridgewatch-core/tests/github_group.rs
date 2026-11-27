@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The commit group: a commit's several GitHub workflow runs as ONE row whose
 //! bridges are the runs, driven through the real poller and the real verdict
 //! engine.

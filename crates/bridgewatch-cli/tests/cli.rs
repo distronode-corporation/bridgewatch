@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The `bridgewatch` binary, run as a script would run it.
 //!
 //! These drive the built executable through `std::process::Command`, because

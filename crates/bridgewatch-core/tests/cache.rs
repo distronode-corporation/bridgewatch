@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The pipeline cache: what it is safe not to ask for again.
 
 use bridgewatch_core::model::{Pipeline, PipelineDetail};

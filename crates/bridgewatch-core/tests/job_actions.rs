@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! A job's log tail, and the two writes (retry, play), against scripted
 //! transports only.
 //!

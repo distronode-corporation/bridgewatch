@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Loading, validating and editing `config.toml`.
 //!
 //! The file is the source of truth. The GUI exposes the same keys and writes

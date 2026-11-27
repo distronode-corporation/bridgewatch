@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The GitHub Actions endpoints bridgewatch uses, and nothing else.
 //!
 //! # How a workflow run becomes a pipeline

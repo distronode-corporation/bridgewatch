@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // The licence texts of every npm package that ends up in the shipped frontend.
 //
 //   node scripts/third-party-licenses-npm.mjs <output-file>

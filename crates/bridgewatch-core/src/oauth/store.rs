@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The token set a sign-in produces, and where it is kept.
 //!
 //! One JSON document per account, in the OS credential store under service

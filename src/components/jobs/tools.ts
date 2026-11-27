@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * What the job view offers on one job: the end of its log (a failed job),
  * Retry (a failed or canceled job) and Play (a GitLab manual job), and the

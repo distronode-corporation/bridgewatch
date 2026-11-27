@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * "Sign in with GitHub" / "Sign in with GitLab": the wire shapes of the
  * shell's `oauth_*` commands (src-tauri/src/oauth.rs) and the interface the

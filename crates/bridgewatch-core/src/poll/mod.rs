@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The poller: one tick fetches what the planner asked for, the verdict engine
 //! turns it into a [`Snapshot`], and the notifier says what changed.
 

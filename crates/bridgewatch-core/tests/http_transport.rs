@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Distronode Corporation
+
 //! `ReqwestTransport` against a socket on loopback, for what only a real HTTP
 //! client can show: each response header it reads, a ranged tail, a server that
 //! closes mid-body, a port nobody listens on, and (on Linux) a machine with no

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Turning a raw job into the class the verdict engine reasons about.
 
 use crate::config::{JobOverride, WatchRules};

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! "Sign in with GitHub" / "Sign in with GitLab": the shell's half.
 //!
 //! Every decision is the core's (`bridgewatch_core::oauth`). What lives here

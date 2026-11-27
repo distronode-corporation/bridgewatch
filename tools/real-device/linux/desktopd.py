@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Stand-in desktop services on the private session bus, so the harness needs no
 notification daemon or tray host installed:
 

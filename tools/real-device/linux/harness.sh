@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # The Linux real-device harness: run the real bridgewatch app on a private X display,
 # under a private D-Bus session, with a throwaway HOME and a throwaway gnome-keyring.
 # Nothing reaches the caller's desktop, session bus, keyring or config.

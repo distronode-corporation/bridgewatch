@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   /** Step 5: notifications, launch at login, live poll speed. */
   import { Label } from "$lib/components/ui/label/index.js";

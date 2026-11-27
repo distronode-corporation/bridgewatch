@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! `tauri.linux.conf.json` differs from `tauri.conf.json` in one key.
 //!
 //! Tauri merges the platform file over the base with a JSON merge patch, and a

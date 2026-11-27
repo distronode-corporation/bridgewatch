@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """A loopback stand-in for the GitLab v4 API, enough for bridgewatch's poller and wizard.
 
 gitlab_standin.py <workdir> <name> [port]

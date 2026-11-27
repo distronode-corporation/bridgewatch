@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The full job view: every job, parent and child, with its stage and timing.
 //!
 //! The popover grew from "the jobs the verdict names" to "every job, grouped by

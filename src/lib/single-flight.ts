@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * The guard that makes a write go out once however fast it is clicked: the
  * job view's Retry and Play, and the token form's credential-store writes.

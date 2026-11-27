@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! A [`Transport`] backed by recorded JSON on disk.
 //!
 //! This is what makes the verdict engine testable: a fixture directory holds one

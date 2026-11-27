@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The IPC surface. Everything the two windows can ask the shell to do.
 //!
 //! The rule the whole packet is built on: **no business logic lives here or in

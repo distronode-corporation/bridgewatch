@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The normalised model: one provider-neutral shape the whole engine reads.
 //!
 //! Nothing here is a wire format. Each provider decodes its own responses into

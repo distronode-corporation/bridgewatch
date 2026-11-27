@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! What each log level is FOR, held to it.
 //!
 //! `[log].level = "info"` is what somebody debugging "why is my tray wrong"

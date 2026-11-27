@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The committed `src/lib/config.schema.json` must be current.
 //!
 //! The other half of the parity gate lives in `src/lib/settings/registry.test.ts`,

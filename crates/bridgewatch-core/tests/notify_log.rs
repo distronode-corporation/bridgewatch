@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! What a notification that cannot be rendered says in the log, and how often.
 //!
 //! ⛔ Its own binary because it captures logs: see `tests/support/mod.rs` for

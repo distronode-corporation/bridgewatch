@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Crash reports verify the server's certificate, whatever `SSL_VERIFY` says.
 //!
 //! `sentry::init` reads the `SSL_VERIFY` environment variable, and
