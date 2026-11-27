@@ -219,10 +219,10 @@ mod tests {
             one_line(&snapshot),
             "00:06:30 running | main-push=0123456 running (usually ~11m, 6m 30s in)"
         );
+        let table = super::snapshot(&snapshot);
         assert!(
-            super::snapshot(&snapshot).contains("      eta: usually ~11m, 6m 30s in\n"),
-            "{}",
-            super::snapshot(&snapshot)
+            table.contains("      eta: usually ~11m, 6m 30s in\n"),
+            "{table}"
         );
     }
 
@@ -261,5 +261,102 @@ mod tests {
         assert_eq!(approx_duration(90), "~2m");
         assert_eq!(approx_duration(3_580), "~1h 00m");
         assert_eq!(approx_duration(3_900), "~1h 05m");
+    }
+
+    /// A watch's error, a snapshot's errors and the failures after a deploy
+    /// are each printed, and an erroring watch is part of the fingerprint.
+    #[test]
+    fn errors_and_failures_after_a_deploy_are_printed_and_fingerprinted() {
+        let mut snapshot = snapshot_with_eta(None);
+        snapshot.errors = vec!["main-push: 503".into()];
+        snapshot.watches[0].error = Some("503".into());
+        snapshot.watches[0].rows[0].post_deploy_failures = vec!["smoke".into()];
+        let table = super::snapshot(&snapshot);
+        assert!(table.contains("\nerrors:\n  main-push: 503\n"), "{table}");
+        assert!(table.contains("  error: 503\n"), "{table}");
+        assert!(table.contains("      after deploy: smoke\n"), "{table}");
+        assert!(fingerprint(&snapshot).ends_with("|main-push:err:503"));
+    }
+
+    /// Every line the table and the one-line form can print, through one
+    /// test, so this binary's copy of each function takes every path.
+    #[test]
+    fn every_part_of_a_snapshot_is_rendered() {
+        let row = |id: u64, extra: serde_json::Value| {
+            let mut row = serde_json::json!({
+                "id": id, "iid": null, "sha": "0123456789abcdef", "sha7": "0123456",
+                "ref": "main", "source": null, "status": "failed", "web_url": null,
+                "state": "failed", "deploy": "live", "deploy_marker": null,
+                "deploy_failures": [], "failures": [], "warnings": [], "gates": [],
+                "post_deploy_failures": [], "sibling_failures": [], "bridges": [],
+                "parent_jobs": [], "updated_at": null, "created_at": null, "live": false
+            });
+            row.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            row
+        };
+        let bridge = |name: &str, child: Option<u64>, jobs: &[&str], dived: bool| {
+            serde_json::json!({
+                "name": name, "status": "failed", "verdict": "failed", "verdict_jobs": jobs,
+                "child_id": child, "child_url": null, "child_project_id": null,
+                "dived": dived, "jobs": [], "bridges": [], "web_url": null
+            })
+        };
+        let mut snapshot: Snapshot = serde_json::from_value(serde_json::json!({
+            "icon_state": "failed",
+            "watches": [
+                {
+                    "id": "main", "role": "primary", "icon_state": "failed", "error": "503",
+                    "rows": [row(2, serde_json::json!({
+                        "source": "push",
+                        "deploy_marker": {"name": "deploy", "id": 9, "pipeline_id": 2,
+                                          "web_url": null, "started_at": null},
+                        "failures": ["test"], "warnings": ["lint"], "gates": ["approve"],
+                        "post_deploy_failures": ["smoke"],
+                        "bridges": [bridge("trigger:a", Some(3), &["x"], true),
+                                    bridge("trigger:b", None, &[], false)]
+                    })), row(1, serde_json::json!({}))]
+                },
+                {"id": "side", "role": "secondary", "icon_state": null, "error": null, "rows": []}
+            ],
+            "errors": ["main: 503"],
+            "last_poll": "2026-01-01T00:06:30Z",
+            "request_log": []
+        }))
+        .expect("a hand-written snapshot deserialises");
+        snapshot.watches[0].rows[0].eta = Some(Eta {
+            typical_secs: 4000,
+            elapsed_secs: 3700,
+        });
+        let table = super::snapshot(&snapshot);
+        for line in [
+            "\nmain (primary) [failed]\n",
+            "  error: 503\n",
+            "  #2 0123456 main [push] failed -> failed (deploy: live)\n",
+            "  #1 0123456 main [?] failed",
+            "      eta: usually ~1h 07m, 1h 01m in\n",
+            "      marker: deploy in pipeline 2\n",
+            "child 3 (x)\n",
+            "no child [not dived]\n",
+            "      failures: test\n",
+            "      warnings: lint\n",
+            "      gates: approve\n",
+            "      after deploy: smoke\n",
+            "\nside (secondary)\n  (no pipelines)\n",
+            "\nerrors:\n  main: 503\n",
+        ] {
+            assert!(table.contains(line), "{line:?} in {table}");
+        }
+        assert_eq!(
+            one_line(&snapshot),
+            "00:06:30 failed | main=0123456 failed (usually ~1h 07m, 1h 01m in)  side=-"
+        );
+        assert!(fingerprint(&snapshot).ends_with("|main:err:503"));
+        snapshot.watches[0].rows[0].eta = Some(Eta {
+            typical_secs: 30,
+            elapsed_secs: 42,
+        });
+        assert!(one_line(&snapshot).contains("(usually ~30s, 42s in)"));
     }
 }

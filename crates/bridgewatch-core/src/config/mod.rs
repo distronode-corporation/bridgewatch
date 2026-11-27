@@ -153,8 +153,9 @@ pub struct Loaded {
 
 /// The default config path: `<config dir>/bridgewatch/config.toml`.
 pub fn default_path() -> PathBuf {
+    // No config dir at all: relative to the working directory.
     dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_default()
         .join("bridgewatch")
         .join("config.toml")
 }
@@ -324,10 +325,12 @@ pub fn parse_lenient(raw: &str, path: &Path) -> Result<(Config, Vec<Diagnostic>)
         if !error.message().starts_with("unknown field") {
             return Err(fatal());
         }
-        let Some(span) = error.span() else {
-            return Err(fatal());
-        };
-        let Some((stripped, key_path)) = strip_key_at(&text, span.start) else {
+        // toml puts a span on every error; one without is as fatal as a key
+        // that cannot be found at its span.
+        let Some((stripped, key_path)) = error
+            .span()
+            .and_then(|span| strip_key_at(&text, span.start))
+        else {
             return Err(fatal());
         };
         diagnostics.push(Diagnostic::warning(
@@ -1338,9 +1341,10 @@ fn is_loopback_url(base_url: &str) -> bool {
 
 /// Locate each diagnostic's dotted path in the raw TOML and record its span.
 fn attach_spans(diagnostics: &mut [Diagnostic], raw: &str) {
-    let Ok(doc) = raw.parse::<toml_edit::Document<String>>() else {
-        return;
-    };
+    // `raw` was just parsed by `toml`, on the same parser `toml_edit` uses.
+    let doc = raw
+        .parse::<toml_edit::Document<String>>()
+        .expect("the text the config was parsed from is TOML");
     for d in diagnostics.iter_mut() {
         d.span = span_for(&doc, &d.path);
     }
@@ -1377,16 +1381,16 @@ fn span_for(doc: &toml_edit::Document<String>, path: &str) -> Option<Range<usize
                     .ok()
                     .and_then(|i| a.get(i))
                     .map(Node::Table),
-                Node::Item(toml_edit::Item::Value(v)) | Node::Value(v) => match v {
-                    toml_edit::Value::InlineTable(t) => t.get(segment).map(Node::Value),
-                    toml_edit::Value::Array(a) => segment
-                        .parse::<usize>()
-                        .ok()
-                        .and_then(|i| a.get(i))
-                        .map(Node::Value),
-                    _ => None,
-                },
-                Node::Item(_) => None,
+                Node::Item(toml_edit::Item::Value(toml_edit::Value::InlineTable(t)))
+                | Node::Value(toml_edit::Value::InlineTable(t)) => t.get(segment).map(Node::Value),
+                Node::Item(toml_edit::Item::Value(toml_edit::Value::Array(a)))
+                | Node::Value(toml_edit::Value::Array(a)) => segment
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| a.get(i))
+                    .map(Node::Value),
+                // A scalar has no children, and `Item::None` is never handed out.
+                _ => None,
             }
         }
     }
@@ -1399,9 +1403,8 @@ fn span_for(doc: &toml_edit::Document<String>, path: &str) -> Option<Range<usize
         let Some(next) = cursor.child(segment) else {
             break;
         };
-        if let Some(s) = next.span() {
-            best = Some(s);
-        }
+        // Every parsed node has a span; the `or` only keeps the last one found.
+        best = next.span().or(best);
         cursor = next;
     }
     best
@@ -1609,5 +1612,34 @@ impl WatchRules {
             Some(s) => sources.iter().any(|w| w == s),
             None => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::span_for;
+
+    /// A path that goes on past a scalar stops at the scalar's span.
+    #[test]
+    fn a_path_past_a_scalar_points_at_the_scalar() {
+        let raw = "[ui]\ntheme = \"dark\"\n";
+        let doc = raw.parse::<toml_edit::Document<String>>().unwrap();
+        let span = span_for(&doc, "ui.theme.colour").expect("a span");
+        assert_eq!(&raw[span], "\"dark\"");
+    }
+
+    /// The walk goes through tables, an array of tables by index, inline
+    /// tables and arrays, and stops at a segment that names nothing.
+    #[test]
+    fn a_path_walks_every_kind_of_node_and_stops_at_what_is_not_there() {
+        let raw = "[accounts.gl]\nshow = { b = [1, { c = 2 }], d = { e = 3 } }\narr = [7]\n[[watches]]\nid = \"x\"\n";
+        let doc = raw.parse::<toml_edit::Document<String>>().unwrap();
+        let at = |path: &str| span_for(&doc, path).map(|s| raw[s].to_string());
+        assert_eq!(at("watches.0.id").as_deref(), Some("\"x\""));
+        assert_eq!(at("accounts.gl.show.b.1.c").as_deref(), Some("2"));
+        assert_eq!(at("accounts.gl.show.d.e").as_deref(), Some("3"));
+        assert_eq!(at("accounts.gl.arr.0").as_deref(), Some("7"));
+        assert_eq!(at("watches.first.id"), at("watches"));
+        assert_eq!(at("accounts.gl.show.b.first"), at("accounts.gl.show.b"));
     }
 }
