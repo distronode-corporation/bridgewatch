@@ -1792,3 +1792,39 @@ async fn the_real_transport_posts_the_form_with_its_content_type() {
         "{seen}"
     );
 }
+
+/// A stored sign-in is not used where the account names no application (a
+/// self-managed server with no client id), and a stored value that is not a
+/// sign-in at all is a store error naming its entry, not "sign in again".
+#[test]
+fn resolving_a_sign_in_needs_an_application_and_a_readable_entry() {
+    let memory = MemoryStore::new();
+    store::save(
+        "gl",
+        &set(
+            "gl-ACCESS-0001",
+            Some("r"),
+            Some(10),
+            "https://gitlab.example.com",
+        ),
+        memory.as_ref(),
+    )
+    .unwrap();
+    let no_app = oauth_account(Provider::Gitlab, Some("https://gitlab.example.com"), None);
+    let err = token::resolve("gl", &no_app, memory.as_ref()).unwrap_err();
+    assert!(
+        matches!(err, TokenError::NoClientId { ref account, .. } if account == "gl"),
+        "{err}"
+    );
+
+    use bridgewatch_core::token::TokenProvider;
+    memory
+        .keyring_set(&store::service("gl"), "oauth", "not a token set")
+        .unwrap();
+    let hosted = oauth_account(Provider::Gitlab, None, Some("gl-app-0001"));
+    let err = token::resolve("gl", &hosted, memory.as_ref()).unwrap_err();
+    assert!(
+        matches!(err, TokenError::Store { ref service, .. } if *service == store::service("gl")),
+        "{err}"
+    );
+}

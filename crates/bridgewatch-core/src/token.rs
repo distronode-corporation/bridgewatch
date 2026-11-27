@@ -319,6 +319,18 @@ impl SystemTokenProvider {
     }
 }
 
+/// An entry in the credential store, built in keyring-core's default store.
+///
+/// keyring's own `Entry::new` installs the platform store on first use and
+/// refuses outright when that failed. This installs it the same way, once, and
+/// then builds the entry in whatever store is the default, so a test can install
+/// keyring-core's mock store after the platform's. Where the platform store could
+/// not be set up there is no default store, and the answer is the same refusal.
+fn store_entry(service: &str, user: &str) -> keyring::Result<keyring_core::Entry> {
+    let _ = keyring::Entry::store_status();
+    keyring_core::Entry::new(service, user)
+}
+
 impl TokenProvider for SystemTokenProvider {
     fn keyring_get(&self, service: &str, user: &str) -> Result<String, TokenError> {
         // `keyring` rejects an empty user in its own client layer, so for the
@@ -330,7 +342,7 @@ impl TokenProvider for SystemTokenProvider {
             })?
         } else {
             let _turn = quiet::interactive_turn();
-            keyring::Entry::new(service, user)
+            store_entry(service, user)
                 .and_then(|e| e.get_password())
                 .map_err(|e| classify_keyring_error(e, service, user))?
         };
@@ -359,7 +371,7 @@ impl TokenProvider for SystemTokenProvider {
             });
         }
         let _turn = quiet::interactive_turn();
-        keyring::Entry::new(service, user)
+        store_entry(service, user)
             .and_then(|e| e.set_password(secret))
             .map_err(|e| classify_keyring_error(e, service, user))
     }
@@ -369,7 +381,7 @@ impl TokenProvider for SystemTokenProvider {
             return Ok(());
         }
         let _turn = quiet::interactive_turn();
-        match keyring::Entry::new(service, user).and_then(|e| e.delete_credential()) {
+        match store_entry(service, user).and_then(|e| e.delete_credential()) {
             Ok(()) => Ok(()),
             Err(e) => match classify_keyring_error(e, service, user) {
                 TokenError::NoEntry { .. } => Ok(()),
@@ -502,6 +514,9 @@ enum Ran {
     },
 }
 
+/// How a program is run for a credential: [`run_captured`], or a test's script.
+type Runner = fn(&[String], std::time::Duration, usize) -> Ran;
+
 /// Run `argv` under a deadline with bounded output, and say how it ended.
 ///
 /// The one place a program is started for a credential: [`run_bounded`] (a
@@ -510,9 +525,9 @@ enum Ran {
 fn run_captured(argv: &[String], timeout: std::time::Duration, max_stdout: usize) -> Ran {
     use std::process::{Command, Stdio};
 
-    let Some((program, args)) = argv.split_first() else {
-        return Ran::NotStarted("empty command".into());
-    };
+    // Never empty: `run_bounded` refuses an empty command first, and a lookup is
+    // a fixed one.
+    let (program, args) = argv.split_first().expect("argv is not empty");
     let mut child = match Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -535,10 +550,14 @@ fn run_captured(argv: &[String], timeout: std::time::Duration, max_stdout: usize
     // and a join waited for that grandchild however long it lived — deadline or
     // no deadline. Each drain fills a shared buffer and reports EOF on a
     // channel; the wait for EOF is bounded by the same deadline as the child.
-    let stdout = Drain::start(child.stdout.take(), max_stdout);
+    // Both were set to `piped` above, so both are there to take.
+    let stdout = Drain::start(child.stdout.take().expect("stdout is piped"), max_stdout);
     // Four bytes per char is UTF-8's ceiling, so this cannot cut short of the
     // characters the error is allowed to show.
-    let stderr = Drain::start(child.stderr.take(), MAX_STDERR_CHARS * 4);
+    let stderr = Drain::start(
+        child.stderr.take().expect("stderr is piped"),
+        MAX_STDERR_CHARS * 4,
+    );
 
     let deadline = std::time::Instant::now() + timeout;
     let status = loop {
@@ -583,24 +602,23 @@ struct Drain {
 }
 
 impl Drain {
-    fn start<R: std::io::Read + Send + 'static>(pipe: Option<R>, limit: usize) -> Self {
+    fn start<R: std::io::Read + Send + 'static>(mut pipe: R, limit: usize) -> Self {
         let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let (tx, eof) = std::sync::mpsc::channel();
         let sink = kept.clone();
         std::thread::spawn(move || {
-            if let Some(mut pipe) = pipe {
-                let mut chunk = [0u8; 8192];
-                while let Ok(n) = pipe.read(&mut chunk) {
-                    if n == 0 {
-                        break;
-                    }
-                    if let Ok(mut kept) = sink.lock() {
-                        let room = limit.saturating_sub(kept.len());
-                        kept.extend_from_slice(&chunk[..n.min(room)]);
-                    }
-                    // Keep reading even when full: the child blocks on a full
-                    // pipe, and a blocked child never exits.
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = pipe.read(&mut chunk) {
+                if n == 0 {
+                    break;
                 }
+                let mut kept = sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let room = limit.saturating_sub(kept.len());
+                kept.extend_from_slice(&chunk[..n.min(room)]);
+                // Keep reading even when full: the child blocks on a full
+                // pipe, and a blocked child never exits.
             }
             let _ = tx.send(());
         });
@@ -710,6 +728,12 @@ pub fn decode_keyring_envelope(raw: &str) -> Result<String, TokenError> {
 /// Read a credential stored with an empty account, which the `keyring` crate
 /// will not address. Returns `None` when there is nothing there.
 fn empty_user_lookup(service: &str) -> Result<Option<String>, TokenError> {
+    empty_user_lookup_with(service, run_captured)
+}
+
+/// [`empty_user_lookup`] with the program runner given: [`run_captured`] in
+/// production, a scripted one in the tests.
+fn empty_user_lookup_with(service: &str, run: Runner) -> Result<Option<String>, TokenError> {
     #[cfg(target_os = "macos")]
     let command = ("security", security_lookup_args(service));
     #[cfg(target_os = "linux")]
@@ -726,7 +750,7 @@ fn empty_user_lookup(service: &str) -> Result<Option<String>, TokenError> {
         .collect();
     lookup_outcome(
         service,
-        run_captured(&argv, COMMAND_TIMEOUT, MAX_STDOUT_BYTES),
+        run(&argv, COMMAND_TIMEOUT, MAX_STDOUT_BYTES),
         COMMAND_TIMEOUT,
         cfg!(target_os = "macos"),
     )
@@ -1449,9 +1473,36 @@ pub fn clear_own_token(account: &str, provider: &dyn TokenProvider) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_STDOUT_BYTES, TokenError, lookup_outcome, run_captured, secret_tool_lookup_args,
-        security_lookup_args,
+        MAX_STDOUT_BYTES, Ran, TokenError, empty_user_lookup_with, lookup_outcome, run_captured,
+        secret_tool_lookup_args, security_lookup_args,
     };
+
+    /// The empty account is looked up with the platform's tool, by the service's
+    /// name, and its first line is the token: checked through a runner that
+    /// echoes the command it was given.
+    #[cfg(all(unix, not(any(target_os = "ios", target_os = "android"))))]
+    #[test]
+    fn the_empty_account_lookup_runs_the_platform_tool_for_the_service() {
+        use std::os::unix::process::ExitStatusExt;
+        fn echo(argv: &[String], _: std::time::Duration, _: usize) -> Ran {
+            Ran::Exited {
+                status: std::process::ExitStatus::from_raw(0),
+                out: format!("{}\n", argv.join(" ")).into_bytes(),
+                out_complete: true,
+                err: Vec::new(),
+            }
+        }
+        let found = empty_user_lookup_with("glab:gitlab.com:token", echo)
+            .unwrap()
+            .unwrap();
+        let tool = if cfg!(target_os = "macos") {
+            "security "
+        } else {
+            "secret-tool "
+        };
+        assert!(found.starts_with(tool), "{found}");
+        assert!(found.contains("glab:gitlab.com:token"), "{found}");
+    }
 
     fn lookup(script: &str, timeout_ms: u64) -> Result<Option<String>, TokenError> {
         let timeout = std::time::Duration::from_millis(timeout_ms);

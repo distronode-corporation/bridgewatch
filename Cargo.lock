@@ -526,6 +526,7 @@ dependencies = [
  "globset",
  "hex",
  "keyring",
+ "keyring-core",
  "minijinja",
  "regex",
  "reqwest",

@@ -1272,3 +1272,159 @@ fn the_asking_status_sees_a_1x_value_a_quiet_one_cannot() {
         "neither binds"
     );
 }
+
+/// The two wrappers pass writes, deletes, the environment and commands
+/// straight through, and `AskOnce` forgets a refusal for an entry it deleted.
+#[test]
+fn the_wrappers_pass_everything_but_reads_through_unchanged() {
+    let fake = Fake::default()
+        .with_env("BW_TOKEN", "glpat-env")
+        .with_command("pass gl", Ok("glpat-cmd\n"));
+    let quiet = token::Quiet(&fake);
+    quiet
+        .keyring_set("bridgewatch:gl", "token", "glpat-x")
+        .unwrap();
+    quiet.keyring_delete("bridgewatch:gl", "token").unwrap();
+    assert_eq!(quiet.env("BW_TOKEN").as_deref(), Some("glpat-env"));
+    assert_eq!(
+        quiet.run(&["pass".into(), "gl".into()]).unwrap(),
+        "glpat-cmd\n"
+    );
+
+    let keychain = Cancels::default();
+    let once = token::AskOnce::new(keychain.clone());
+    let _ = once.keyring_get("bridgewatch:gl", "token");
+    assert_eq!(once.refused(), ["bridgewatch:gl"]);
+    // A quiet read never prompts, so it passes through and records nothing.
+    let _ = once.keyring_get_quiet("bridgewatch:other", "token");
+    assert_eq!(once.refused(), ["bridgewatch:gl"]);
+    once.keyring_delete("bridgewatch:gl", "token").unwrap();
+    assert!(
+        once.refused().is_empty(),
+        "a deleted entry has nothing left to refuse"
+    );
+    assert_eq!(once.env("ANY"), None);
+    assert!(matches!(once.run(&["x".into()]), Err(TokenError::Empty)));
+}
+
+#[test]
+fn the_messages_for_a_moved_account_and_a_read_that_may_not_ask() {
+    let bound = TokenError::BoundElsewhere {
+        account: "gl".into(),
+        stored: "https://gitlab.com".into(),
+        expected: None,
+    };
+    assert!(
+        bound.to_string().contains("base_url is not an http(s) URL"),
+        "{bound}"
+    );
+    let ask = TokenError::NeedsApproval {
+        service: "bridgewatch:gl".into(),
+        refused: false,
+    };
+    assert!(
+        ask.to_string().contains("this read may not ask for it"),
+        "{ask}"
+    );
+}
+
+/// A token command, run for real: each way it can end says what happened.
+#[cfg(unix)]
+mod commands {
+    use bridgewatch_core::token::{SystemTokenProvider, TokenError, TokenProvider, run_bounded};
+    use std::time::Duration;
+
+    fn sh(script: &str, timeout: Duration) -> Result<String, TokenError> {
+        run_bounded(
+            &["sh".into(), "-c".into(), script.into()],
+            timeout,
+            64 * 1024,
+        )
+    }
+
+    fn message(result: Result<String, TokenError>) -> String {
+        match result {
+            Err(TokenError::Command { message, .. }) => message,
+            other => panic!("expected a command error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_empty_command_and_a_missing_program_are_refused() {
+        assert_eq!(message(SystemTokenProvider.run(&[])), "empty command");
+        let missing = run_bounded(
+            &["bridgewatch-no-such-program-anywhere".into()],
+            Duration::from_secs(5),
+            1024,
+        );
+        assert!(!message(missing).is_empty());
+    }
+
+    #[test]
+    fn a_failure_quotes_its_stderr_and_a_signal_is_named() {
+        assert_eq!(
+            message(sh("echo nope >&2; exit 3", Duration::from_secs(5))),
+            "exited with 3: nope"
+        );
+        assert_eq!(
+            message(sh("kill -9 $$", Duration::from_secs(5))),
+            "exited with signal: "
+        );
+    }
+
+    #[test]
+    fn output_held_open_with_no_complete_line_is_not_a_token() {
+        let held = sh("printf partial; (sleep 3) &", Duration::from_secs(2));
+        assert!(message(held).contains("kept its output open"));
+        // With its line printed, the same shape is a token.
+        assert_eq!(
+            sh("echo glpat-x; (sleep 3) &", Duration::from_secs(2)).unwrap(),
+            "glpat-x\n"
+        );
+    }
+}
+
+/// A move binds nothing for an account whose old base_url had no origin (it
+/// could never have sent the entry), and nothing for a 1.x value that could
+/// never be sent (here, a control character in it), which is left as it is.
+#[test]
+fn a_move_binds_nothing_from_a_base_url_with_no_origin_or_for_an_unsendable_value() {
+    let lenient = |raw: &str| {
+        bridgewatch_core::config::parse_lenient(raw, std::path::Path::new("x.toml"))
+            .unwrap()
+            .0
+    };
+    let nowhere =
+        lenient("[accounts.gl]\nbase_url = \"gitlab.example.com\"\ntoken = { own = true }\n");
+    let fake = Fake::default().with_keyring("bridgewatch:gl", "token", "glpat-legacy");
+    let (_, after) = configs(ON_OLD, ON_NEW);
+    assert!(
+        token::bind_before_moves(&nowhere, &after, &fake)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        fake.calls().is_empty(),
+        "the store is not read: {:?}",
+        fake.calls()
+    );
+
+    let bad = Fake::default().with_keyring("bridgewatch:gl", "token", "glpat-\u{7}bell");
+    let (before, after) = configs(ON_OLD, ON_NEW);
+    assert!(
+        token::bind_before_moves(&before, &after, &bad)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !bad.calls().iter().any(|c| c.starts_with("keyring_set")),
+        "{:?}",
+        bad.calls()
+    );
+}
+
+#[test]
+fn an_empty_secret_says_so() {
+    assert!(Secret::new("").is_empty());
+    assert!(!Secret::new("glpat-x").is_empty());
+}
