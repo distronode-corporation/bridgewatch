@@ -339,8 +339,8 @@
     void refreshAvailability();
   }
 
+  // Called from the provider radio's change, so `provider` is never the current one.
   function providerChanged(provider: Provider) {
-    if (draft.provider === provider) return;
     const before = draft.tokenMode;
     switchProvider(draft, provider);
     // A pick the switch undid (a CLI token, a sign-in) is no pick any more.
@@ -498,9 +498,10 @@
     const stepErrors = validateStep("account", draft);
     errors = stepErrors;
     if (Object.keys(stepErrors).length > 0) return void focusInvalid();
-    if (!(await ensureCommandAck())) return;
+    // No command question here: the list only shows for a connection that has
+    // been asked for (live), and editing the command hides it again.
+    // Not empty: the button is disabled until a watchable row is ticked.
     const rows = listing.projects.filter((p) => p.default_branch && ticks[p.id]);
-    if (rows.length === 0) return;
     quickBusy = true;
     try {
       const watches: QuickWatch[] = [];
@@ -717,10 +718,9 @@
         return `The token is read from $${draft.envVar.trim()} when bridgewatch starts.`;
       case "command":
         return `The token is read by running: ${formatCommand(parseCommand(draft.commandText))}`;
-      case "oauth":
-        return `The sign-in is kept in the system keychain for "${draft.account.trim()}" and renews itself; this file only says to sign in.`;
+      // "oauth", the last of the five token modes.
       default:
-        return null;
+        return `The sign-in is kept in the system keychain for "${draft.account.trim()}" and renews itself; this file only says to sign in.`;
     }
   });
 
@@ -855,8 +855,8 @@
     }
   }
 
+  // Back is disabled on the first step, so there is always a step before this one.
   function back() {
-    if (index === 0) return;
     let target = index - 1;
     while (draft.quick && target > 0 && QUICK_SKIPS.has(STEPS[target].id)) target--;
     void goTo(target);
