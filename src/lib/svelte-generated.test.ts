@@ -47,15 +47,18 @@ function nodes(root: unknown): object[] {
   return out;
 }
 
+// ⚠ Every closing tag below is written `<\/script>`: the walk parses files as script blocks, and Svelte ends a
+// script at the first literal closing tag, even inside a string. Vite leaves this file out of its own glob.
+
 /** The AST of plain JavaScript, through the same parser (acorn is not a direct dependency). */
 function parseJs(code: string): unknown {
-  return parse(`<script>${code}</script>`, { modern: true });
+  return parse(`<script>${code}<\/script>`, { modern: true });
 }
 
 /** The AST of a source file, markup and both script blocks for a component. */
 function astOf(file: string, source: string): unknown {
   // A .ts file goes through the same TypeScript-aware parser as a component's script.
-  return parse(file.endsWith(".svelte") ? source : `<script lang="ts">${source}</script>`, { modern: true });
+  return parse(file.endsWith(".svelte") ? source : `<script lang="ts">${source}<\/script>`, { modern: true });
 }
 
 describe("the coverage report's one ignored node", () => {
@@ -64,8 +67,11 @@ describe("the coverage report's one ignored node", () => {
   it("walks the real tree", () => {
     expect(files.some((f) => f.endsWith("components/wizard/Wizard.svelte"))).toBe(true);
     expect(files.some((f) => f.endsWith("lib/ipc.ts"))).toBe(true);
+    // Test files are walked too, all but this one, which Vite's glob leaves out of its own results.
+    expect(files.some((f) => f.endsWith("lib/ipc.test.ts"))).toBe(true);
+    expect(files.some((f) => f.endsWith("lib/svelte-generated.test.ts"))).toBe(false);
     // A walk that reaches the nodes a hand-written fallback would be.
-    const ast = astOf("x.svelte", `<script lang="ts">const a = b ?? "";</script>{c ?? ""}`);
+    const ast = astOf("x.svelte", `<script lang="ts">const a = b ?? "";<\/script>{c ?? ""}`);
     expect(nodes(ast).filter((n) => (n as { type: string }).type === "LogicalExpression")).toHaveLength(2);
   });
 
@@ -79,13 +85,13 @@ describe("the coverage report's one ignored node", () => {
   });
 
   it("would match a hand-written fallback in single quotes, which is why the test above walks the source", () => {
-    const ast = astOf("x.svelte", `<script lang="ts">const a = b ?? '';</script>`);
+    const ast = astOf("x.svelte", `<script lang="ts">const a = b ?? '';<\/script>`);
     expect(nodes(ast).filter((node) => isSvelteTemplateFallback(node, "branch"))).toHaveLength(1);
   });
 
   it("matches every fallback the compiler writes around a template expression", () => {
     const { js } = compile(
-      `<script lang="ts">let { label, steps }: { label: string; steps: string[] } = $props();</script>
+      `<script lang="ts">let { label, steps }: { label: string; steps: string[] } = $props();<\/script>
        <span>{label}</span><p>Step 1 of {steps.length}: {steps[0]}</p>`,
       { filename: "Probe.svelte", generate: "client" },
     );
