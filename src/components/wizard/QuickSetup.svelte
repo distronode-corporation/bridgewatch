@@ -9,7 +9,7 @@
    */
   import { Button } from "$lib/components/ui/button/index.js";
   import FieldMessage from "./FieldMessage.svelte";
-  import type { Provider, RecentListing } from "./api";
+  import type { Provider, RecentListing, RecentProject } from "./api";
   import { activeLabel, watchable } from "./model";
 
   interface Props {
@@ -34,27 +34,42 @@
 
   const github = $derived(provider === "github");
   const noun = $derived(github ? "repositories" : "projects");
-  const rows = $derived(listing?.mode === "projects" ? listing.projects : []);
-  const count = $derived(rows.filter((r) => watchable(r) && ticks[r.id]).length);
+  /** What the section shows, one case each, so the project rows are only read where they exist. */
+  type View =
+    | { kind: "loading" }
+    | { kind: "error"; message: string }
+    | { kind: "unlisted"; reason: string }
+    | { kind: "projects"; rows: RecentProject[] };
+  const view = $derived.by((): View | null => {
+    if (loading) return { kind: "loading" };
+    if (loadError) return { kind: "error", message: loadError };
+    if (!listing) return null;
+    return listing.mode === "unlisted"
+      ? { kind: "unlisted", reason: listing.reason }
+      : { kind: "projects", rows: listing.projects };
+  });
+  const countOf = (rows: RecentProject[]) => rows.filter((r) => watchable(r) && ticks[r.id]).length;
   const one = $derived(github ? "repository" : "project");
 </script>
 
-{#if loading || loadError || listing}
+{#if view}
   <section class="flex flex-col gap-2 border-t pt-4" aria-labelledby="wizard-quick-heading" data-slot="quick-setup">
     <h3 id="wizard-quick-heading" class="text-[13px]/[18px] font-semibold">Watch your recent {noun}</h3>
-    {#if loading}
+    {#if view.kind === "loading"}
       <p class="text-muted-foreground m-0" aria-live="polite">Loading your recent {noun}…</p>
-    {:else if loadError}
+    {:else if view.kind === "error"}
       <p class="text-muted-foreground m-0" data-slot="quick-error">
-        Could not list your recent {noun}: {loadError} Choose Next to pick one instead.
+        Could not list your recent {noun}: {view.message} Choose Next to pick one instead.
       </p>
-    {:else if listing?.mode === "unlisted"}
-      <p class="text-muted-foreground m-0" data-slot="quick-unlisted">{listing.reason}</p>
-    {:else if rows.length === 0}
+    {:else if view.kind === "unlisted"}
+      <p class="text-muted-foreground m-0" data-slot="quick-unlisted">{view.reason}</p>
+    {:else if view.rows.length === 0}
       <p class="text-muted-foreground m-0" data-slot="quick-empty">
         This account has no {noun} yet. Choose Next to type one instead.
       </p>
     {:else}
+      {@const rows = view.rows}
+      {@const count = countOf(rows)}
       <p class="text-muted-foreground m-0 text-xs">
         The {rows.length} most recently active, newest first. The top three are ticked; untick any you do not want, or choose
         Next to set up one {one} in detail.
