@@ -6,6 +6,9 @@
 #
 #   floor   The whole-number percentage of the crate's lines under src/ that the
 #           tests must execute. 100 means every line.
+#   branch_floor  The same for branches, measured by CI's `branches` job on a pinned
+#           nightly (stable Rust cannot measure branches) and checked with
+#           `check-coverage.py --branches`. A crate with no branches passes.
 #   reason  One line saying why the floor is where it is.
 #
 # Floors only ratchet up. A change that raises a crate's coverage raises its floor
@@ -16,12 +19,15 @@
 
 [crates.bridgewatch-core]
 floor = 93
+branch_floor = 0
 reason = "The level CI's coverage job measured on the second core coverage pull request (#136), 93.79% of lines, rounded down."
 
 [crates.bridgewatch-cli]
 floor = 90
+branch_floor = 0
 reason = "The level CI's coverage job measured when the gate was added, 90.12% of lines, rounded down."
 
 [crates.bridgewatch-app]
 floor = 61
+branch_floor = 0
 reason = "The level CI's coverage job measured when the gate was added, 61.31% of lines, rounded down. Most uncovered lines are in the IPC command handlers (commands.rs), the background poll loop (poller.rs), the tray, sign-in and window code, and main.rs, which need a running app."
