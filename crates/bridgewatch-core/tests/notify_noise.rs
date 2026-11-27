@@ -585,3 +585,66 @@ fn a_folded_burst_links_nowhere_when_its_parts_disagree() {
     assert_eq!(out[0].url, None);
     assert_eq!(out[0].watch, "web");
 }
+
+// ---------------------------------------------------------------------------
+// The rest of the kinds, the click target, and the ledger at its edges
+// ---------------------------------------------------------------------------
+
+/// `started` is off in the shipped config; turned on, a live row says so.
+#[test]
+fn a_live_row_is_announced_as_started_when_asked_for() {
+    let mut w = watch();
+    w.notify.started = true;
+    let mut ledger = baselined(&w);
+    let out = notifications_for(
+        &w,
+        &view(&w, vec![row(7, "running", "in_progress", true, &[])]),
+        &mut ledger,
+    );
+    assert!(kinds(&out).contains(&"started"), "{:?}", kinds(&out));
+}
+
+#[test]
+fn each_click_target_lands_where_it_says() {
+    use bridgewatch_core::config::ClickTarget;
+    use bridgewatch_core::notify::click_url;
+    let mut r = row(7, "deployed", "live", false, &[]);
+    let pipeline = Some("https://gitlab.example/p/-/pipelines/7".to_string());
+    assert_eq!(click_url(ClickTarget::None, &r), None);
+    assert_eq!(click_url(ClickTarget::Pipeline, &r), pipeline);
+    // A marker with no page of its own falls back to the pipeline.
+    assert_eq!(click_url(ClickTarget::MarkerJob, &r), pipeline);
+    r.deploy_marker.as_mut().unwrap().web_url = Some("https://gitlab.example/p/-/jobs/1".into());
+    assert_eq!(
+        click_url(ClickTarget::MarkerJob, &r).as_deref(),
+        Some("https://gitlab.example/p/-/jobs/1")
+    );
+}
+
+#[test]
+fn a_key_recorded_twice_is_kept_once() {
+    let mut ledger = NotifyLedger::default();
+    ledger.record("7|finished|deployed".into());
+    ledger.record("7|finished|deployed".into());
+    assert_eq!(ledger.seen.len(), 1);
+}
+
+/// ⛔ When every key left belongs to a pipeline on screen, the ledger runs over
+/// its cap rather than trim one, by at most what is on screen.
+#[test]
+fn a_full_ledger_of_on_screen_keys_runs_over_the_cap_rather_than_trim_one() {
+    use bridgewatch_core::notify::LEDGER_MAX_KEYS;
+    let w = watch();
+    let mut ledger = baselined(&w);
+    for i in 0..LEDGER_MAX_KEYS {
+        ledger.record(format!("7|old|{i}"));
+    }
+    let out = notifications_for(
+        &w,
+        &view(&w, vec![row(7, "failed", "absent", false, &["lint"])]),
+        &mut ledger,
+    );
+    assert!(kinds(&out).contains(&"blocking_failure"));
+    assert!(ledger.seen.len() > LEDGER_MAX_KEYS);
+    assert!(ledger.contains("7|old|0"), "no on-screen key was trimmed");
+}

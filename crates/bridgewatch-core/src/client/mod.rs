@@ -76,16 +76,12 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
     /// way). `bridgewatch wait` needs it because both providers match a
     /// pipeline's `sha` in full only.
     ///
-    /// The default refuses, so a client that has not been taught it says so.
+    /// No default: both clients answer it.
     async fn commit_sha(
         &self,
-        _project: &ProjectRef,
+        project: &ProjectRef,
         sha: &str,
-    ) -> Result<Option<String>, ClientError> {
-        Err(ClientError::Unsupported {
-            message: format!("looking up commit {sha} is not supported for this provider"),
-        })
-    }
+    ) -> Result<Option<String>, ClientError>;
 
     /// A commit's title (its first line), for a provider whose pipelines do
     /// not carry it: GitLab. `Ok(None)` when the commit has none to show or
@@ -188,26 +184,19 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
     /// it on their connection), so a `mine` watch costs one `GET /user` for
     /// the life of the poller, and none when the sign-in already names the
     /// user. A failed lookup is not remembered: it is asked again on a later
-    /// tick (the poller asks once per account per tick). The default asks
-    /// every time, for a client that keeps nothing.
-    async fn owner(&self) -> Result<String, ClientError> {
-        self.current_user().await.map(|u| u.username)
-    }
+    /// tick (the poller asks once per account per tick).
+    async fn owner(&self) -> Result<String, ClientError>;
 
     /// What the requests this client has sent show of its credential: a
     /// stated expiry, and the last refusal. No request. See [`crate::health`].
-    fn credential(&self) -> crate::health::Observed {
-        crate::health::Observed::default()
-    }
+    fn credential(&self) -> crate::health::Observed;
 
     /// Ask for the credential's expiry where the provider states it only on
     /// request: GitLab's `GET /personal_access_tokens/self`, and GitHub's
     /// `GET /user` (whose answer carries the expiry header). The answer lands
     /// in [`Self::credential`]. The poller asks this of a GitLab token once;
     /// a GitHub poll carries the header on every response anyway.
-    async fn read_token_expiry(&self) -> Result<(), ClientError> {
-        Ok(())
-    }
+    async fn read_token_expiry(&self) -> Result<(), ClientError>;
 
     /// Projects this token can pick from, and whether the listing was cut
     /// short.
@@ -226,47 +215,31 @@ pub trait CiClient: Send + Sync + std::fmt::Debug {
     ///
     /// Read on demand only, never by the poller: a log is the most expensive
     /// thing a provider serves, and nothing about a verdict depends on one.
-    ///
-    /// The default refuses, so a client that has not been taught logs says so
-    /// rather than answering with an empty one.
     async fn job_log_tail(
         &self,
-        _project: &ProjectRef,
-        _job_id: u64,
-        _max_bytes: usize,
-    ) -> Result<LogTail, ClientError> {
-        Err(ClientError::Unsupported {
-            message: "this client cannot read job logs".to_string(),
-        })
-    }
+        project: &ProjectRef,
+        job_id: u64,
+        max_bytes: usize,
+    ) -> Result<LogTail, ClientError>;
 
     /// Retry one job: GitLab's `retry`, GitHub's `rerun`. A WRITE.
     ///
     /// ⛔ Refused before anything is sent unless the account has
-    /// `actions = true`: see [`ClientError::ActionsDisabled`]. The default
-    /// refuses too, for the reason [`Self::job_log_tail`]'s does.
+    /// `actions = true`: see [`ClientError::ActionsDisabled`].
     async fn retry_job(
         &self,
-        _project: &ProjectRef,
-        _job_id: u64,
-    ) -> Result<JobActionOutcome, ClientError> {
-        Err(ClientError::Unsupported {
-            message: "this client cannot retry jobs".to_string(),
-        })
-    }
+        project: &ProjectRef,
+        job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError>;
 
     /// Start one manual job: GitLab's `play`. A WRITE, guarded exactly as
     /// [`Self::retry_job`] is. GitHub has no manual jobs and answers
     /// [`ClientError::Unsupported`] without a request.
     async fn play_job(
         &self,
-        _project: &ProjectRef,
-        _job_id: u64,
-    ) -> Result<JobActionOutcome, ClientError> {
-        Err(ClientError::Unsupported {
-            message: "this client cannot start manual jobs".to_string(),
-        })
-    }
+        project: &ProjectRef,
+        job_id: u64,
+    ) -> Result<JobActionOutcome, ClientError>;
 }
 
 /// Build the client an account's `provider` asks for.

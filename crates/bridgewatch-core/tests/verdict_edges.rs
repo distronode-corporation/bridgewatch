@@ -323,3 +323,43 @@ mod icons {
         assert_eq!(icon::state(&f), IconState::Unknown);
     }
 }
+
+mod scripts {
+    use bridgewatch_core::verdict::{PipelineView, ScriptError, VerdictScript};
+
+    fn view() -> PipelineView {
+        serde_json::from_str(
+            r#"{"id":7,"iid":1,"sha":"4cfaced9d33af808","sha7":"4cfaced","ref":"main","source":"push",
+                "status":"success","web_url":null,"state":"deployed","deploy":"live","deploy_marker":null,
+                "deploy_failures":[],"failures":[],"warnings":[],"gates":[],"post_deploy_failures":[],
+                "sibling_failures":[],"bridges":[],"parent_jobs":[],"updated_at":null,"created_at":null,
+                "live":false}"#,
+        )
+        .expect("view decodes")
+    }
+
+    #[test]
+    fn a_script_is_read_from_its_file_and_a_missing_file_says_which() {
+        let dir = std::env::temp_dir().join(format!("bw-verdict-script-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("verdict.rhai");
+        std::fs::write(&file, r#""running""#).unwrap();
+        let script = VerdictScript::from_path(&file).expect("compiles");
+        assert_eq!(script.evaluate(&view()).unwrap().as_str(), "running");
+        let missing = dir.join("nope.rhai");
+        match VerdictScript::from_path(&missing) {
+            Err(ScriptError::Io { path, .. }) => assert!(path.ends_with("nope.rhai"), "{path}"),
+            other => panic!("expected an Io error, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_script_that_returns_something_other_than_a_string_is_refused() {
+        let script = VerdictScript::from_source("42").expect("compiles");
+        match script.evaluate(&view()) {
+            Err(ScriptError::BadReturn { returned }) => assert_eq!(returned, "i64"),
+            other => panic!("expected BadReturn, got {other:?}"),
+        }
+    }
+}
