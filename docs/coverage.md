@@ -58,7 +58,23 @@ Command: `npm ci && npx vitest run --coverage` (37 test files, 627 tests).
 Rust (core and cli) and the frontend together: 15989 of 17595 lines, 90.87%. This leaves out
 bridgewatch-app, so it is not the whole workspace.
 
-## CI, the whole workspace: 2026-11-22
+## CI, the whole workspace: 2026-11-27
+
+The `coverage` job on pull request #132 at `64689ca`
+([run 45955220679](https://github.com/distronode-corporation/bridgewatch/actions/runs/45955220679))
+printed, from `scripts/check-coverage.py`:
+
+| Crate | Files | Lines | Covered | Coverage | Floor |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| bridgewatch-core | 40 | 10874 | 10033 | 92.26% | 92% |
+| bridgewatch-cli | 4 | 3047 | 2745 | 90.08% | 90% |
+| bridgewatch-app | 18 | 5477 | 3345 | 61.07% | 61% |
+| **all three crates** | **62** | **19398** | **16123** | **83.12%** | |
+
+The core figure rose with that pull request's tests. The cli figure is one line below the run
+below with no cli change, so one cli line is reached on some runs and not others.
+
+## CI, the whole workspace: 2026-11-22 (before #132)
 
 CI's `coverage` job measures all three crates, bridgewatch-app included, because its runner
 has WebKitGTK. Its run on `main` at `69597c0`
