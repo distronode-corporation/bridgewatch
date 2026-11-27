@@ -1951,11 +1951,8 @@ fn new_watch(
         "sources": sources,
         "role": role,
     });
-    serde_json::from_value(value).map_err(|e| {
-        WizardError::Edit(EditError::Serialize(format!(
-            "could not build the watch: {e}"
-        )))
-    })
+    // Every key a watch requires, each of its type, so this always deserialises.
+    Ok(serde_json::from_value(value).expect("a watch from its required keys"))
 }
 
 /// The live poll interval a new GitHub watch starts at, in seconds.
@@ -2039,13 +2036,14 @@ fn add_minimal_watch(editor: &mut ConfigEditor, watch: &Watch) -> Result<(), Wiz
     editor.apply(&[Edit::AddWatch {
         watch: Box::new(watch.clone()),
     }])?;
+    // Just added, and a `Watch` serialises to a JSON object.
     let index = editor
         .watch_index(&watch.id)
-        .ok_or_else(|| EditError::NoSuchWatch(watch.id.clone()))?;
-
-    let (Some(have), Some(default)) = (have.as_object(), default.as_object()) else {
-        return Ok(());
-    };
+        .expect("the watch was just added");
+    let (have, default) = (
+        have.as_object().expect("a watch is an object"),
+        default.as_object().expect("a watch is an object"),
+    );
     let mut unsets = Vec::new();
     for (key, value) in have {
         if ALWAYS_WRITTEN.contains(&key.as_str()) {

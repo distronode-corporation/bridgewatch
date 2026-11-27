@@ -189,10 +189,23 @@ fn a_rerun_changes_the_watch_it_wrote_in_place() {
         ..answers()
     };
     let built = build_config(&changed, Some(&first)).unwrap();
-    let config = bridgewatch_core::config::parse_str(&built.toml, std::path::Path::new("c.toml")).unwrap().config;
-    let w = config.watches.iter().find(|w| w.id == "app-main").expect("the same watch");
-    let before = bridgewatch_core::config::parse_str(&first, std::path::Path::new("c.toml")).unwrap().config;
-    assert_eq!(config.watches.len(), before.watches.len(), "changed in place, not added: {}", built.toml);
+    let config = bridgewatch_core::config::parse_str(&built.toml, std::path::Path::new("c.toml"))
+        .unwrap()
+        .config;
+    let w = config
+        .watches
+        .iter()
+        .find(|w| w.id == "app-main")
+        .expect("the same watch");
+    let before = bridgewatch_core::config::parse_str(&first, std::path::Path::new("c.toml"))
+        .unwrap()
+        .config;
+    assert_eq!(
+        config.watches.len(),
+        before.watches.len(),
+        "changed in place, not added: {}",
+        built.toml
+    );
     assert_eq!(w.account, "work");
     assert_eq!(w.project, ProjectRef::Path("acme/web".into()));
     assert_eq!(w.ref_pattern, "develop");
@@ -206,7 +219,11 @@ fn a_rerun_changes_the_watch_it_wrote_in_place() {
 fn an_existing_file_that_is_not_toml_is_not_written_over() {
     use bridgewatch_core::wizard::build_config;
     let err = build_config(&answers(), Some("[accounts\nbroken")).unwrap_err();
-    assert_eq!(err.to_failure().kind, bridgewatch_core::wizard::FailureKind::ExistingConfig, "{err}");
+    assert_eq!(
+        err.to_failure().kind,
+        bridgewatch_core::wizard::FailureKind::ExistingConfig,
+        "{err}"
+    );
 }
 
 /// What each error is called over IPC, which decides what the wizard shows.
@@ -215,11 +232,19 @@ fn every_error_has_its_failure_kind_and_only_an_invalid_file_carries_diagnostics
     use bridgewatch_core::client::ClientError;
     use bridgewatch_core::config::{Diagnostic, Severity};
     use bridgewatch_core::wizard::{FailureKind, WizardError};
-    let not_found = WizardError::NotFound { what: "project acme/web".into() }.to_failure();
+    let not_found = WizardError::NotFound {
+        what: "project acme/web".into(),
+    }
+    .to_failure();
     assert_eq!(not_found.kind, FailureKind::NotFound);
     let network = WizardError::Client(ClientError::Server { status: 502 }).to_failure();
     assert_eq!(network.kind, FailureKind::Network);
-    let diagnostic = Diagnostic { severity: Severity::Error, path: "watches".into(), message: "bad".into(), span: None };
+    let diagnostic = Diagnostic {
+        severity: Severity::Error,
+        path: "watches".into(),
+        message: "bad".into(),
+        span: None,
+    };
     let invalid = WizardError::Invalid(vec![diagnostic.clone()]).to_failure();
     assert_eq!(invalid.kind, FailureKind::Invalid);
     assert_eq!(invalid.diagnostics.len(), 1);
