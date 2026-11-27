@@ -563,16 +563,14 @@ fn run_captured(argv: &[String], timeout: std::time::Duration, max_stdout: usize
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if std::time::Instant::now() >= deadline => {
+            // `try_wait` fails only if the OS cannot wait on our own child; that
+            // counts as still running, and the deadline kills it.
+            _ if std::time::Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Ran::TimedOut;
             }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
-            Err(e) => {
-                let _ = child.kill();
-                return Ran::NotStarted(e.to_string());
-            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(20)),
         }
     };
 
