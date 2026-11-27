@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   /**
    * Step 1, once a sign-in or Test connection succeeded: the one-click list.

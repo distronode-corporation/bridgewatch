@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The GitHub client: the status table, the run-to-pipeline mapping, `Link`
 //! pagination, what a 403 means, and one whole tick end to end.
 //!

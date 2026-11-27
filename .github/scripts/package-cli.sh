@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Package one CLI binary as the release asset bridgewatch-cli_<version>_<target>.tar.gz.
 #
 #   bash .github/scripts/package-cli.sh <version> <target> <binary> <third-party-licenses> <out-dir>

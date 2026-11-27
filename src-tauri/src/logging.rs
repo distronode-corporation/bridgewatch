@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Logging: to stderr and to a daily log file, and which of `RUST_LOG` and
 //! `[log].level` decides how much.
 //!

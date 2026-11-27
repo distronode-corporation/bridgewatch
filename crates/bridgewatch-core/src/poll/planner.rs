@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Deciding what to fetch on a tick, before fetching any of it.
 //!
 //! Separating the plan from the execution is what makes "an idle tick costs one

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The popover's two job commands: the end of a failed job's log, and a job
 //! action (retry, play).
 //!

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 "use strict";
 
 // What `npm pack` ships, in the state the release workflow packs it: a copy of this

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it } from "vitest";
 
 import fixture from "../../lib/__fixtures__/ca41ab28.json" with { type: "json" };

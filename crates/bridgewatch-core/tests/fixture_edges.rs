@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Distronode Corporation
+
 //! The fixture transport, the recorder and the scrubber at their edges: a
 //! broken `fixture.json`, a `list.json` holding one pipeline, a recording with
 //! its list and a child in the parent's project, and files the scrubber cannot

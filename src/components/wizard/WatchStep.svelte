@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   /** Step 3: branch, pipeline sources (GitHub: events and a workflow), optional secondary watches. */
   import { untrack } from "svelte";

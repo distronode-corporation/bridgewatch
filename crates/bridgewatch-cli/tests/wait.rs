@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! `bridgewatch wait`, run as a script or a coding agent would run it.
 //!
 //! ⛔ Nothing here touches the network or a keyring: every verdict is answered

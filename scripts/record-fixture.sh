@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Record one parent pipeline into a test fixture directory, using `glab api`.
 #
 #   scripts/record-fixture.sh <pipeline-id> <name> <project> [--list]

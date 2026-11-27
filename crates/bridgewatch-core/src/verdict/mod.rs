@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The verdict engine: pure functions from recorded API responses to the view
 //! model the GUI renders and the CLI prints.
 //!

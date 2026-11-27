@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Configuration: round-tripping, validation, ref matchers and token sources.
 
 mod support;

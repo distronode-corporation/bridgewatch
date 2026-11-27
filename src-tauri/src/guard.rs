@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The changes a settings window may not make in one step.
 //!
 //! Every write from either window arrives over IPC, and IPC is reachable from

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Token source selection, driven through a fake provider.
 //!
 //! ⛔ Nothing here reads a real credential. Reading a live keychain item can

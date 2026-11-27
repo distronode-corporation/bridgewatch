@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   import { concretePath, entriesFor, providerOf } from "../../lib/settings/registry";
   import { accountGroup } from "../../lib/settings/panes";

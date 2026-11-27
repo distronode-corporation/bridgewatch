@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The bridge verdict: what a `trigger:*` job plus its child pipeline mean.
 //!
 //! This is the whole reason bridgewatch exists. A monitor that stops at the

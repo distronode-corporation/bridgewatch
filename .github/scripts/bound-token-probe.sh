@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Prove, end to end against the platform's real credential store, that an own
 # token (`token = { own = true }`) stays with its server.
 #

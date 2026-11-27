@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Acknowledging a failure locally: the tray icon drops a level, and nothing is
 //! sent anywhere.
 //!

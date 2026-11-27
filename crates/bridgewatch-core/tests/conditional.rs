@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Conditional requests: a stored `ETag` goes back as `If-None-Match`, and a
 //! `304` is answered with the body it confirms.
 //!

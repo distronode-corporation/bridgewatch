@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: The hardened-runtime CLI reads the keychain
 description: Prove that a CLI signed with the hardened runtime can still read a token through `security find-generic-password`, against a throwaway keychain item.
 

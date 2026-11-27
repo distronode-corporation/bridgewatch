@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Token health: whether an account's credential is about to stop working, or
 //! already has, and why (2.0 F3).
 //!

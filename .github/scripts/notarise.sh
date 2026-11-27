@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Submit one file to Apple's notary service, wait for the verdict, and fail unless it
 # is `Accepted`. Used by release.yml's macOS leg for the CLI (a zip of the signed
 # Mach-O) and for the .dmg.

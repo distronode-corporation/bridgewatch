@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Commit titles on pipeline rows (`Poller::with_commit_titles`), on GitLab,
 //! where each title is a request of its own, against a scripted transport with
 //! hand-written answers in the documented shapes:

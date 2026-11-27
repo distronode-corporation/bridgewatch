@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The OAuth applications this build of bridgewatch ships with.
 //!
 //! All of them are registered: bridgewatch's GitHub App on github.com (with its

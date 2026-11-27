@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! F3: "my builds" (`mine = true`) and token health, against hand-written
 //! answers in the documented API shapes. No network, no keychain: a script
 //! answers every request, and an in-memory store holds every credential.

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The crash-report switch, proved on the wire rather than argued.
 //!
 //! A local HTTP server stands in for Sentry: the DSN points at it, so every

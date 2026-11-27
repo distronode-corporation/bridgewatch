@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 [package]
 name = "bridgewatch-app"
 description = "The bridgewatch tray application: a Tauri 2 shell around bridgewatch-core."

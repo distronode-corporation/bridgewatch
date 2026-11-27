@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   /**
    * "Sign in with GitHub" / "Sign in with GitLab": the device flow, on screen.

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The setup wizard's steps, against a scripted transport and a fake keyring.
 //!
 //! Nothing here touches a network, a real credential store or a file: the

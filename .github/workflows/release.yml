@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: Release
 
 # Fires on a `vX.Y.Z` tag and produces the ten assets a user can install: one
@@ -215,7 +219,7 @@ jobs:
           cargo fetch --locked
           mkdir -p target/licenses
           cargo about generate --frozen --fail --manifest-path src-tauri/Cargo.toml \
-            -c about.toml -o target/licenses/THIRD-PARTY-LICENSES-rust.txt licenses/about.hbs
+            -c about.toml -o target/licenses/THIRD-PARTY-LICENSES-rust.txt about.hbs
           grep -c '^  - ' target/licenses/THIRD-PARTY-LICENSES-rust.txt
 
       # The CLI's own set, for its tarballs and the npm package: the run above starts
@@ -226,7 +230,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo about generate --frozen --fail --manifest-path crates/bridgewatch-cli/Cargo.toml \
-            -c about.toml -o target/licenses/THIRD-PARTY-LICENSES-cli.txt licenses/about.hbs
+            -c about.toml -o target/licenses/THIRD-PARTY-LICENSES-cli.txt about.hbs
           grep -c '^  - ' target/licenses/THIRD-PARTY-LICENSES-cli.txt
           grep -qE '^  - clap ' target/licenses/THIRD-PARTY-LICENSES-cli.txt \
             || { echo "::error::THIRD-PARTY-LICENSES-cli.txt does not list clap"; exit 1; }

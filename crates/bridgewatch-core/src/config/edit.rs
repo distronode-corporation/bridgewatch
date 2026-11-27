@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Typed, format-preserving edits to `config.toml`.
 //!
 //! The GUI exposes the same keys as the file, so it has to write the file back.

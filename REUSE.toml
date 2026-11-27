@@ -1,0 +1,53 @@
+# REUSE metadata (https://reuse.software) for files that cannot carry a comment header:
+# data, documentation, images, certificates, lockfiles, the cargo-about template (a
+# comment would change the generated licence file) and test fixtures, plus the vendored
+# shadcn-svelte components. Every other file carries its own SPDX header, and `reuse lint`
+# in CI fails when one is missing.
+version = 1
+
+[[annotations]]
+path = [
+  "**/*.json",
+  "**/*.md",
+  "**/*.png",
+  "**/*.ico",
+  "**/*.icns",
+  "**/*.pem",
+  "**/*.plist",
+  "Cargo.lock",
+  "NOTICE",
+  "about.hbs",
+  "crates/*/tests/fixtures/**",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Distronode Corporation"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Generated from the shadcn-svelte registry ("rhea" style) and used under the MIT License,
+# as NOTICE says. stepper/ and the smoke tests in __tests__/ are ours and carry headers.
+[[annotations]]
+path = [
+  "src/lib/components/ui/accordion/**",
+  "src/lib/components/ui/alert/**",
+  "src/lib/components/ui/badge/**",
+  "src/lib/components/ui/button/**",
+  "src/lib/components/ui/card/**",
+  "src/lib/components/ui/checkbox/**",
+  "src/lib/components/ui/collapsible/**",
+  "src/lib/components/ui/dialog/**",
+  "src/lib/components/ui/input/**",
+  "src/lib/components/ui/label/**",
+  "src/lib/components/ui/progress/**",
+  "src/lib/components/ui/scroll-area/**",
+  "src/lib/components/ui/separator/**",
+  "src/lib/components/ui/switch/**",
+  "src/lib/components/ui/tabs/**",
+  "src/lib/components/ui/utils.ts",
+]
+precedence = "override"
+SPDX-FileCopyrightText = [
+  "2023 Hunter Johnston <https://github.com/huntabyte>",
+  "2023 CokaKoala <https://github.com/adriangonz97>",
+  "2023 shadcn",
+]
+SPDX-License-Identifier = "MIT"

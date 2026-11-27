@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Distronode Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # No blank issues: everything goes through the structured Bug report form, or one of
 # the links below. Keeps the tracker to real, reproducible bugs instead of setup
 # questions, which for a tray app are mostly "my token is not being found".

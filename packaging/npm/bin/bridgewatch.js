@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // The npm entry point for the bridgewatch CLI. It picks the native binary the release
 // workflow put under vendor/<target>/ for this machine, runs it with this process's
 // arguments and terminal, and exits the way the binary did. Plain CommonJS with no

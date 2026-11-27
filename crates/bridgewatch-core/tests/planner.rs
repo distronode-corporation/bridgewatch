@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! What a tick costs, in requests.
 //!
 //! The claims here are the ones that decide whether bridgewatch can be left

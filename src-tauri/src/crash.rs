@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Opt-in crash reports, sent to Sentry.
 //!
 //! ⛔ OFF UNLESS TWO THINGS ARE BOTH TRUE, AND NOTHING IS SENT OTHERWISE:

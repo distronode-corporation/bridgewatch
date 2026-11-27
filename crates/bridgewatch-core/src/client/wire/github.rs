@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! GitHub's wire format: exactly the fields bridgewatch decodes, and nothing
 //! else.
 //!

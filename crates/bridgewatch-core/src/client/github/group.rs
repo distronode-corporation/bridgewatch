@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The commit group: a commit's several workflow runs, folded into one
 //! [`Pipeline`] whose bridges are those runs.
 //!

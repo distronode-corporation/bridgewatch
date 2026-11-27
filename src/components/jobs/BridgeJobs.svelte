@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Distronode Corporation
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script lang="ts">
   /**
    * One bridge (trigger job) as a collapsible row: the verdict on the header,

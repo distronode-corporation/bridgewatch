@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The webview's capability stays events-only.
 //!
 //! Every plugin is driven from Rust. A plugin permission granted to the

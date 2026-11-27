@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Distronode Corporation
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! The first-run setup wizard's commands: thin wrappers over
 //! `bridgewatch_core::wizard`, which holds every decision.
 //!
